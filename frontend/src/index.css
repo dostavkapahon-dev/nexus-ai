@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  background-color: #0a0a0f;
+  color: #e2e2f0;
+  font-family: 'Inter', system-ui, sans-serif;
+}
+
+.glass {
+  background: rgba(18, 18, 26, 0.8);
+  border: 1px solid #1e1e2e;
+  backdrop-filter: blur(10px);
+}
