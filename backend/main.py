@@ -1,15 +1,17 @@
 import os
 import json
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import select
 
 from database.db import init_db, AsyncSessionLocal
 from database.models import Connection
 from core.orchestrator import set_broadcast
+from core.auth import require_auth, check_rate
+from api.routes_auth import router as auth_router
 from api.routes_niche import router as niche_router
 from api.routes_queue import router as queue_router
 from api.routes_prompts import router as prompts_router
@@ -25,7 +27,6 @@ class ConnectionManager:
 
     def disconnect(self, niche_id: str, ws: WebSocket):
         if niche_id in self.connections:
-            self.connections[niche_id].discard(ws) if hasattr(self.connections[niche_id], 'discard') else None
             try:
                 self.connections[niche_id].remove(ws)
             except ValueError:
@@ -50,14 +51,43 @@ async def lifespan(app: FastAPI):
     set_broadcast(manager.broadcast)
     yield
 
-app = FastAPI(lifespan=lifespan, title="NEXUS AI")
+app = FastAPI(lifespan=lifespan, title="NEXUS AI", docs_url=None, redoc_url=None)
 
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# CORS — allow same origin + localhost dev
+origins = ["http://localhost:5173", "http://localhost:3000"]
+render_url = os.getenv("RENDER_EXTERNAL_URL", "")
+if render_url:
+    origins.append(render_url)
 
-app.include_router(niche_router)
-app.include_router(queue_router)
-app.include_router(prompts_router)
-app.include_router(settings_router)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    ip = request.client.host if request.client else "unknown"
+    try:
+        check_rate(ip)
+    except Exception:
+        return JSONResponse(status_code=429, content={"detail": "Too many requests"})
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
+
+# Public routes (no auth)
+app.include_router(auth_router)
+
+# Protected API routes
+app.include_router(niche_router,    dependencies=[Depends(require_auth)])
+app.include_router(queue_router,    dependencies=[Depends(require_auth)])
+app.include_router(prompts_router,  dependencies=[Depends(require_auth)])
+app.include_router(settings_router, dependencies=[Depends(require_auth)])
 
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):
@@ -75,5 +105,4 @@ if os.path.exists(frontend_dist):
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str):
-        index = os.path.join(frontend_dist, "index.html")
-        return FileResponse(index)
+        return FileResponse(os.path.join(frontend_dist, "index.html"))
