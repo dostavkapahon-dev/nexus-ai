@@ -21,6 +21,8 @@ api.interceptors.response.use(
 
 export const auth = {
   login: (password) => api.post('/auth/login', { password }),
+  googleLogin: (credential) => api.post('/auth/google', { credential }),
+  googleClientId: () => api.get('/auth/google-client-id'),
   logout: () => localStorage.removeItem('nx_token'),
 }
 

@@ -24,6 +24,8 @@ const MODELS = [
   { value: 'sonar-reasoning-pro',      label: 'Perplexity Sonar Reasoning Pro', group: 'Perplexity' },
   { value: 'sonar-pro',                label: 'Perplexity Sonar Pro',    group: 'Perplexity' },
   { value: 'sonar',                    label: 'Perplexity Sonar',        group: 'Perplexity' },
+  { value: 'deepseek-chat',            label: 'DeepSeek Chat',           group: 'DeepSeek' },
+  { value: 'deepseek-reasoner',        label: 'DeepSeek Reasoner (R1)',  group: 'DeepSeek' },
 ]
 
 export default function PromptStudio() {
@@ -98,7 +100,7 @@ export default function PromptStudio() {
               <label className="text-xs text-nexus-muted mb-1 block">AI Модель</label>
               <select value={editing.model || ''} onChange={e => setEditing(p => ({ ...p, model: e.target.value }))}
                 className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text focus:border-purple-500 outline-none">
-                {['Anthropic','OpenAI','Google','Perplexity'].map(group => (
+                {['Anthropic','OpenAI','Google','Perplexity','DeepSeek'].map(group => (
                   <optgroup key={group} label={group}>
                     {MODELS.filter(m => m.group === group).map(m => (
                       <option key={m.value} value={m.value}>{m.label}</option>

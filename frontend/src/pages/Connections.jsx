@@ -86,6 +86,19 @@ const PROVIDERS = [
     models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
   },
   {
+    id: 'deepseek', name: 'DeepSeek AI', icon: '🧠', color: 'from-indigo-500 to-blue-600',
+    description: 'Дешёвый и мощный AI — используется в Economy режиме вместо GPT-4o',
+    fields: [{ key: 'deepseek_api_key', label: 'API Key', placeholder: 'sk-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://platform.deepseek.com/api_keys', linkText: 'platform.deepseek.com/api_keys' },
+      { text: 'Войдите или создайте аккаунт (есть бесплатные кредиты)' },
+      { text: 'Нажмите Create new API key → скопируйте ключ' },
+      { text: 'В Economy режиме (Dashboard → Профиль) агенты используют DeepSeek вместо Claude/GPT-4o' },
+      { text: 'DeepSeek Chat: дешёвый ($0.14/1M токенов). Reasoner R1: глубокий анализ ($0.55/1M)' },
+    ],
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+  },
+  {
     id: 'tiktok', name: 'TikTok', icon: '🎵', color: 'from-rose-500 to-pink-500',
     description: 'Публикация коротких видео и фото-постов в TikTok',
     fields: [{ key: 'tiktok_access_token', label: 'Access Token', placeholder: 'act...', secret: true }],

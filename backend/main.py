@@ -17,6 +17,7 @@ from api.routes_queue import router as queue_router
 from api.routes_prompts import router as prompts_router
 from api.routes_settings import router as settings_router
 from api.routes_profile import router as profile_router
+from api.routes_desktop import router as desktop_router
 
 class ConnectionManager:
     def __init__(self):
@@ -90,6 +91,8 @@ app.include_router(queue_router,    dependencies=[Depends(require_auth)])
 app.include_router(prompts_router,  dependencies=[Depends(require_auth)])
 app.include_router(settings_router, dependencies=[Depends(require_auth)])
 app.include_router(profile_router,  dependencies=[Depends(require_auth)])
+# Desktop agent — WebSocket must be outside auth dependency
+app.include_router(desktop_router)
 
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):
