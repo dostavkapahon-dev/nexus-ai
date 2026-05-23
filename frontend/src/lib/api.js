@@ -58,3 +58,13 @@ export const connections = {
 export const analytics = {
   get: (nicheId) => api.get(`/analytics/${nicheId}`),
 }
+
+export const profile = {
+  get: () => api.get('/profile'),
+  save: (data) => api.post('/profile', data),
+  costEstimate: (params) => api.get('/profile/cost-estimate', { params }),
+}
+
+export const infrastructure = {
+  check: () => api.post('/infrastructure/check'),
+}

@@ -73,6 +73,48 @@ const PROVIDERS = [
     ],
     models: [],
   },
+  {
+    id: 'perplexity', name: 'Perplexity AI', icon: '🔍', color: 'from-teal-500 to-cyan-500',
+    description: 'Поиск актуальных трендов и вирусных тем в реальном времени',
+    fields: [{ key: 'perplexity_api_key', label: 'API Key', placeholder: 'pplx-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://www.perplexity.ai/settings/api', linkText: 'perplexity.ai/settings/api' },
+      { text: 'Нажмите Generate → скопируйте ключ (начинается с pplx-)' },
+      { text: 'Бесплатно: 5 запросов/мин. Pro: неограниченно' },
+      { text: 'Используется агентами NicheAnalyst и ViralHunter в Premium режиме' },
+    ],
+    models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
+  },
+  {
+    id: 'tiktok', name: 'TikTok', icon: '🎵', color: 'from-rose-500 to-pink-500',
+    description: 'Публикация коротких видео и фото-постов в TikTok',
+    fields: [{ key: 'tiktok_access_token', label: 'Access Token', placeholder: 'act...', secret: true }],
+    steps: [
+      { text: 'Зарегистрируйтесь как разработчик:', link: 'https://developers.tiktok.com', linkText: 'developers.tiktok.com' },
+      { text: 'Создайте приложение → запросите доступ к Content Posting API' },
+      { text: 'Выдайте scope: video.publish, video.upload' },
+      { text: 'Пройдите OAuth авторизацию → получите Access Token' },
+      { text: 'Токен живёт 24 часа — нужно обновлять через Refresh Token' },
+    ],
+    models: [],
+  },
+  {
+    id: 'google_drive', name: 'Google Drive', icon: '📂', color: 'from-yellow-500 to-orange-500',
+    description: 'Постоянная память — кэш анализов ниш, экономит 90% токенов при повторных запусках',
+    fields: [
+      { key: 'google_service_account_json', label: 'Service Account JSON', placeholder: '{"type":"service_account",...}', secret: true },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://console.cloud.google.com', linkText: 'console.cloud.google.com' },
+      { text: 'Создайте проект → включите Google Drive API' },
+      { text: 'IAM и администрирование → Сервисные аккаунты → Создать' },
+      { text: 'Скачайте JSON ключ сервисного аккаунта' },
+      { text: 'Создайте папку на Google Диске, откройте права для email сервисного аккаунта' },
+      { text: 'Вставьте полное содержимое JSON файла в поле выше' },
+      { text: 'ID папки: из URL диска — .../folders/FOLDER_ID — скопируйте в профиль Dashboard' },
+    ],
+    models: [],
+  },
 ]
 
 function FieldInput({ field, value, onChange, testResult }) {

@@ -13,7 +13,18 @@ const AGENTS = [
   { key: 'adapter', label: 'Adapter', desc: 'Адаптация по платформам' },
 ]
 
-const MODELS = ['claude-sonnet-4-20250514', 'claude-haiku-4-5-20251001', 'gpt-4o', 'gpt-4o-mini', 'gemini-1.5-flash']
+const MODELS = [
+  { value: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',      group: 'Anthropic' },
+  { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4',        group: 'Anthropic' },
+  { value: 'claude-haiku-4-5-20251001',label: 'Claude Haiku 4.5',       group: 'Anthropic' },
+  { value: 'gpt-4o',                   label: 'GPT-4o',                  group: 'OpenAI' },
+  { value: 'gpt-4o-mini',              label: 'GPT-4o Mini',             group: 'OpenAI' },
+  { value: 'gemini-1.5-pro',           label: 'Gemini 1.5 Pro',          group: 'Google' },
+  { value: 'gemini-1.5-flash',         label: 'Gemini 1.5 Flash',        group: 'Google' },
+  { value: 'sonar-reasoning-pro',      label: 'Perplexity Sonar Reasoning Pro', group: 'Perplexity' },
+  { value: 'sonar-pro',                label: 'Perplexity Sonar Pro',    group: 'Perplexity' },
+  { value: 'sonar',                    label: 'Perplexity Sonar',        group: 'Perplexity' },
+]
 
 export default function PromptStudio() {
   const [selected, setSelected] = useState('copywriter')
@@ -87,7 +98,13 @@ export default function PromptStudio() {
               <label className="text-xs text-nexus-muted mb-1 block">AI Модель</label>
               <select value={editing.model || ''} onChange={e => setEditing(p => ({ ...p, model: e.target.value }))}
                 className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text focus:border-purple-500 outline-none">
-                {MODELS.map(m => <option key={m} value={m}>{m}</option>)}
+                {['Anthropic','OpenAI','Google','Perplexity'].map(group => (
+                  <optgroup key={group} label={group}>
+                    {MODELS.filter(m => m.group === group).map(m => (
+                      <option key={m.value} value={m.value}>{m.label}</option>
+                    ))}
+                  </optgroup>
+                ))}
               </select>
             </div>
             <div>

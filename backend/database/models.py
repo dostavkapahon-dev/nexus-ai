@@ -84,3 +84,25 @@ class Connection(Base):
     key_name = Column(String, unique=True, nullable=False)
     key_value = Column(Text)
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+class UserProfile(Base):
+    """Global user profile — product description, brand style, strategy settings."""
+    __tablename__ = 'user_profile'
+    id = Column(String, primary_key=True, default=gen_id)
+    product_description = Column(Text, default='')
+    brand_style = Column(Text, default='')
+    strategy_focus = Column(String, default='subscribers')   # subscribers / sales / engagement
+    strategy_duration = Column(Integer, default=30)          # 30 / 60 / 90 days
+    ai_mode = Column(String, default='economy')              # economy / premium
+    google_drive_folder_id = Column(String, default='')
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+class NicheAnalysisCache(Base):
+    """Cached niche analysis stored on Google Drive — avoid re-analysis."""
+    __tablename__ = 'niche_analysis_cache'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche_key = Column(String, unique=True, nullable=False)  # "{name}:{city}" lowercased
+    drive_file_id = Column(String)
+    drive_url = Column(String)
+    analysis_data = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)

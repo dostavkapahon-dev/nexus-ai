@@ -19,10 +19,13 @@ class ConnectionsBody(BaseModel):
     anthropic_api_key: Optional[str] = None
     openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
+    perplexity_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
+    tiktok_access_token: Optional[str] = None
+    google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
 
 @router.get("/api/connections")
