@@ -94,7 +94,9 @@ class UserProfile(Base):
     strategy_focus = Column(String, default='subscribers')   # subscribers / sales / engagement
     strategy_duration = Column(Integer, default=30)          # 30 / 60 / 90 days
     ai_mode = Column(String, default='economy')              # economy / premium
+    active_ai = Column(String, default='claude')             # claude / gpt4o / deepseek / gemini / sonar
     google_drive_folder_id = Column(String, default='')
+    google_drive_access_token = Column(Text, default='')     # OAuth token from Google Sign-In
     updated_at = Column(DateTime, default=datetime.utcnow)
 
 class NicheAnalysisCache(Base):

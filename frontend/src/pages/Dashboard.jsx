@@ -1,7 +1,18 @@
-﻿import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Zap, Play, Pause, Trash2, BarChart, CheckCircle, Cpu, Settings, DollarSign, Loader, Shield, AlertCircle, ToggleLeft, ToggleRight, Save, Database } from 'lucide-react'
-import { niches as nichesApi, profile as profileApi, infrastructure } from '../lib/api'
+import {
+  Zap, Play, Pause, Trash2, Cpu, CheckCircle, AlertCircle,
+  Loader, RefreshCw, Database, Cloud, CloudOff, ExternalLink, Settings2
+} from 'lucide-react'
+import { niches as nichesApi, profile as profileApi, connections as connectionsApi, infrastructure } from '../lib/api'
+
+const AI_PROVIDERS = [
+  { id: 'claude',    label: 'Claude',    sub: 'Anthropic',  icon: '🟠', key: 'anthropic_api_key',  color: '#e97316' },
+  { id: 'gpt4o',    label: 'GPT-4o',    sub: 'OpenAI',     icon: '⚡',  key: 'openai_api_key',     color: '#22c55e' },
+  { id: 'deepseek', label: 'DeepSeek',  sub: 'Экономный',  icon: '🧠', key: 'deepseek_api_key',   color: '#6366f1' },
+  { id: 'gemini',   label: 'Gemini',    sub: 'Google',     icon: '💎', key: 'gemini_api_key',     color: '#3b82f6' },
+  { id: 'sonar',    label: 'Perplexity',sub: 'Поиск',      icon: '🔍', key: 'perplexity_api_key', color: '#14b8a6' },
+]
 
 const AGENT_LABELS = {
   niche_analyst: 'NicheAnalyst', viral_hunter: 'ViralHunter',
@@ -10,7 +21,121 @@ const AGENT_LABELS = {
   voice_adapter: 'VoiceAdapter', adapter: 'Adapter'
 }
 
-function NicheCard({ niche, onDelete, onToggle }) {
+// ─── AI Provider Selector ────────────────────────────────────────────────────
+function AISelector({ activeAI, onSelect, connectedKeys }) {
+  return (
+    <div className="card p-5 mb-5">
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          <Cpu className="w-4 h-4 text-violet-400" />
+          <span className="font-semibold text-sm">Активный AI</span>
+          <span className="text-[11px] text-[#5a5a7a] ml-1">— выбери основную нейросеть для всех агентов</span>
+        </div>
+        <Link to="/connections" className="text-xs text-[#5a5a7a] hover:text-violet-400 flex items-center gap-1 transition">
+          <Settings2 className="w-3 h-3" /> Ключи API
+        </Link>
+      </div>
+      <div className="grid grid-cols-5 gap-2">
+        {AI_PROVIDERS.map(p => {
+          const hasKey = connectedKeys[p.key]
+          const isActive = activeAI === p.id
+          return (
+            <button key={p.id} onClick={() => onSelect(p.id)}
+              className={`ai-card relative flex flex-col items-center gap-2 py-3 text-center ${isActive ? 'active' : ''}`}
+              style={isActive ? { borderColor: p.color + '66', background: p.color + '15' } : {}}>
+              <div className="text-2xl">{p.icon}</div>
+              <div>
+                <div className="text-xs font-semibold text-[#e8e8f5]">{p.label}</div>
+                <div className="text-[10px] text-[#5a5a7a]">{p.sub}</div>
+              </div>
+              <div className={`absolute top-2 right-2 w-1.5 h-1.5 rounded-full ${hasKey ? 'bg-green-400' : 'bg-[#3a3a55]'}`} />
+              {isActive && (
+                <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[9px] px-1.5 py-0.5 rounded-full"
+                  style={{ background: p.color + '30', color: p.color }}>активен</div>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ─── Google Drive Connect ────────────────────────────────────────────────────
+function GoogleDriveConnect({ profile, onSave, googleClientId }) {
+  const [connecting, setConnecting] = useState(false)
+  const [status, setStatus] = useState(null)
+
+  const connected = Boolean(profile.google_drive_access_token)
+
+  const connect = () => {
+    if (!googleClientId) {
+      setStatus({ ok: false, msg: 'Добавьте GOOGLE_CLIENT_ID в Render → Environment' })
+      return
+    }
+    setConnecting(true)
+    const client = window.google?.accounts?.oauth2?.initTokenClient({
+      client_id: googleClientId,
+      scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: async (resp) => {
+        if (resp.error) {
+          setStatus({ ok: false, msg: 'Отмена или ошибка: ' + resp.error })
+          setConnecting(false)
+          return
+        }
+        try {
+          await profileApi.save({ ...profile, google_drive_access_token: resp.access_token })
+          onSave({ ...profile, google_drive_access_token: resp.access_token })
+          setStatus({ ok: true, msg: 'Google Drive подключён! Кэш анализов включён.' })
+        } catch { setStatus({ ok: false, msg: 'Ошибка сохранения токена' }) }
+        setConnecting(false)
+      }
+    })
+    client?.requestAccessToken()
+  }
+
+  const disconnect = async () => {
+    await profileApi.save({ ...profile, google_drive_access_token: '' })
+    onSave({ ...profile, google_drive_access_token: '' })
+    setStatus(null)
+  }
+
+  return (
+    <div className="flex items-center justify-between px-4 py-3 rounded-xl border border-[#1c1c30] bg-[#0d0d1a]">
+      <div className="flex items-center gap-3">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-base ${connected ? 'bg-green-500/15' : 'bg-[#111120]'}`}>
+          {connected ? '📂' : <CloudOff className="w-4 h-4 text-[#5a5a7a]" />}
+        </div>
+        <div>
+          <div className="text-sm font-medium text-[#e8e8f5]">Google Drive</div>
+          <div className="text-xs text-[#5a5a7a]">
+            {connected ? 'Кэш анализов включён — экономия 90% токенов' : 'Подключи для кэширования анализов ниш'}
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        {status && (
+          <span className={`text-xs ${status.ok ? 'text-green-400' : 'text-red-400'}`}>{status.msg}</span>
+        )}
+        {connected ? (
+          <button onClick={disconnect}
+            className="px-3 py-1.5 text-xs rounded-lg border border-[#1c1c30] text-[#5a5a7a] hover:text-red-400 hover:border-red-500/30 transition">
+            Отключить
+          </button>
+        ) : (
+          <button onClick={connect} disabled={connecting}
+            className="px-4 py-1.5 text-xs rounded-lg bg-gradient-to-r from-[#4285f4] to-[#34a853] text-white font-medium hover:opacity-90 transition flex items-center gap-1.5 disabled:opacity-50">
+            {connecting ? <Loader className="w-3 h-3 animate-spin" /> : <Cloud className="w-3 h-3" />}
+            Подключить Google
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── Niche Card ──────────────────────────────────────────────────────────────
+function NicheCard({ niche, onDelete, onToggle, onRerun }) {
   const [agents, setAgents] = useState({})
   const wsRef = useRef(null)
 
@@ -19,241 +144,142 @@ function NicheCard({ niche, onDelete, onToggle }) {
     const ws = new WebSocket(`${proto}://${window.location.host}/ws/${niche.id}`)
     wsRef.current = ws
     ws.onmessage = (e) => {
-      const data = JSON.parse(e.data)
-      if (data.event === 'agent_start') setAgents(p => ({ ...p, [data.agent]: 'running' }))
-      else if (data.event === 'agent_done') setAgents(p => ({ ...p, [data.agent]: 'done' }))
-      else if (data.event === 'cache_hit') setAgents(p => ({ ...p, [data.agent]: 'cached' }))
-      else if (data.event === 'pipeline_complete') setAgents({})
+      const d = JSON.parse(e.data)
+      if (d.event === 'agent_start')      setAgents(p => ({ ...p, [d.agent]: 'running' }))
+      else if (d.event === 'agent_done')  setAgents(p => ({ ...p, [d.agent]: 'done' }))
+      else if (d.event === 'cache_hit')   setAgents(p => ({ ...p, [d.agent]: 'cached' }))
+      else if (d.event === 'pipeline_complete') setAgents({})
     }
     return () => ws.close()
   }, [niche.id])
 
-  const activeAgents = Object.entries(agents).filter(([, s]) => s === 'running')
-  const cachedAgents = Object.entries(agents).filter(([, s]) => s === 'cached')
+  const running = Object.entries(agents).filter(([, s]) => s === 'running')
+  const cached  = Object.entries(agents).filter(([, s]) => s === 'cached')
+  const isActive = niche.status === 'active'
 
   return (
-    <div className="glass rounded-xl p-5 flex flex-col gap-4">
+    <div className={`card p-5 flex flex-col gap-4 transition-all ${isActive ? 'glow-purple' : ''}`}>
       <div className="flex items-start justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className={`w-2 h-2 rounded-full ${niche.status === 'active' ? 'bg-green-400' : 'bg-nexus-muted'}`} />
-            <h3 className="font-semibold text-nexus-text">{niche.name}</h3>
+        <div className="flex items-start gap-3">
+          <div className={`w-2.5 h-2.5 rounded-full mt-1.5 flex-shrink-0 ${isActive ? 'bg-green-400 pulse-dot' : 'bg-[#3a3a55]'}`} />
+          <div>
+            <h3 className="font-semibold text-[#e8e8f5]">{niche.name}</h3>
+            <p className="text-xs text-[#5a5a7a] mt-0.5">{niche.city} · {niche.goal}</p>
           </div>
-          <p className="text-xs text-nexus-muted mt-1">{niche.city} · {niche.goal}</p>
         </div>
-        <div className="flex gap-2">
-          <button onClick={() => onToggle(niche)} className="p-1.5 rounded-lg hover:bg-nexus-border transition text-nexus-muted hover:text-nexus-text">
-            {niche.status === 'active' ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+        <div className="flex gap-1">
+          <button onClick={() => onToggle(niche)}
+            className={`p-1.5 rounded-lg transition ${isActive ? 'text-yellow-400 hover:bg-yellow-500/10' : 'text-green-400 hover:bg-green-500/10'}`}>
+            {isActive ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
           </button>
-          <button onClick={() => onDelete(niche.id)} className="p-1.5 rounded-lg hover:bg-red-900/30 transition text-nexus-muted hover:text-red-400">
+          <button onClick={() => onRerun(niche.id)}
+            className="p-1.5 rounded-lg transition text-[#5a5a7a] hover:text-cyan-400 hover:bg-cyan-500/10">
+            <RefreshCw className="w-4 h-4" />
+          </button>
+          <button onClick={() => onDelete(niche.id)}
+            className="p-1.5 rounded-lg transition text-[#5a5a7a] hover:text-red-400 hover:bg-red-500/10">
             <Trash2 className="w-4 h-4" />
           </button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-1">
+
+      <div className="flex flex-wrap gap-1.5">
         {(niche.platforms || []).map(p => (
-          <span key={p} className="px-2 py-0.5 text-xs rounded-full bg-purple-900/40 text-purple-300 border border-purple-500/30">{p}</span>
+          <span key={p} className="px-2 py-0.5 text-[11px] rounded-full bg-violet-900/30 text-violet-300 border border-violet-500/25">{p}</span>
         ))}
       </div>
-      {cachedAgents.length > 0 && (
-        <div className="flex items-center gap-2 text-xs text-yellow-400">
-          <Database className="w-3 h-3" /> Загружен из кэша Google Drive (экономия токенов)
+
+      {cached.length > 0 && (
+        <div className="flex items-center gap-2 text-xs text-amber-400 bg-amber-500/8 rounded-lg px-3 py-1.5">
+          <Database className="w-3 h-3" /> Загружено из кэша — токены сэкономлены
         </div>
       )}
-      {activeAgents.length > 0 && (
-        <div className="space-y-1">
-          {activeAgents.map(([agent]) => (
-            <div key={agent} className="flex items-center gap-2 text-xs text-cyan-400">
+
+      {running.length > 0 && (
+        <div className="space-y-1.5">
+          {running.map(([agent]) => (
+            <div key={agent} className="flex items-center gap-2 text-xs text-cyan-400 bg-cyan-500/8 rounded-lg px-3 py-1.5">
               <Cpu className="w-3 h-3 animate-spin" />
-              <span>{AGENT_LABELS[agent] || agent} работает...</span>
+              {AGENT_LABELS[agent] || agent} работает...
             </div>
           ))}
         </div>
       )}
+
       <div className="grid grid-cols-2 gap-2 text-xs">
-        <div className="bg-nexus-card rounded-lg p-2">
-          <div className="text-nexus-muted">Постов/день</div>
-          <div className="font-semibold text-nexus-text">{niche.posts_per_day}</div>
+        <div className="bg-[#0d0d1a] rounded-lg px-3 py-2">
+          <div className="text-[#5a5a7a]">Постов/день</div>
+          <div className="font-semibold text-[#e8e8f5] mt-0.5">{niche.posts_per_day}</div>
         </div>
-        <div className="bg-nexus-card rounded-lg p-2">
-          <div className="text-nexus-muted">Бюджет</div>
-          <div className="font-semibold text-nexus-text">${niche.budget_usd}/мес</div>
+        <div className="bg-[#0d0d1a] rounded-lg px-3 py-2">
+          <div className="text-[#5a5a7a]">Бюджет</div>
+          <div className="font-semibold text-[#e8e8f5] mt-0.5">${niche.budget_usd}/мес</div>
         </div>
       </div>
-      <div className="flex gap-2 pt-2 border-t border-nexus-border">
-        <Link to={`/queue?niche_id=${niche.id}`} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-purple-600/20 text-purple-300 hover:bg-purple-600/30 transition">
+
+      <div className="flex gap-2 pt-1">
+        <Link to={`/queue?niche_id=${niche.id}`}
+          className="flex-1 text-center text-xs py-2 rounded-lg bg-violet-600/15 text-violet-300 hover:bg-violet-600/25 transition border border-violet-500/20">
           Очередь
         </Link>
-        <button onClick={() => nichesApi.generatePlan(niche.id)} className="flex-1 text-center text-xs py-1.5 rounded-lg bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 transition">
-          Перезапустить
-        </button>
+        <Link to={`/analytics?niche_id=${niche.id}`}
+          className="flex-1 text-center text-xs py-2 rounded-lg bg-cyan-600/15 text-cyan-300 hover:bg-cyan-600/25 transition border border-cyan-500/20">
+          Аналитика
+        </Link>
       </div>
     </div>
   )
 }
 
-function ProfilePanel({ profile, onSave }) {
-  const [form, setForm] = useState(profile)
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [cost, setCost] = useState(null)
-
-  useEffect(() => { setForm(profile) }, [profile])
-
-  const set = (k, v) => setForm(p => ({ ...p, [k]: v }))
-
-  const save = async () => {
-    setSaving(true)
-    await profileApi.save(form)
-    onSave(form)
-    setSaved(true); setTimeout(() => setSaved(false), 2000)
-    setSaving(false)
-  }
-
-  const calcCost = async () => {
-    const r = await profileApi.costEstimate({
-      ai_mode: form.ai_mode || 'economy',
-      posts_per_day: 1,
-      days: form.strategy_duration || 30
-    })
-    setCost(r.data.estimated_cost_usd)
-  }
-
-  return (
-    <div className="glass rounded-xl p-5 mb-6">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="font-semibold text-nexus-text flex items-center gap-2">
-          <Settings className="w-4 h-4 text-purple-400" /> Настройки стратегии
-        </h2>
-        <button onClick={save} disabled={saving}
-          className="px-3 py-1.5 text-xs rounded-lg bg-purple-600 text-white hover:bg-purple-500 transition flex items-center gap-1 disabled:opacity-50">
-          {saving ? <Loader className="w-3 h-3 animate-spin" /> : saved ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />}
-          {saved ? 'Сохранено' : 'Сохранить'}
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <label className="text-xs text-nexus-muted">Описание продукта / услуги</label>
-          <textarea value={form.product_description || ''} onChange={e => set('product_description', e.target.value)}
-            rows={3} placeholder="Что вы продаёте? Чем уникальны? Кому это нужно?"
-            className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text placeholder-nexus-muted focus:border-purple-500 outline-none resize-none" />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs text-nexus-muted">Стиль подачи / тон бренда</label>
-          <textarea value={form.brand_style || ''} onChange={e => set('brand_style', e.target.value)}
-            rows={3} placeholder="Экспертный, живой, с юмором? Что нельзя? Фишки подачи..."
-            className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text placeholder-nexus-muted focus:border-purple-500 outline-none resize-none" />
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
-        <div className="space-y-1">
-          <label className="text-xs text-nexus-muted">Фокус стратегии</label>
-          <select value={form.strategy_focus || 'subscribers'} onChange={e => set('strategy_focus', e.target.value)}
-            className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text focus:border-purple-500 outline-none">
-            <option value="subscribers">📈 Рост подписчиков</option>
-            <option value="sales">💰 Прямые продажи</option>
-            <option value="engagement">💬 Комментинг и взаимодействие</option>
-          </select>
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs text-nexus-muted">Срок стратегии</label>
-          <div className="flex gap-2">
-            {[30, 60, 90].map(d => (
-              <button key={d} onClick={() => set('strategy_duration', d)}
-                className={`flex-1 py-2 text-xs rounded-lg border transition ${form.strategy_duration === d ? 'border-purple-500 bg-purple-600/20 text-purple-300' : 'border-nexus-border text-nexus-muted hover:border-nexus-text'}`}>
-                {d}д
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs text-nexus-muted">ID папки Google Drive (для кэша)</label>
-          <input value={form.google_drive_folder_id || ''} onChange={e => set('google_drive_folder_id', e.target.value)}
-            placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs"
-            className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-xs text-nexus-text placeholder-nexus-muted focus:border-purple-500 outline-none font-mono" />
-        </div>
-      </div>
-
-      <div className="flex items-center justify-between mt-4 pt-4 border-t border-nexus-border">
-        <div className="flex items-center gap-4">
-          <span className="text-xs text-nexus-muted">Режим нейросетей:</span>
-          <button onClick={() => set('ai_mode', form.ai_mode === 'economy' ? 'premium' : 'economy')}
-            className="flex items-center gap-2 text-sm font-medium transition">
-            {form.ai_mode === 'economy'
-              ? <><ToggleLeft className="w-6 h-6 text-nexus-muted" /><span className="text-nexus-muted">Эконом</span><span className="text-xs text-nexus-muted">(Gemini + GPT-mini)</span></>
-              : <><ToggleRight className="w-6 h-6 text-yellow-400" /><span className="text-yellow-400">Премиум</span><span className="text-xs text-yellow-400">(Claude + Perplexity + GPT-4o)</span></>
-            }
-          </button>
-        </div>
-        <button onClick={calcCost} className="flex items-center gap-1 text-xs text-cyan-400 hover:text-cyan-300 transition">
-          <DollarSign className="w-3 h-3" /> Рассчитать стоимость
-          {cost !== null && <span className="ml-1 bg-cyan-900/40 px-2 py-0.5 rounded text-cyan-300 font-semibold">≈ ${cost}</span>}
-        </button>
-      </div>
-    </div>
-  )
-}
-
-function InfraCheck() {
-  const [checking, setChecking] = useState(false)
-  const [results, setResults] = useState(null)
-
-  const check = async () => {
-    setChecking(true)
-    try {
-      const r = await infrastructure.check()
-      setResults(r.data)
-    } catch { setResults(null) }
-    setChecking(false)
-  }
-
-  return (
-    <div className="glass rounded-xl p-4 mb-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Shield className="w-4 h-4 text-cyan-400" />
-          <span className="text-sm font-medium text-nexus-text">Проверка подключений</span>
-          {results && <span className="text-xs text-nexus-muted">{results.summary}</span>}
-        </div>
-        <button onClick={check} disabled={checking}
-          className="px-3 py-1.5 text-xs rounded-lg border border-nexus-border text-nexus-muted hover:text-nexus-text hover:border-cyan-500 transition flex items-center gap-1">
-          {checking ? <Loader className="w-3 h-3 animate-spin" /> : <Shield className="w-3 h-3" />}
-          Проверить все
-        </button>
-      </div>
-      {results && (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {Object.entries(results.results).map(([key, val]) => (
-            <span key={key} className={`flex items-center gap-1 text-xs px-2 py-1 rounded-lg border ${val.ok ? 'border-green-500/30 bg-green-900/20 text-green-400' : 'border-red-500/30 bg-red-900/20 text-red-400'}`}>
-              {val.ok ? <CheckCircle className="w-3 h-3" /> : <AlertCircle className="w-3 h-3" />}
-              {key.replace(/_/g, ' ')}
-            </span>
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
+// ─── Dashboard ───────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const [niches, setNiches] = useState([])
   const [loading, setLoading] = useState(true)
-  const [profileData, setProfileData] = useState({
+  const [profile, setProfile] = useState({
     product_description: '', brand_style: '', strategy_focus: 'subscribers',
-    strategy_duration: 30, ai_mode: 'economy', google_drive_folder_id: ''
+    strategy_duration: 30, ai_mode: 'economy', google_drive_folder_id: '',
+    google_drive_access_token: '', active_ai: 'claude'
   })
+  const [connectedKeys, setConnectedKeys] = useState({})
+  const [googleClientId, setGoogleClientId] = useState('')
+  const [infraResults, setInfraResults] = useState(null)
+  const [infraLoading, setInfraLoading] = useState(false)
 
-  const load = async () => {
-    try {
-      const [nr, pr] = await Promise.all([nichesApi.list(), profileApi.get()])
+  useEffect(() => {
+    Promise.all([
+      nichesApi.list(),
+      profileApi.get(),
+      connectionsApi.list(),
+    ]).then(([nr, pr, cr]) => {
       setNiches(nr.data)
-      setProfileData(pr.data)
-    } finally { setLoading(false) }
-  }
+      setProfile(pr.data)
+      const keys = {}
+      AI_PROVIDERS.forEach(p => { keys[p.key] = Boolean(cr.data[p.key]) })
+      setConnectedKeys(keys)
+    }).finally(() => setLoading(false))
 
-  useEffect(() => { load() }, [])
+    // Load Google client ID for Drive OAuth
+    import('../lib/api').then(({ auth }) => {
+      auth.googleClientId().then(r => {
+        if (r.data.enabled) {
+          setGoogleClientId(r.data.client_id)
+          if (!document.getElementById('gsi-script')) {
+            const s = document.createElement('script')
+            s.id = 'gsi-script'
+            s.src = 'https://accounts.google.com/gsi/client'
+            s.async = true
+            document.head.appendChild(s)
+          }
+        }
+      }).catch(() => {})
+    })
+  }, [])
+
+  const selectAI = async (aiId) => {
+    const updated = { ...profile, active_ai: aiId }
+    setProfile(updated)
+    await profileApi.save(updated)
+  }
 
   const handleDelete = async (id) => {
     if (!confirm('Удалить нишу?')) return
@@ -262,53 +288,105 @@ export default function Dashboard() {
   }
 
   const handleToggle = async (niche) => {
-    const newStatus = niche.status === 'active' ? 'paused' : 'active'
-    await nichesApi.update(niche.id, { status: newStatus })
-    setNiches(p => p.map(n => n.id === niche.id ? { ...n, status: newStatus } : n))
+    const s = niche.status === 'active' ? 'paused' : 'active'
+    await nichesApi.update(niche.id, { status: s })
+    setNiches(p => p.map(n => n.id === niche.id ? { ...n, status: s } : n))
   }
 
+  const handleRerun = async (id) => {
+    await nichesApi.generatePlan(id)
+  }
+
+  const checkInfra = async () => {
+    setInfraLoading(true)
+    try { const r = await infrastructure.check(); setInfraResults(r.data) }
+    catch { setInfraResults(null) }
+    setInfraLoading(false)
+  }
+
+  const activeNiches  = niches.filter(n => n.status === 'active').length
+  const pausedNiches  = niches.filter(n => n.status !== 'active').length
+
   return (
-    <div>
+    <div className="max-w-6xl">
+      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2"><Zap className="text-purple-400" /> NEXUS AI</h1>
-          <p className="text-nexus-muted text-sm mt-1">Автоматизация контента</p>
+          <h1 className="text-xl font-bold gradient-text flex items-center gap-2">
+            <Zap className="w-5 h-5 text-violet-400" /> NEXUS AI
+          </h1>
+          <p className="text-xs text-[#5a5a7a] mt-1">Автономная публикация контента 24/7</p>
         </div>
-        <Link to="/new" className="px-4 py-2 rounded-lg bg-gradient-to-r from-purple-600 to-cyan-600 text-white text-sm font-medium hover:opacity-90 transition">
+        <Link to="/new" className="btn-primary flex items-center gap-1.5">
           + Новая ниша
         </Link>
       </div>
 
-      <ProfilePanel profile={profileData} onSave={setProfileData} />
-      <InfraCheck />
+      {/* AI Selector */}
+      <AISelector activeAI={profile.active_ai} onSelect={selectAI} connectedKeys={connectedKeys} />
 
-      <div className="grid grid-cols-4 gap-4 mb-6">
+      {/* Google Drive Connect */}
+      <div className="mb-5">
+        <GoogleDriveConnect profile={profile} onSave={setProfile} googleClientId={googleClientId} />
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-4 gap-3 mb-5">
         {[
-          { label: 'Активных ниш', value: niches.filter(n => n.status === 'active').length, icon: Zap, color: 'purple' },
-          { label: 'Всего ниш', value: niches.length, icon: BarChart, color: 'cyan' },
-          { label: 'Режим AI', value: profileData.ai_mode === 'premium' ? 'Premium' : 'Эконом', icon: Cpu, color: profileData.ai_mode === 'premium' ? 'yellow' : 'green' },
-          { label: 'Агентов', value: '8', icon: Cpu, color: 'yellow' },
-        ].map(({ label, value, icon: Icon, color }) => (
-          <div key={label} className="glass rounded-xl p-4">
-            <div className="flex items-center gap-2 text-nexus-muted text-xs mb-2">
-              <Icon className={`w-4 h-4 text-${color}-400`} />{label}
-            </div>
-            <div className="text-2xl font-bold text-nexus-text">{value}</div>
+          { label: 'Активных ниш',  value: activeNiches,  color: '#22c55e' },
+          { label: 'На паузе',       value: pausedNiches,  color: '#5a5a7a' },
+          { label: 'Всего ниш',      value: niches.length, color: '#a78bfa' },
+          { label: 'AI агентов',     value: '8',           color: '#22d3ee' },
+        ].map(({ label, value, color }) => (
+          <div key={label} className="card px-4 py-3">
+            <div className="text-[11px] text-[#5a5a7a] mb-1">{label}</div>
+            <div className="text-2xl font-bold" style={{ color }}>{value}</div>
           </div>
         ))}
       </div>
 
+      {/* Infrastructure check */}
+      <div className="card px-4 py-3 mb-5 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="text-sm font-medium text-[#e8e8f5]">Статус подключений</div>
+          {infraResults && (
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(infraResults.results || {}).map(([key, val]) => (
+                <span key={key} className={`text-[11px] px-2 py-0.5 rounded-full flex items-center gap-1 ${val.ok ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+                  {val.ok ? <CheckCircle className="w-2.5 h-2.5" /> : <AlertCircle className="w-2.5 h-2.5" />}
+                  {key.replace(/_api_key|_bot_token|_access_token/g, '').replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+        <button onClick={checkInfra} disabled={infraLoading}
+          className="text-xs px-3 py-1.5 rounded-lg border border-[#1c1c30] text-[#5a5a7a] hover:text-[#e8e8f5] hover:border-[#4c4c70] transition flex items-center gap-1.5 disabled:opacity-50">
+          {infraLoading ? <Loader className="w-3 h-3 animate-spin" /> : <CheckCircle className="w-3 h-3" />}
+          Проверить
+        </button>
+      </div>
+
+      {/* Niches */}
       {loading ? (
-        <div className="text-center text-nexus-muted py-12">Загрузка...</div>
+        <div className="flex items-center justify-center py-20 text-[#5a5a7a]">
+          <Loader className="w-5 h-5 animate-spin mr-2" /> Загрузка...
+        </div>
       ) : niches.length === 0 ? (
-        <div className="text-center py-20">
-          <Zap className="w-12 h-12 text-purple-400 mx-auto mb-4 opacity-50" />
-          <h3 className="text-lg font-medium text-nexus-muted mb-2">Ниш пока нет</h3>
-          <Link to="/new" className="px-6 py-2 rounded-lg bg-purple-600 text-white text-sm hover:bg-purple-500 transition">Создать нишу</Link>
+        <div className="card p-12 text-center">
+          <div className="text-4xl mb-3">🚀</div>
+          <div className="font-semibold text-[#e8e8f5] mb-2">Нет активных ниш</div>
+          <div className="text-sm text-[#5a5a7a] mb-5">Создай первую нишу — NEXUS начнёт генерировать и публиковать контент автоматически</div>
+          <Link to="/new" className="btn-primary inline-flex items-center gap-2">
+            <Zap className="w-4 h-4" /> Создать нишу
+          </Link>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {niches.map(n => <NicheCard key={n.id} niche={n} onDelete={handleDelete} onToggle={handleToggle} />)}
+        <div className="grid grid-cols-3 gap-4">
+          {niches.map(n => (
+            <NicheCard key={n.id} niche={n}
+              onDelete={handleDelete} onToggle={handleToggle} onRerun={handleRerun} />
+          ))}
         </div>
       )}
     </div>

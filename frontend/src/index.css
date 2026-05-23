@@ -2,14 +2,82 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  background-color: #0a0a0f;
-  color: #e2e2f0;
-  font-family: 'Inter', system-ui, sans-serif;
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg: #07070f;
+  --bg2: #0d0d1a;
+  --card: #111120;
+  --border: #1c1c30;
+  --text: #e8e8f5;
+  --muted: #5a5a7a;
 }
 
-.glass {
-  background: rgba(18, 18, 26, 0.8);
-  border: 1px solid #1e1e2e;
-  backdrop-filter: blur(10px);
+* { box-sizing: border-box; }
+
+body {
+  background-color: var(--bg);
+  color: var(--text);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a40; border-radius: 4px; }
+
+.glass {
+  background: rgba(13, 13, 26, 0.85);
+  border: 1px solid #1c1c30;
+  backdrop-filter: blur(12px);
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.glow-purple { box-shadow: 0 0 20px rgba(139, 92, 246, 0.15); }
+.glow-cyan   { box-shadow: 0 0 20px rgba(34, 211, 238, 0.15); }
+
+.gradient-text {
+  background: linear-gradient(135deg, #a78bfa, #22d3ee);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #7c3aed, #0891b2);
+  color: white;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: opacity 0.15s;
+  border: none;
+  cursor: pointer;
+}
+.btn-primary:hover { opacity: 0.88; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.pulse-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  animation: pulse 2s infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.ai-card {
+  border-radius: 12px;
+  border: 1.5px solid var(--border);
+  padding: 14px;
+  cursor: pointer;
+  transition: all 0.2s;
+  background: var(--card);
+}
+.ai-card:hover { border-color: #4c4c70; transform: translateY(-1px); }
+.ai-card.active { border-color: #7c3aed; background: rgba(124, 58, 237, 0.1); }

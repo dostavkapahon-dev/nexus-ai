@@ -1,6 +1,8 @@
 """
-Google Drive integration for caching niche analysis.
-Uses a service account JSON stored in the Connection table (key: google_service_account_json).
+Google Drive integration.
+Supports two auth modes:
+1. OAuth access token (from user's Google Sign-In with drive.file scope) — stored in UserProfile
+2. Service account JSON (legacy, env var GOOGLE_SERVICE_ACCOUNT_JSON)
 """
 import os
 import json
@@ -8,22 +10,37 @@ import asyncio
 from io import BytesIO
 
 async def _get_service():
-    """Build Drive service from service account JSON stored in DB or env."""
     from googleapiclient.discovery import build
-    from google.oauth2 import service_account
 
+    # Mode 1: OAuth access token from UserProfile
+    try:
+        from database.db import AsyncSessionLocal
+        from database.models import UserProfile
+        from sqlalchemy import select
+        from google.oauth2.credentials import Credentials
+
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(select(UserProfile).limit(1))
+            prof = result.scalar_one_or_none()
+            if prof and prof.google_drive_access_token:
+                creds = Credentials(token=prof.google_drive_access_token)
+                return await asyncio.to_thread(build, "drive", "v3", credentials=creds)
+    except Exception:
+        pass
+
+    # Mode 2: Service account JSON
     sa_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "")
-    if not sa_json:
-        raise ValueError("GOOGLE_SERVICE_ACCOUNT_JSON not configured")
+    if sa_json:
+        from google.oauth2 import service_account
+        info = json.loads(sa_json)
+        creds = service_account.Credentials.from_service_account_info(
+            info, scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        return await asyncio.to_thread(build, "drive", "v3", credentials=creds)
 
-    info = json.loads(sa_json)
-    creds = service_account.Credentials.from_service_account_info(
-        info, scopes=["https://www.googleapis.com/auth/drive"]
-    )
-    return await asyncio.to_thread(build, "drive", "v3", credentials=creds)
+    raise ValueError("Google Drive не подключён. Нажмите 'Подключить Google' на главной странице.")
 
 async def find_file(folder_id: str, filename: str) -> dict | None:
-    """Return file metadata if filename exists in folder, else None."""
     try:
         service = await _get_service()
         query = f"'{folder_id}' in parents and name='{filename}' and trashed=false"
@@ -36,7 +53,6 @@ async def find_file(folder_id: str, filename: str) -> dict | None:
         return None
 
 async def upload_json(folder_id: str, filename: str, data: dict) -> dict:
-    """Upload JSON data to Google Drive folder. Returns {id, webViewLink}."""
     from googleapiclient.http import MediaIoBaseUpload
 
     service = await _get_service()
@@ -49,17 +65,18 @@ async def upload_json(folder_id: str, filename: str, data: dict) -> dict:
             body=file_meta, media_body=media, fields="id,webViewLink"
         ).execute()
     )
-    # Make publicly viewable
-    await asyncio.to_thread(
-        lambda: service.permissions().create(
-            fileId=result["id"],
-            body={"type": "anyone", "role": "reader"}
-        ).execute()
-    )
+    try:
+        await asyncio.to_thread(
+            lambda: service.permissions().create(
+                fileId=result["id"],
+                body={"type": "anyone", "role": "reader"}
+            ).execute()
+        )
+    except Exception:
+        pass
     return result
 
 async def read_json(file_id: str) -> dict:
-    """Download and parse JSON file from Google Drive."""
     from googleapiclient.http import MediaIoBaseDownload
 
     service = await _get_service()

@@ -1,5 +1,5 @@
 import React from 'react'
-import { Routes, Route, NavLink, useLocation, Navigate } from 'react-router-dom'
+import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
 import { Zap, LayoutDashboard, PlusCircle, List, Settings, Cpu, BarChart2, Plug, LogOut } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
@@ -11,67 +11,73 @@ import Login from './pages/Login'
 import { auth } from './lib/api'
 
 const NAV = [
-  { to: '/', icon: LayoutDashboard, label: 'Дашборд' },
-  { to: '/new', icon: PlusCircle, label: 'Новая ниша' },
-  { to: '/queue', icon: List, label: 'Очередь' },
-  { to: '/analytics', icon: BarChart2, label: 'Аналитика' },
-  { to: '/prompts', icon: Cpu, label: 'Промпты' },
-  { to: '/connections', icon: Plug, label: 'Подключения' },
+  { to: '/',            icon: LayoutDashboard, label: 'Главная' },
+  { to: '/new',         icon: PlusCircle,      label: 'Новая ниша' },
+  { to: '/queue',       icon: List,            label: 'Очередь' },
+  { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
+  { to: '/prompts',     icon: Cpu,             label: 'Агенты' },
+  { to: '/connections', icon: Plug,            label: 'Ключи API' },
 ]
 
 function RequireAuth({ children }) {
-  const token = localStorage.getItem('nx_token')
-  if (!token) return <Navigate to="/login" replace />
-  return children
+  return localStorage.getItem('nx_token') ? children : <Navigate to="/login" replace />
+}
+
+function Sidebar() {
+  const logout = () => { auth.logout(); window.location.href = '/login' }
+  return (
+    <aside className="w-52 border-r border-[#1c1c30] flex flex-col fixed h-full z-10 bg-[#09091a]">
+      <div className="px-5 py-5 border-b border-[#1c1c30]">
+        <div className="flex items-center gap-2.5">
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-600 to-cyan-500 flex items-center justify-center">
+            <Zap className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <div className="font-bold text-sm tracking-wide gradient-text">NEXUS AI</div>
+            <div className="text-[10px] text-[#5a5a7a] mt-px">Контент 24/7</div>
+          </div>
+        </div>
+      </div>
+
+      <nav className="flex-1 px-3 py-4 space-y-0.5">
+        {NAV.map(({ to, icon: Icon, label }) => (
+          <NavLink key={to} to={to} end={to === '/'}
+            className={({ isActive }) =>
+              `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-all ${
+                isActive
+                  ? 'bg-violet-600/15 text-violet-300 border border-violet-500/25 font-medium'
+                  : 'text-[#5a5a7a] hover:text-[#c0c0e0] hover:bg-[#111120]'
+              }`
+            }
+          >
+            <Icon className="w-4 h-4 flex-shrink-0" />
+            {label}
+          </NavLink>
+        ))}
+      </nav>
+
+      <div className="px-3 py-4 border-t border-[#1c1c30]">
+        <button onClick={logout}
+          className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#5a5a7a] hover:text-red-400 hover:bg-red-500/8 transition w-full">
+          <LogOut className="w-3.5 h-3.5" /> Выйти
+        </button>
+        <div className="text-[10px] text-[#3a3a55] text-center mt-2">v1.2.0</div>
+      </div>
+    </aside>
+  )
 }
 
 function Layout() {
-  const logout = () => { auth.logout(); window.location.href = '/login' }
   return (
-    <div className="flex min-h-screen bg-nexus-bg">
-      <aside className="w-56 border-r border-nexus-border flex flex-col fixed h-full z-10">
-        <div className="p-4 border-b border-nexus-border flex items-center gap-2">
-          <Zap className="text-purple-400 w-6 h-6" />
-          <span className="font-bold text-lg bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">
-            NEXUS AI
-          </span>
-        </div>
-        <nav className="flex-1 p-3 space-y-1">
-          {NAV.map(({ to, icon: Icon, label }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all ${
-                  isActive
-                    ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30'
-                    : 'text-nexus-muted hover:text-nexus-text hover:bg-nexus-card'
-                }`
-              }
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </NavLink>
-          ))}
-        </nav>
-        <div className="p-3 border-t border-nexus-border space-y-2">
-          <button
-            onClick={logout}
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-xs text-nexus-muted hover:text-red-400 hover:bg-red-500/10 transition w-full"
-          >
-            <LogOut className="w-3 h-3" /> Выйти
-          </button>
-          <div className="text-xs text-nexus-muted text-center">v1.1.0 · NEXUS AI</div>
-        </div>
-      </aside>
-      <main className="flex-1 ml-56 p-6 overflow-auto min-h-screen">
+    <div className="flex min-h-screen bg-[#07070f]">
+      <Sidebar />
+      <main className="flex-1 ml-52 p-6 overflow-auto min-h-screen">
         <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/new" element={<NewNiche />} />
-          <Route path="/queue" element={<Queue />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/prompts" element={<PromptStudio />} />
+          <Route path="/"            element={<Dashboard />} />
+          <Route path="/new"         element={<NewNiche />} />
+          <Route path="/queue"       element={<Queue />} />
+          <Route path="/analytics"   element={<Analytics />} />
+          <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />
         </Routes>
       </main>

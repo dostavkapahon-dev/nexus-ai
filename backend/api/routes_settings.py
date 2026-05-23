@@ -27,6 +27,7 @@ class ConnectionsBody(BaseModel):
     tiktok_access_token: Optional[str] = None
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
+    deepseek_api_key: Optional[str] = None
 
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
