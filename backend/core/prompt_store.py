@@ -43,6 +43,16 @@ DEFAULT_PROMPTS = {
         "system": "You are PlatformAdapter. Optimize content for specific social media platforms. Respond in JSON.",
         "template": "Adapt this post for multiple platforms:\n\nPost: {text}\nNiche: {niche}\n\nRespond with JSON: {\"telegram\": \"...\", \"instagram\": \"...\", \"tiktok\": \"...\"}. Respect character limits and platform norms.",
         "model": "gpt-4o-mini"
+    },
+    "trend_analyst": {
+        "system": "You are TrendAnalyst. Analyze trending topics and viral content patterns. Respond in JSON.",
+        "template": "Analyze current trends for this niche:\nNiche: {niche}\nCity: {city}\nRaw trend data from web:\n{raw_trends}\n\nRespond with JSON: {\"top_topics\": [\"topic1\",\"topic2\",\"topic3\"], \"best_hooks\": [\"hook1\",\"hook2\"], \"recommended_format\": \"...\", \"corrections\": [\"suggestion1\"], \"summary\": \"brief summary\"}",
+        "model": "gemini-1.5-flash"
+    },
+    "funnel_agent": {
+        "system": "You are SalesFunnelAgent. Generate short, friendly replies to social media comments to move users down the sales funnel. Respond in JSON.",
+        "template": "Generate a reply to this comment:\nNiche: {niche}\nComment: {comment}\nDetected intent: {intent}\nFunnel stage: {funnel_stage}\nLead magnet URL: {lead_magnet_url}\nPayment URL: {payment_url}\n\nRespond with JSON: {\"reply\": \"your reply text\", \"intent\": \"{intent}\"}. Keep reply under 150 chars, friendly, no spam.",
+        "model": "gemini-1.5-flash"
     }
 }
 

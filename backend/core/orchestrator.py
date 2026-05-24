@@ -183,4 +183,41 @@ class NexusCore:
             await db.commit()
             await broadcast(plan.niche_id, {"event": "pipeline_complete"})
 
+    async def publish_plan(self, plan_id: str):
+        """Publish a generated plan item to all configured platforms."""
+        from publishers.telegram_pub import publish_telegram
+        async with AsyncSessionLocal() as db:
+            from database.models import Publication
+            result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
+            plan = result.scalar_one_or_none()
+            if not plan:
+                return
+
+            niche_r = await db.execute(select(Niche).where(Niche.id == plan.niche_id))
+            niche = niche_r.scalar_one_or_none()
+            if not niche:
+                return
+
+            from database.models import GeneratedContent
+            content_r = await db.execute(
+                select(GeneratedContent).where(GeneratedContent.plan_id == plan_id).limit(1)
+            )
+            content = content_r.scalar_one_or_none()
+            if not content:
+                raise ValueError("Content not generated yet")
+
+            text = content.text_reviewed or content.text or ""
+            image_url = content.image_url or ""
+            platforms = niche.platforms or ["telegram"]
+
+            for platform in platforms:
+                if platform == "telegram":
+                    tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+                    if tg_chat:
+                        await publish_telegram(tg_chat, text, image_url or None)
+                        db.add(Publication(plan_id=plan_id, platform="telegram", status="published"))
+
+            plan.status = "published"
+            await db.commit()
+
 nexus_core = NexusCore()

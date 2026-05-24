@@ -11,6 +11,8 @@ from database.db import init_db, AsyncSessionLocal
 from database.models import Connection
 from core.orchestrator import set_broadcast
 from core.auth import require_auth, check_rate
+from core.scheduler import start_scheduler
+from core.telegram_bot import start_polling
 from api.routes_auth import router as auth_router
 from api.routes_niche import router as niche_router
 from api.routes_queue import router as queue_router
@@ -51,6 +53,8 @@ async def lifespan(app: FastAPI):
         for conn in result.scalars():
             os.environ[conn.key_name.upper()] = conn.key_value or ""
     set_broadcast(manager.broadcast)
+    start_scheduler()
+    start_polling()
     yield
 
 app = FastAPI(lifespan=lifespan, title="NEXUS AI", docs_url=None, redoc_url=None)

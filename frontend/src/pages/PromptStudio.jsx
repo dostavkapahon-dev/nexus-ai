@@ -10,7 +10,9 @@ const AGENTS = [
   { key: 'reviewer', label: 'Reviewer', desc: 'Проверка качества' },
   { key: 'visual_creator', label: 'VisualCreator', desc: 'Генерация изображений' },
   { key: 'voice_adapter', label: 'VoiceAdapter', desc: 'Адаптация под стиль' },
-  { key: 'adapter', label: 'Adapter', desc: 'Адаптация по платформам' },
+  { key: 'adapter',        label: 'Adapter',        desc: 'Адаптация по платформам' },
+  { key: 'trend_analyst', label: 'TrendAnalyst',   desc: 'Ежедневный анализ трендов' },
+  { key: 'funnel_agent',  label: 'FunnelAgent',    desc: 'Ответы в воронке продаж' },
 ]
 
 const MODELS = [

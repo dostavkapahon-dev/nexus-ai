@@ -28,6 +28,11 @@ class ConnectionsBody(BaseModel):
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
+    vk_access_token: Optional[str] = None
+    vk_group_id: Optional[str] = None
+    threads_access_token: Optional[str] = None
+    threads_user_id: Optional[str] = None
+    heygen_api_key: Optional[str] = None
 
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
