@@ -42,6 +42,13 @@ export const queue = {
   delete: (id) => api.delete(`/queue/${id}`),
   generate: (id) => api.post(`/queue/${id}/generate`),
   publish: (id) => api.post(`/queue/${id}/publish`),
+  video: (id, provider = 'auto') => api.post(`/queue/${id}/video`, { provider }),
+}
+
+export const automation = {
+  get: () => api.get('/automation'),
+  save: (data) => api.post('/automation', data),
+  run: (jobId) => api.post(`/automation/run/${jobId}`),
 }
 
 export const prompts = {

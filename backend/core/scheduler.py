@@ -1,24 +1,79 @@
 """
-NEXUS AI Scheduler — cron jobs for all automated tasks.
+NEXUS AI Scheduler — config-driven cron automation.
 
-Schedule:
-  09:00 UTC — Agent 6: Daily Trend Analysis
-  12:00 UTC — Agent 3+4: Generate today's content
-  18:00 UTC — Agent 5: Publish queue
-  23:00 UTC — Agent 8: Daily summary report
+Jobs (hours are configurable via AutomationConfig, all UTC):
+  autopilot  — ensure every active niche has a fresh content plan
+  trends     — daily trend analysis + Telegram report
+  generate   — turn pending plan items into content (+ optional video)
+  publish    — push generated content to every configured platform
+  report     — daily summary to Telegram
+
+The whole pipeline is gated by AutomationConfig.enabled — when off, jobs are
+registered but return immediately, so nothing runs until the user flips the
+master switch in the UI.
 """
 import os
-import asyncio
-from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 _scheduler: AsyncIOScheduler = None
 
-async def run_daily_trends():
-    """Agent 6: fetch trends and update content plan."""
+
+async def _load_config() -> dict:
+    from core.automation import get_config
+    return await get_config()
+
+
+async def _is_enabled() -> bool:
+    cfg = await _load_config()
+    return bool(cfg.get("enabled"))
+
+
+# --------------------------------------------------------------------------- #
+# Jobs
+# --------------------------------------------------------------------------- #
+async def run_autopilot(force: bool = False):
+    """Create a content plan for any active niche that has run dry."""
+    if not force and not await _is_enabled():
+        return
+    cfg = await _load_config()
+    if not cfg.get("autopilot"):
+        return
+
     from database.db import AsyncSessionLocal
-    from database.models import Niche, ContentPlan, UserProfile
+    from database.models import Niche, ContentPlan
+    from sqlalchemy import select, func
+    from core.orchestrator import nexus_core
+    from core.telegram_bot import send_message
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    async with AsyncSessionLocal() as db:
+        niches = (await db.execute(select(Niche).where(Niche.status == "active"))).scalars().all()
+
+    for niche in niches:
+        async with AsyncSessionLocal() as db:
+            backlog = await db.scalar(
+                select(func.count(ContentPlan.id)).where(
+                    ContentPlan.niche_id == niche.id,
+                    ContentPlan.status.in_(["pending", "generated"]),
+                )
+            )
+        if backlog and backlog > 0:
+            continue
+        try:
+            await nexus_core.run_full_pipeline(niche.id)
+            if chat_id:
+                await send_message(chat_id, f"🧭 Автопилот: создан новый план для «{niche.name}»")
+        except Exception as e:
+            if chat_id:
+                await send_message(chat_id, f"⚠️ Автопилот [{niche.name}]: {str(e)[:100]}")
+
+
+async def run_daily_trends(force: bool = False):
+    if not force and not await _is_enabled():
+        return
+    from database.db import AsyncSessionLocal
+    from database.models import Niche
     from sqlalchemy import select
     from agents.trend_analyst import TrendAnalyst
     from agents.reporter import reporter
@@ -26,11 +81,8 @@ async def run_daily_trends():
 
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     analyst = TrendAnalyst()
-
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Niche).where(Niche.status == "active"))
-        niches = result.scalars().all()
-
+        niches = (await db.execute(select(Niche).where(Niche.status == "active"))).scalars().all()
         for niche in niches:
             try:
                 trend_data = await analyst.analyze_trends(db, niche.id, niche.name, niche.city or "")
@@ -41,25 +93,31 @@ async def run_daily_trends():
                 if chat_id:
                     await send_message(chat_id, f"⚠️ Ошибка анализа трендов [{niche.name}]: {str(e)[:100]}")
 
-async def run_daily_generate():
-    """Agent 3+4: generate content for today's plans."""
+
+async def run_daily_generate(force: bool = False):
+    if not force and not await _is_enabled():
+        return
+    cfg = await _load_config()
     from database.db import AsyncSessionLocal
-    from database.models import ContentPlan
+    from database.models import ContentPlan, GeneratedContent
     from sqlalchemy import select
     from core.orchestrator import nexus_core
     from core.telegram_bot import send_message
 
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    batch = cfg.get("batch_size") or 10
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(ContentPlan).where(ContentPlan.status == "pending").limit(10)
-        )
-        plans = result.scalars().all()
+        plans = (await db.execute(
+            select(ContentPlan).where(ContentPlan.status == "pending").limit(batch)
+        )).scalars().all()
+        plan_ids = [p.id for p in plans]
 
     count = 0
-    for plan in plans:
+    for plan_id in plan_ids:
         try:
-            await nexus_core.generate_content_for_plan(plan.id)
+            await nexus_core.generate_content_for_plan(plan_id)
+            if cfg.get("auto_video"):
+                await _attach_video(plan_id, cfg.get("video_provider") or "auto")
             count += 1
         except Exception as e:
             if chat_id:
@@ -68,92 +126,63 @@ async def run_daily_generate():
     if chat_id and count:
         await send_message(chat_id, f"✍️ Создано постов: {count}")
 
-async def run_daily_publish():
-    """Agent 5: publish ready content from queue."""
+
+async def _attach_video(plan_id: str, provider: str):
+    """Generate a clip for a freshly generated post and store its URL."""
     from database.db import AsyncSessionLocal
-    from database.models import ContentPlan, Niche, GeneratedContent, Publication
+    from database.models import GeneratedContent
     from sqlalchemy import select
-    from publishers.telegram_pub import publish_telegram
+    from core.media_generator import generate_video
+
+    async with AsyncSessionLocal() as db:
+        content = await db.scalar(
+            select(GeneratedContent).where(GeneratedContent.plan_id == plan_id).limit(1)
+        )
+        if not content:
+            return
+        prompt = content.text_reviewed or content.text or ""
+        if not prompt:
+            return
+        url = await generate_video(prompt, content.image_url, provider=provider)
+        if url:
+            content.video_url = url
+            await db.commit()
+
+
+async def run_daily_publish(force: bool = False):
+    if not force and not await _is_enabled():
+        return
+    cfg = await _load_config()
+    from database.db import AsyncSessionLocal
+    from database.models import ContentPlan
+    from sqlalchemy import select
+    from core.orchestrator import nexus_core
     from core.telegram_bot import send_message
 
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    published = 0
-
+    batch = cfg.get("batch_size") or 10
     async with AsyncSessionLocal() as db:
-        result = await db.execute(
-            select(ContentPlan).where(ContentPlan.status == "generated").limit(10)
-        )
-        plans = result.scalars().all()
+        plans = (await db.execute(
+            select(ContentPlan).where(ContentPlan.status == "generated").limit(batch)
+        )).scalars().all()
+        plan_ids = [p.id for p in plans]
 
-        for plan in plans:
-            try:
-                niche_r = await db.execute(select(Niche).where(Niche.id == plan.niche_id))
-                niche = niche_r.scalar_one_or_none()
-                if not niche:
-                    continue
-
-                content_r = await db.execute(
-                    select(GeneratedContent).where(GeneratedContent.plan_id == plan.id).limit(1)
-                )
-                content = content_r.scalar_one_or_none()
-                if not content:
-                    continue
-
-                text = content.text_reviewed or content.text or ""
-                image_url = content.image_url or ""
-
-                platforms = niche.platforms or ["telegram"]
-
-                for platform in platforms:
-                    try:
-                        if platform == "telegram":
-                            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-                            if tg_chat:
-                                await publish_telegram(tg_chat, text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="telegram", status="published"))
-
-                        elif platform == "instagram":
-                            from publishers.instagram_pub import publish_instagram
-                            if os.getenv("INSTAGRAM_ACCESS_TOKEN"):
-                                await publish_instagram(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
-
-                        elif platform == "tiktok":
-                            from publishers.tiktok_pub import publish_tiktok_photo
-                            if os.getenv("TIKTOK_ACCESS_TOKEN") and image_url:
-                                await publish_tiktok_photo(text, image_url)
-                                db.add(Publication(plan_id=plan.id, platform="tiktok", status="published"))
-
-                        elif platform == "vk":
-                            from publishers.vk_pub import publish_vk
-                            if os.getenv("VK_ACCESS_TOKEN"):
-                                await publish_vk(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="vk", status="published"))
-
-                        elif platform == "threads":
-                            from publishers.threads_pub import publish_threads
-                            if os.getenv("THREADS_ACCESS_TOKEN"):
-                                await publish_threads(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="threads", status="published"))
-
-                    except Exception as e:
-                        if chat_id:
-                            await send_message(chat_id, f"⚠️ {platform}: {str(e)[:80]}")
-
-                plan.status = "published"
-                published += 1
-            except Exception as e:
-                if chat_id:
-                    await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
-
-        await db.commit()
+    published = 0
+    for plan_id in plan_ids:
+        try:
+            await nexus_core.publish_plan(plan_id)
+            published += 1
+        except Exception as e:
+            if chat_id:
+                await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
 
     if chat_id:
-        await send_message(chat_id,
-            f"📤 <b>Публикация завершена</b>\n✅ Опубликовано постов: {published}")
+        await send_message(chat_id, f"📤 <b>Публикация завершена</b>\n✅ Постов: {published}")
 
-async def run_daily_report():
-    """Agent 8: send daily summary to Telegram."""
+
+async def run_daily_report(force: bool = False):
+    if not force and not await _is_enabled():
+        return
     from database.db import AsyncSessionLocal
     from agents.reporter import reporter
     from core.telegram_bot import send_message
@@ -161,23 +190,57 @@ async def run_daily_report():
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
     if not chat_id:
         return
-
     async with AsyncSessionLocal() as db:
         report = await reporter.build_status_report(db)
     await send_message(chat_id, report)
 
+
+# Map job id → (callable, config hour key). Autopilot runs hourly.
+JOBS = {
+    "trends": (run_daily_trends, "schedule_trends"),
+    "generate": (run_daily_generate, "schedule_generate"),
+    "publish": (run_daily_publish, "schedule_publish"),
+    "report": (run_daily_report, "schedule_report"),
+}
+
+
+def _apply_jobs(cfg: dict):
+    """(Re)register all cron jobs from the given config dict."""
+    for job_id, (fn, hour_key) in JOBS.items():
+        hour = int(cfg.get(hour_key, 12))
+        _scheduler.add_job(fn, CronTrigger(hour=hour, minute=0), id=job_id, replace_existing=True)
+    # Autopilot tops up plans every hour so niches never run dry.
+    _scheduler.add_job(run_autopilot, CronTrigger(minute=5), id="autopilot", replace_existing=True)
+
+
+DEFAULT_HOURS = {
+    "schedule_trends": 9, "schedule_generate": 12,
+    "schedule_publish": 18, "schedule_report": 23,
+}
+
+
 def start_scheduler():
+    """Start with default cron times; lifespan calls reschedule() right after
+    to realign with the stored config once the DB is ready."""
     global _scheduler
     _scheduler = AsyncIOScheduler(timezone="UTC")
-
-    # 09:00 UTC — Trends (Agent 6)
-    _scheduler.add_job(run_daily_trends,   CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
-    # 12:00 UTC — Generate content (Agents 3+4)
-    _scheduler.add_job(run_daily_generate, CronTrigger(hour=12, minute=0), id="generate", replace_existing=True)
-    # 18:00 UTC — Publish queue (Agent 5)
-    _scheduler.add_job(run_daily_publish,  CronTrigger(hour=18, minute=0), id="publish",  replace_existing=True)
-    # 23:00 UTC — Daily report (Agent 8)
-    _scheduler.add_job(run_daily_report,   CronTrigger(hour=23, minute=0), id="report",   replace_existing=True)
-
+    _apply_jobs(DEFAULT_HOURS)
     _scheduler.start()
     return _scheduler
+
+
+async def reschedule():
+    """Re-apply cron times from stored config (call after the user saves settings)."""
+    if not _scheduler:
+        return
+    cfg = await _load_config()
+    _apply_jobs(cfg)
+
+
+async def trigger_now(job_id: str):
+    """Run a job immediately, bypassing its schedule (still respects `enabled`)."""
+    if job_id == "autopilot":
+        return await run_autopilot(force=True)
+    fn = JOBS.get(job_id, (None,))[0]
+    if fn:
+        return await fn(force=True)
