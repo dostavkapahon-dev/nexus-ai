@@ -128,6 +128,28 @@ const PROVIDERS = [
     ],
     models: [],
   },
+  {
+    id: 'heygen', name: 'HeyGen', icon: '🎬', color: 'from-violet-500 to-fuchsia-500',
+    description: 'AI-аватары: превращает текст в видео с говорящим аватаром',
+    fields: [{ key: 'heygen_api_key', label: 'API Key', placeholder: 'OTk...==', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://app.heygen.com/settings/api', linkText: 'app.heygen.com → Settings → API' },
+      { text: 'Скопируйте API Key и вставьте выше' },
+      { text: 'Аватар и голос по умолчанию настраиваются через env: HEYGEN_AVATAR_ID, HEYGEN_VOICE_ID' },
+    ],
+    models: [],
+  },
+  {
+    id: 'higgsfield', name: 'Higgsfield', icon: '🌀', color: 'from-amber-500 to-orange-600',
+    description: 'AI-генерация видео из текста и картинки (text/image-to-video)',
+    fields: [{ key: 'higgsfield_api_key', label: 'API Key', placeholder: 'hf_...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://higgsfield.ai', linkText: 'higgsfield.ai' },
+      { text: 'В настройках аккаунта создайте API ключ' },
+      { text: 'Вставьте ключ выше. Базовый URL API при необходимости меняется через env HIGGSFIELD_API_BASE' },
+    ],
+    models: [],
+  },
 ]
 
 function FieldInput({ field, value, onChange, testResult }) {

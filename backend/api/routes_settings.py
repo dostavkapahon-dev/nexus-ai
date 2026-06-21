@@ -33,6 +33,9 @@ class ConnectionsBody(BaseModel):
     threads_access_token: Optional[str] = None
     threads_user_id: Optional[str] = None
     heygen_api_key: Optional[str] = None
+    higgsfield_api_key: Optional[str] = None
+    runway_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
 
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
@@ -121,6 +124,31 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
                     results["instagram_access_token"] = {"ok": True, "message": f"Аккаунт: {d.get('name', d.get('id'))} ✓"}
         except Exception as e:
             results["instagram_access_token"] = {"ok": False, "message": str(e)[:120]}
+
+    if key := resolve("heygen_api_key"):
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get("https://api.heygen.com/v2/avatars", headers={"X-Api-Key": key})
+                if r.status_code == 200:
+                    results["heygen_api_key"] = {"ok": True, "message": "HeyGen подключён ✓"}
+                else:
+                    results["heygen_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}"}
+        except Exception as e:
+            results["heygen_api_key"] = {"ok": False, "message": str(e)[:120]}
+
+    if key := resolve("higgsfield_api_key"):
+        try:
+            base = os.getenv("HIGGSFIELD_API_BASE", "https://platform.higgsfield.ai/v1").rstrip("/")
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(f"{base}/account", headers={"Authorization": f"Bearer {key}"})
+                if r.status_code in (200, 401, 403):
+                    ok = r.status_code == 200
+                    results["higgsfield_api_key"] = {"ok": ok,
+                        "message": "Higgsfield подключён ✓" if ok else "Ключ отклонён"}
+                else:
+                    results["higgsfield_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}"}
+        except Exception as e:
+            results["higgsfield_api_key"] = {"ok": False, "message": str(e)[:120]}
 
     return results
 

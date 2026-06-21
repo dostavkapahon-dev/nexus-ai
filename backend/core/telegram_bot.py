@@ -92,7 +92,7 @@ async def _handle_command(chat_id: str, text: str):
     elif cmd == "trends":
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
-        asyncio.create_task(run_daily_trends())
+        asyncio.create_task(run_daily_trends(force=True))
         await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
 
     elif cmd in ("pause", "stop"):

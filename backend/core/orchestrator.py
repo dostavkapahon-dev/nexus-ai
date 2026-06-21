@@ -186,6 +186,7 @@ class NexusCore:
     async def publish_plan(self, plan_id: str):
         """Publish a generated plan item to all configured platforms."""
         from publishers.telegram_pub import publish_telegram
+        from publishers.instagram_pub import publish_instagram
         async with AsyncSessionLocal() as db:
             from database.models import Publication
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
@@ -208,16 +209,30 @@ class NexusCore:
 
             text = content.text_reviewed or content.text or ""
             image_url = content.image_url or ""
+            video_url = getattr(content, "video_url", "") or ""
             platforms = niche.platforms or ["telegram"]
 
+            published_any = False
             for platform in platforms:
-                if platform == "telegram":
-                    tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-                    if tg_chat:
-                        await publish_telegram(tg_chat, text, image_url or None)
-                        db.add(Publication(plan_id=plan_id, platform="telegram", status="published"))
+                try:
+                    if platform == "telegram":
+                        tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+                        if tg_chat:
+                            await publish_telegram(tg_chat, text, image_url or None, video_url or None)
+                            db.add(Publication(plan_id=plan_id, platform="telegram", status="published"))
+                            published_any = True
+                    elif platform == "instagram":
+                        if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
+                            res = await publish_instagram(text, image_url or None, video_url or None)
+                            db.add(Publication(plan_id=plan_id, platform="instagram",
+                                               status="published", external_id=res.get("post_id")))
+                            published_any = True
+                except Exception as e:
+                    db.add(Publication(plan_id=plan_id, platform=platform,
+                                       status=f"failed: {str(e)[:80]}"))
 
-            plan.status = "published"
+            if published_any:
+                plan.status = "published"
             await db.commit()
 
 nexus_core = NexusCore()

@@ -11,7 +11,7 @@ from database.db import init_db, AsyncSessionLocal
 from database.models import Connection
 from core.orchestrator import set_broadcast
 from core.auth import require_auth, check_rate
-from core.scheduler import start_scheduler
+from core.scheduler import start_scheduler, reschedule
 from core.telegram_bot import start_polling
 from api.routes_auth import router as auth_router
 from api.routes_niche import router as niche_router
@@ -20,6 +20,7 @@ from api.routes_prompts import router as prompts_router
 from api.routes_settings import router as settings_router
 from api.routes_profile import router as profile_router
 from api.routes_desktop import router as desktop_router
+from api.routes_automation import router as automation_router
 
 class ConnectionManager:
     def __init__(self):
@@ -54,6 +55,7 @@ async def lifespan(app: FastAPI):
             os.environ[conn.key_name.upper()] = conn.key_value or ""
     set_broadcast(manager.broadcast)
     start_scheduler()
+    await reschedule()  # realign cron times with stored AutomationConfig
     start_polling()
     yield
 
@@ -95,6 +97,7 @@ app.include_router(queue_router,    dependencies=[Depends(require_auth)])
 app.include_router(prompts_router,  dependencies=[Depends(require_auth)])
 app.include_router(settings_router, dependencies=[Depends(require_auth)])
 app.include_router(profile_router,  dependencies=[Depends(require_auth)])
+app.include_router(automation_router, dependencies=[Depends(require_auth)])
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
 
