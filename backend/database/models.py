@@ -42,6 +42,7 @@ class GeneratedContent(Base):
     text = Column(Text)
     text_reviewed = Column(Text)
     image_url = Column(String)
+    video_url = Column(String)
     image_prompt = Column(Text)
     score = Column(Float)
     platform_versions = Column(JSON, default=dict)

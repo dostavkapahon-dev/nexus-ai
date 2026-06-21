@@ -68,6 +68,32 @@ async def generate(plan_id: str, bg: BackgroundTasks):
     bg.add_task(nexus_core.generate_content_for_plan, plan_id)
     return {"ok": True}
 
+
+class VideoBody(BaseModel):
+    provider: Optional[str] = "auto"  # auto / heygen / higgsfield / runway
+
+
+@router.post("/{plan_id}/video")
+async def make_video(plan_id: str, body: VideoBody = VideoBody(), db: AsyncSession = Depends(get_db)):
+    cr = await db.execute(select(GeneratedContent).where(GeneratedContent.plan_id == plan_id))
+    content = cr.scalar_one_or_none()
+    if not content:
+        raise HTTPException(400, "No content generated")
+
+    from core.media_generator import generate_video
+    prompt = content.text_reviewed or content.text or ""
+    if not prompt:
+        raise HTTPException(400, "No text to turn into video")
+
+    video_url = await generate_video(prompt, content.image_url, provider=body.provider or "auto")
+    if not video_url:
+        raise HTTPException(502, "Video provider unavailable or no API key configured "
+                                 "(set HEYGEN_API_KEY / HIGGSFIELD_API_KEY / RUNWAY_API_KEY)")
+
+    content.video_url = video_url
+    await db.commit()
+    return {"ok": True, "video_url": video_url}
+
 @router.post("/{plan_id}/publish")
 async def publish(plan_id: str, db: AsyncSession = Depends(get_db)):
     pr = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
@@ -79,14 +105,7 @@ async def publish(plan_id: str, db: AsyncSession = Depends(get_db)):
     if not content:
         raise HTTPException(400, "No content generated")
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not chat_id:
-        raise HTTPException(400, "TELEGRAM_CHAT_ID not configured")
-
-    text = content.text_reviewed or content.text or ""
-    await publish_telegram(chat_id, text, content.image_url)
-
-    plan.status = "published"
-    db.add(Publication(plan_id=plan_id, platform=plan.platform))
-    await db.commit()
+    # publish_plan fans out to every platform configured on the niche
+    # (Telegram, Instagram, …) and records a Publication row per platform.
+    await nexus_core.publish_plan(plan_id)
     return {"ok": True}
