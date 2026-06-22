@@ -198,7 +198,14 @@ async def main():
             if args.token:
                 headers["Authorization"] = f"Bearer {args.token}"
 
-            async with websockets.connect(WS_URL, extra_headers=headers) as ws:
+            # Совместимость версий websockets: новые используют additional_headers,
+            # старые — extra_headers.
+            try:
+                conn = websockets.connect(WS_URL, additional_headers=headers)
+            except TypeError:
+                conn = websockets.connect(WS_URL, extra_headers=headers)
+
+            async with conn as ws:
                 print(f"✅ Connected to NEXUS AI server!")
                 async for message in ws:
                     cmd = json.loads(message)
