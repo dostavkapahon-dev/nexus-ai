@@ -334,9 +334,28 @@ export default function Connections() {
           </button>
         </div>
       </div>
-      <div className="space-y-3">
-        {PROVIDERS.map(provider => <ProviderCard key={provider.id} provider={provider} values={values} onChange={onChange} testResults={testResults} />)}
-      </div>
+      {(() => {
+        const ESSENTIAL = ['claude', 'heygen', 'higgsfield', 'telegram', 'desktop_agent']
+        const ess = PROVIDERS.filter(p => ESSENTIAL.includes(p.id))
+          .sort((a, b) => ESSENTIAL.indexOf(a.id) - ESSENTIAL.indexOf(b.id))
+        const opt = PROVIDERS.filter(p => !ESSENTIAL.includes(p.id))
+        return (
+          <>
+            <div className="text-xs font-semibold text-violet-300 uppercase tracking-wider mb-2">
+              ⭐ Необходимое для Reels-автоматизации
+            </div>
+            <div className="space-y-3">
+              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+            </div>
+            <div className="text-xs font-semibold text-[#5a5a7a] uppercase tracking-wider mt-6 mb-2">
+              Опционально — можно подключить позже (есть бесплатные)
+            </div>
+            <div className="space-y-3 opacity-80">
+              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+            </div>
+          </>
+        )
+      })()}
       <div className="mt-4 glass rounded-xl p-4">
         <p className="text-xs text-nexus-muted">
           🔒 <span className="text-nexus-text">Безопасность:</span> ключи хранятся в БД сервера. В браузер возвращается только маска (первые и последние 4 символа). Сырые ключи никогда не покидают сервер.

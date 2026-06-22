@@ -27,7 +27,11 @@ TREND_HELPER_MODEL = "sonar-pro"  # Perplexity; при отсутствии кл
 
 
 async def _research_trends(topic: str | None) -> str:
-    """Помощник ищет актуальные тренды (реальный поиск через Perplexity)."""
+    """Помощник ищет тренды — ТОЛЬКО если подключён Perplexity (реальный поиск).
+    Без него не дёргаем лишний AI — мозг (Claude) работает сам.
+    """
+    if not os.getenv("PERPLEXITY_API_KEY"):
+        return ""
     from core.ai_router import ai_router
     q = (f"Найди 5 свежих вирусных трендов в нише AI/digital бизнес "
          f"{'по теме: ' + topic if topic else 'в Instagram Reels и YouTube Shorts на этой неделе'}. "

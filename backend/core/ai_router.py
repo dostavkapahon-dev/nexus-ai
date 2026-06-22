@@ -26,7 +26,9 @@ AI_ROUTING = {
     "deepseek-reasoner": "deepseek",
 }
 
-FALLBACK_CHAIN = ["claude-sonnet-4-6", "gpt-4o", "deepseek-chat", "gemini-1.5-flash", "gpt-4o-mini"]
+# Минимум: мозг — Claude, бесплатный резерв — Gemini. Остальные (GPT/DeepSeek)
+# подхватываются автоматически, только если их ключи заданы.
+FALLBACK_CHAIN = ["claude-sonnet-4-6", "gemini-2.0-flash"]
 
 PREMIUM_MODELS = {
     "niche_analyst": "sonar-pro",
