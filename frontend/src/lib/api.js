@@ -81,4 +81,7 @@ export const automation = {
   director: (body) => api.post('/automation/director', body),
   video: (body) => api.post('/automation/video', body),
   publish: (planId) => api.post(`/automation/publish/${planId}`),
+  factory: (body) => api.post('/automation/factory', body),
+  brand: () => api.get('/automation/brand'),
+  videoModels: () => api.get('/automation/video/models'),
 }

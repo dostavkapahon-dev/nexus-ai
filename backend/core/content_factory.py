@@ -132,9 +132,10 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             elif st == "runway":
                 vid = await generate_clip(prompt=brief.get("video_motion_prompt", ""),
                                           image_url=first_img, provider="runway")
-            else:  # free_slideshow
-                vid = {"ok": bool(frames), "provider": "slideshow",
-                       "note": "Кадры готовы. Сборку mp4 (ffmpeg-монтаж) добавим следующим шагом."}
+            else:  # free_slideshow → ffmpeg-монтаж готового mp4
+                from core.video_assembly import assemble_slideshow
+                fr = frames or ([{"image": cover, "overlay": plan.get("hook_text", ""), "t": "0-4"}] if cover else [])
+                vid = await assemble_slideshow(fr, cta_text=plan.get("instagram", {}).get("caption", "Pakhon Studio")[:40])
         except Exception as e:
             vid = {"ok": False, "error": str(e)[:160]}
         report["assets"]["video"] = vid
