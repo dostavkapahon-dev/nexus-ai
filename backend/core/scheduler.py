@@ -166,6 +166,21 @@ async def run_daily_report():
         report = await reporter.build_status_report(db)
     await send_message(chat_id, report)
 
+async def run_daily_factory():
+    """09:30 Алматы — автоцикл «Фабрика»: анализ→ТЗ→видео→(публикация)→отчёт.
+    Публикует, если AUTO_PUBLISH=1, иначе шлёт превью в Telegram.
+    """
+    from core.content_factory import run_factory
+    auto = os.getenv("AUTO_PUBLISH", "0") == "1"
+    try:
+        await run_factory(topic=None, dry_run=not auto)
+    except Exception as e:
+        chat = os.getenv("TELEGRAM_CHAT_ID", "")
+        if chat:
+            from core.telegram_bot import send_message
+            await send_message(chat, f"⚠️ Фабрика: {str(e)[:120]}")
+
+
 async def run_weekly_analytics():
     """Воскресенье 20:00 — еженедельная аналитика и сводка владельцу."""
     from database.db import AsyncSessionLocal
@@ -194,6 +209,8 @@ def start_scheduler():
 
     # 09:00 — Research/тренды (исследование рынка)
     _scheduler.add_job(run_daily_trends,   CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
+    # 09:30 — Фабрика контента (автоцикл Reels)
+    _scheduler.add_job(run_daily_factory,  CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
     # 10:00 — Генерация материалов на день
     _scheduler.add_job(run_daily_generate, CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
     # 19:00 — Публикация (пик активности IG/TG по Алматы)

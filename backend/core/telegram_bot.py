@@ -188,7 +188,7 @@ async def _handle_command(chat_id: str, text: str):
         asyncio.create_task(nexus_core.generate_content_for_plan(args[0]))
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
-    elif cmd == "factory":
+    elif cmd in ("factory", "reel"):
         # Полный цикл: анализ → генерация → публикация. Без аргумента — dry-run.
         from core.content_factory import run_factory
         topic = " ".join(args) if args else None

@@ -146,15 +146,14 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})
 
-    # 3b. Раскадровка по кадрам (фото — дёшево/безлимит)
+    # 3b. Раскадровка по кадрам — БЕСПЛАТНО (Pollinations, безлимит, 0 токенов)
+    from core.skills import free_image, higgsfield_reel
     frames = []
     for shot in brief.get("storyboard", [])[:4]:
-        try:
-            f = await generate_image(shot.get("image_prompt", ""), platform="instagram")
-            if f:
-                frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"), "image": f})
-        except Exception:
-            pass
+        prompt_img = shot.get("image_prompt", "")
+        if prompt_img:
+            frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
+                           "image": free_image(prompt_img)})
     report["assets"]["frames"] = frames
     report["steps"].append({"step": "storyboard_frames", "ok": True, "count": len(frames)})
 
@@ -167,8 +166,10 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             if st == "heygen_avatar":
                 vid = await generate_clip(script=brief.get("avatar_script", ""), provider="heygen")
             elif st == "storyboard_to_higgsfield":
-                vid = await generate_clip(prompt=brief.get("video_motion_prompt", ""),
-                                          image_url=first_img, provider="higgsfield")
+                # СКИЛЛ: бесплатный сид-кадр → анимация HiggsField (платим только за видео)
+                vid = await higgsfield_reel(motion_prompt=brief.get("video_motion_prompt", ""),
+                                            seed_image=first_img,
+                                            fallback_image_prompt=brief.get("cover_prompt", ""))
             elif st == "runway":
                 vid = await generate_clip(prompt=brief.get("video_motion_prompt", ""),
                                           image_url=first_img, provider="runway")
