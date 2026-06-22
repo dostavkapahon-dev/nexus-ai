@@ -40,12 +40,20 @@ _browser = None
 _page = None
 _playwright = None
 
+# Постоянный профиль браузера: вход в Instagram/VK/др. сохраняется между запусками.
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session")
+
 async def ensure_browser():
     global _browser, _page, _playwright
     if _browser is None:
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=HEADLESS)
-        _page = await _browser.new_page()
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        # launch_persistent_context хранит cookies/сессии в PROFILE_DIR
+        _browser = await _playwright.chromium.launch_persistent_context(
+            PROFILE_DIR, headless=HEADLESS,
+            viewport={"width": 1280, "height": 800},
+        )
+        _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
     return _page
 
 async def handle_command(cmd: dict) -> dict:
