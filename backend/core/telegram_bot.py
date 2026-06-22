@@ -104,7 +104,7 @@ async def _handle_command(chat_id: str, text: str):
             await db.commit()
         await send_message(chat_id, f"⏸ Система на паузе. Остановлено ниш: {len(niches)}")
 
-    elif cmd in ("resume", "start"):
+    elif cmd == "resume":
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Niche).where(Niche.status == "paused"))
             niches = result.scalars().all()
