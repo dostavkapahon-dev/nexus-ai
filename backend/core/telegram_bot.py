@@ -104,7 +104,7 @@ async def _handle_command(chat_id: str, text: str):
             await db.commit()
         await send_message(chat_id, f"⏸ Система на паузе. Остановлено ниш: {len(niches)}")
 
-    elif cmd in ("resume", "start"):
+    elif cmd == "resume":
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(Niche).where(Niche.status == "paused"))
             niches = result.scalars().all()
@@ -150,6 +150,54 @@ async def _handle_command(chat_id: str, text: str):
             msg = "⚙️ Профиль не настроен. Зайди в дашборд."
         await send_message(chat_id, msg)
 
+    elif cmd in ("trend", "trends"):
+        await send_message(chat_id, "📈 Анализирую тренды...")
+        from core.scheduler import run_daily_trends
+        asyncio.create_task(run_daily_trends())
+        await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
+
+    elif cmd == "prompt":
+        from core.brand import set_brand_voice, get_brand_voice
+        if not args:
+            await send_message(chat_id, "📝 <b>Текущий голос бренда:</b>\n\n" + get_brand_voice()
+                               + "\n\nЧтобы изменить: /prompt [новый текст]")
+            return
+        set_brand_voice(" ".join(args))
+        await send_message(chat_id, "✅ Голос бренда обновлён (brand_voice.txt)")
+
+    elif cmd == "preview":
+        from core.brand import system_prompt, PLATFORM_SPECS, BRAND
+        if args:
+            async with AsyncSessionLocal() as db:
+                pr = await db.execute(select(ContentPlan).where(ContentPlan.id == args[0]))
+                p = pr.scalar_one_or_none()
+            if p:
+                await send_message(chat_id, f"👁 <b>Превью #{args[0][:8]}</b>\n"
+                                   f"{p.platform} · {p.topic}\nХук: {p.hook or '—'}")
+            else:
+                await send_message(chat_id, "❌ Пункт плана не найден")
+            return
+        specs = "\n".join(f"• {k}: {v.get('format')} {v.get('length_sec') or v.get('length_chars')}"
+                          for k, v in PLATFORM_SPECS.items())
+        await send_message(chat_id, f"🎬 <b>{BRAND['name']}</b> — платформо-специфика:\n{specs}")
+
+    elif cmd == "generate":
+        if not args:
+            await send_message(chat_id, "❗ Укажи id пункта плана: /generate [id]")
+            return
+        asyncio.create_task(nexus_core.generate_content_for_plan(args[0]))
+        await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
+
+    elif cmd in ("factory", "reel"):
+        # Полный цикл: анализ → генерация → публикация. Без аргумента — dry-run.
+        from core.content_factory import run_factory
+        topic = " ".join(args) if args else None
+        publish = bool(args) and args[-1].lower() in ("post", "publish", "go")
+        if publish:
+            topic = " ".join(args[:-1]) or None
+        await send_message(chat_id, f"🏭 Фабрика контента запущена{' (публикация)' if publish else ' (превью)'}...")
+        asyncio.create_task(run_factory(topic=topic, dry_run=not publish))
+
     elif cmd.startswith("set_goal"):
         try:
             goal = int(args[0])
@@ -173,17 +221,21 @@ async def _handle_command(chat_id: str, text: str):
     else:
         cmds = [
             "/status   — статус системы",
+            "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
+            "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
             "/create   — создать контент",
+            "/generate [id] — генерация по пункту плана",
             "/publish  — опубликовать очередь",
-            "/trends   — тренды прямо сейчас",
+            "/trend    — тренды прямо сейчас",
             "/plan     — контент-план на неделю",
-            "/pause    — поставить на паузу",
-            "/resume   — возобновить",
+            "/preview [id] — превью контента/специфики",
+            "/prompt [текст] — голос бренда",
             "/report   — отчёт",
+            "/pause /resume — пауза/возобновить",
             "/config   — настройки",
         ]
-        await send_message(chat_id, "🤖 <b>NEXUS AI Bot</b>\n\n" + "\n".join(cmds))
+        await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
 
 async def poll_updates():
     """Long-polling loop for Telegram updates."""

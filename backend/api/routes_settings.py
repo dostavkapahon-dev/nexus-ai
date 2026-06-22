@@ -33,12 +33,37 @@ class ConnectionsBody(BaseModel):
     threads_access_token: Optional[str] = None
     threads_user_id: Optional[str] = None
     heygen_api_key: Optional[str] = None
+    heygen_avatar_id: Optional[str] = None
+    heygen_voice_id: Optional[str] = None
+    higgsfield_api_key: Optional[str] = None
+    higgsfield_secret: Optional[str] = None
+    higgsfield_model: Optional[str] = None
+    runway_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
+    nexus_token: Optional[str] = None
 
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
+    """Возвращает сохранённые ключи в МАСКИРОВАННОМ виде.
+
+    Источник — БД и переменные окружения (Render env). Это позволяет ключам
+    «сохраняться» даже на бесплатном Render, где файловая БД обнуляется при
+    перезапуске: достаточно задать их в Render → Environment.
+    """
     result = await db.execute(select(Connection))
-    connections = result.scalars().all()
-    return {c.key_name: mask(c.key_value) for c in connections}
+    db_map = {c.key_name: c.key_value for c in result.scalars()}
+
+    out = {}
+    known = list(ConnectionsBody.model_fields.keys())
+    for key in known:
+        val = db_map.get(key) or os.getenv(key.upper(), "")
+        if val:
+            out[key] = mask(val)
+    # Любые прочие ключи из БД, не описанные явно
+    for key, val in db_map.items():
+        if key not in out and val:
+            out[key] = mask(val)
+    return out
 
 @router.post("/api/connections")
 async def save_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):

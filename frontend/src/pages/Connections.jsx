@@ -38,7 +38,80 @@ const PROVIDERS = [
       { text: 'Скопируйте ключ (начинается с AIza)' },
       { text: 'Бесплатный тариф: 1500 запросов/день' },
     ],
-    models: ['gemini-1.5-flash', 'gemini-1.5-pro'],
+    models: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+  },
+  {
+    id: 'heygen', name: 'HeyGen AI', icon: '🎭', color: 'from-violet-500 to-fuchsia-500',
+    description: 'AI-аватары: говорящие видео для Reels / Shorts / TikTok',
+    fields: [
+      { key: 'heygen_api_key', label: 'API Key', placeholder: 'XXXXXXXX...', secret: true },
+      { key: 'heygen_avatar_id', label: 'Avatar ID (опц.)', placeholder: 'Daisy-inskirt-...', secret: false },
+      { key: 'heygen_voice_id', label: 'Voice ID (опц.)', placeholder: '1bd001e7...', secret: false },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://app.heygen.com', linkText: 'app.heygen.com' },
+      { text: 'Settings → API → Create API Token → скопируйте ключ' },
+      { text: 'Выберите аватар и голос, скопируйте их ID (опционально)' },
+      { text: 'Используется дирижёром и генератором видео для озвученных роликов' },
+    ],
+    models: [],
+  },
+  {
+    id: 'higgsfield', name: 'HiggsField AI', icon: '🌌', color: 'from-amber-500 to-orange-600',
+    description: 'Много AI-моделей видео: DoP, Soul, Kling, MiniMax, Seedance, Veo-3 и др.',
+    fields: [
+      { key: 'higgsfield_api_key', label: 'API Key', placeholder: 'hf_...', secret: true },
+      { key: 'higgsfield_secret', label: 'Secret (опц.)', placeholder: '...', secret: true },
+      { key: 'higgsfield_model', label: 'Модель по умолчанию', placeholder: 'higgsfield-dop', secret: false },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://higgsfield.ai', linkText: 'higgsfield.ai' },
+      { text: 'Перейдите в раздел разработчика / API и создайте ключ' },
+      { text: 'Вставьте ключ — он используется генератором видео (provider=higgsfield)' },
+      { text: 'Модель можно менять на лету в запросе генерации видео' },
+    ],
+    models: ['dop', 'soul', 'kling-2.1', 'minimax', 'seedance', 'veo-3'],
+  },
+  {
+    id: 'vk', name: 'ВКонтакте', icon: '🅥', color: 'from-blue-600 to-indigo-600',
+    description: 'Публикация постов на стену сообщества ВКонтакте',
+    fields: [
+      { key: 'vk_access_token', label: 'Access Token', placeholder: 'vk1.a...', secret: true },
+      { key: 'vk_group_id', label: 'Group ID', placeholder: '123456789', secret: false },
+    ],
+    steps: [
+      { text: 'Создайте сообщество ВК и Standalone-приложение', link: 'https://dev.vk.com', linkText: 'dev.vk.com' },
+      { text: 'Получите токен сообщества со scope: wall, photos, manage' },
+      { text: 'Group ID — числовой id вашего сообщества (без знака минус)' },
+    ],
+    models: [],
+  },
+  {
+    id: 'youtube', name: 'YouTube', icon: '▶️', color: 'from-red-500 to-rose-600',
+    description: 'Поиск трендов + загрузка Shorts (через браузерного агента)',
+    fields: [
+      { key: 'youtube_api_key', label: 'API Key', placeholder: 'AIza...', secret: true },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://console.cloud.google.com', linkText: 'console.cloud.google.com' },
+      { text: 'Включите YouTube Data API v3 → создайте API Key' },
+      { text: 'Загрузка Shorts выполняется браузерным агентом в YouTube Studio' },
+    ],
+    models: [],
+  },
+  {
+    id: 'desktop_agent', name: 'Браузерный агент', icon: '🖥️', color: 'from-slate-500 to-gray-600',
+    description: 'Автономный агент на вашем ПК: видит браузер и сам выполняет задачи',
+    fields: [
+      { key: 'nexus_token', label: 'Agent Token', placeholder: 'любая секретная строка', secret: true },
+    ],
+    steps: [
+      { text: 'На ПК: pip install websockets playwright && playwright install chromium' },
+      { text: 'Запустите: python desktop_agent.py --server <URL_сервера> --token <ваш токен>' },
+      { text: 'Войдите в нужные аккаунты (Instagram/VK/OLX) в открывшемся браузере' },
+      { text: 'Теперь дирижёр и публикации могут управлять браузером как fallback' },
+    ],
+    models: [],
   },
   {
     id: 'telegram', name: 'Telegram Bot', icon: '✈️', color: 'from-sky-500 to-blue-500',
@@ -261,9 +334,28 @@ export default function Connections() {
           </button>
         </div>
       </div>
-      <div className="space-y-3">
-        {PROVIDERS.map(provider => <ProviderCard key={provider.id} provider={provider} values={values} onChange={onChange} testResults={testResults} />)}
-      </div>
+      {(() => {
+        const ESSENTIAL = ['claude', 'heygen', 'higgsfield', 'telegram', 'desktop_agent']
+        const ess = PROVIDERS.filter(p => ESSENTIAL.includes(p.id))
+          .sort((a, b) => ESSENTIAL.indexOf(a.id) - ESSENTIAL.indexOf(b.id))
+        const opt = PROVIDERS.filter(p => !ESSENTIAL.includes(p.id))
+        return (
+          <>
+            <div className="text-xs font-semibold text-violet-300 uppercase tracking-wider mb-2">
+              ⭐ Необходимое для Reels-автоматизации
+            </div>
+            <div className="space-y-3">
+              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+            </div>
+            <div className="text-xs font-semibold text-[#5a5a7a] uppercase tracking-wider mt-6 mb-2">
+              Опционально — можно подключить позже (есть бесплатные)
+            </div>
+            <div className="space-y-3 opacity-80">
+              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+            </div>
+          </>
+        )
+      })()}
       <div className="mt-4 glass rounded-xl p-4">
         <p className="text-xs text-nexus-muted">
           🔒 <span className="text-nexus-text">Безопасность:</span> ключи хранятся в БД сервера. В браузер возвращается только маска (первые и последние 4 символа). Сырые ключи никогда не покидают сервер.

@@ -40,12 +40,20 @@ _browser = None
 _page = None
 _playwright = None
 
+# Постоянный профиль браузера: вход в Instagram/VK/др. сохраняется между запусками.
+PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session")
+
 async def ensure_browser():
     global _browser, _page, _playwright
     if _browser is None:
         _playwright = await async_playwright().start()
-        _browser = await _playwright.chromium.launch(headless=HEADLESS)
-        _page = await _browser.new_page()
+        os.makedirs(PROFILE_DIR, exist_ok=True)
+        # launch_persistent_context хранит cookies/сессии в PROFILE_DIR
+        _browser = await _playwright.chromium.launch_persistent_context(
+            PROFILE_DIR, headless=HEADLESS,
+            viewport={"width": 1280, "height": 800},
+        )
+        _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
     return _page
 
 async def handle_command(cmd: dict) -> dict:
@@ -57,7 +65,57 @@ async def handle_command(cmd: dict) -> dict:
             page = await ensure_browser()
             img = await page.screenshot(type="jpeg", quality=60)
             b64 = base64.b64encode(img).decode()
-            return {"req_id": req_id, "ok": True, "screenshot": b64, "url": page.url}
+            size = page.viewport_size or {"width": 1280, "height": 720}
+            return {"req_id": req_id, "ok": True, "screenshot": b64, "url": page.url,
+                    "title": await page.title(), "width": size["width"], "height": size["height"]}
+
+        elif action == "click_xy":
+            # Click at absolute viewport coordinates (used by the vision agent).
+            page = await ensure_browser()
+            x = float(cmd.get("x", 0))
+            y = float(cmd.get("y", 0))
+            await page.mouse.click(x, y)
+            await asyncio.sleep(1)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "type_text":
+            # Type into the currently focused element (after a click).
+            page = await ensure_browser()
+            text = cmd.get("text", "")
+            clear = cmd.get("clear", False)
+            if clear:
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Delete")
+            await page.keyboard.type(text, delay=30)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "key":
+            page = await ensure_browser()
+            await page.keyboard.press(cmd.get("key", "Enter"))
+            await asyncio.sleep(0.5)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "scroll":
+            page = await ensure_browser()
+            dy = int(cmd.get("dy", 600))
+            await page.mouse.wheel(0, dy)
+            await asyncio.sleep(0.8)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "wait":
+            await asyncio.sleep(min(float(cmd.get("seconds", 2)), 15))
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "back":
+            page = await ensure_browser()
+            await page.go_back(timeout=15000)
+            await asyncio.sleep(1)
+            return {"req_id": req_id, "ok": True, "url": page.url}
+
+        elif action == "page_text":
+            page = await ensure_browser()
+            text = await page.inner_text("body")
+            return {"req_id": req_id, "ok": True, "text": text[:6000]}
 
         elif action == "navigate":
             url = cmd.get("url", "")
@@ -140,7 +198,14 @@ async def main():
             if args.token:
                 headers["Authorization"] = f"Bearer {args.token}"
 
-            async with websockets.connect(WS_URL, extra_headers=headers) as ws:
+            # Совместимость версий websockets: новые используют additional_headers,
+            # старые — extra_headers.
+            try:
+                conn = websockets.connect(WS_URL, additional_headers=headers)
+            except TypeError:
+                conn = websockets.connect(WS_URL, extra_headers=headers)
+
+            async with conn as ws:
                 print(f"✅ Connected to NEXUS AI server!")
                 async for message in ws:
                     cmd = json.loads(message)

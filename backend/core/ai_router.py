@@ -14,6 +14,7 @@ AI_ROUTING = {
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
     # Google
+    "gemini-2.0-flash": "google",
     "gemini-1.5-pro": "google",
     "gemini-1.5-flash": "google",
     # Perplexity
@@ -25,7 +26,9 @@ AI_ROUTING = {
     "deepseek-reasoner": "deepseek",
 }
 
-FALLBACK_CHAIN = ["claude-sonnet-4-6", "gpt-4o", "deepseek-chat", "gemini-1.5-flash", "gpt-4o-mini"]
+# Минимум: мозг — Claude, бесплатный резерв — Gemini. Остальные (GPT/DeepSeek)
+# подхватываются автоматически, только если их ключи заданы.
+FALLBACK_CHAIN = ["claude-sonnet-4-6", "gemini-2.0-flash"]
 
 PREMIUM_MODELS = {
     "niche_analyst": "sonar-pro",
@@ -55,6 +58,7 @@ COST_PER_1K = {
     "claude-haiku-4-5-20251001": 0.00025,
     "gpt-4o": 0.005,
     "gpt-4o-mini": 0.00015,
+    "gemini-2.0-flash": 0.0001,
     "gemini-1.5-flash": 0.000075,
     "gemini-1.5-pro": 0.00125,
     "sonar": 0.001,

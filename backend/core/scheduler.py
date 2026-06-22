@@ -166,18 +166,60 @@ async def run_daily_report():
         report = await reporter.build_status_report(db)
     await send_message(chat_id, report)
 
-def start_scheduler():
-    global _scheduler
-    _scheduler = AsyncIOScheduler(timezone="UTC")
+async def run_daily_factory():
+    """09:30 Алматы — автоцикл «Фабрика»: анализ→ТЗ→видео→(публикация)→отчёт.
+    Публикует, если AUTO_PUBLISH=1, иначе шлёт превью в Telegram.
+    """
+    from core.content_factory import run_factory
+    auto = os.getenv("AUTO_PUBLISH", "0") == "1"
+    try:
+        await run_factory(topic=None, dry_run=not auto)
+    except Exception as e:
+        chat = os.getenv("TELEGRAM_CHAT_ID", "")
+        if chat:
+            from core.telegram_bot import send_message
+            await send_message(chat, f"⚠️ Фабрика: {str(e)[:120]}")
 
-    # 09:00 UTC — Trends (Agent 6)
+
+async def run_weekly_analytics():
+    """Воскресенье 20:00 — еженедельная аналитика и сводка владельцу."""
+    from database.db import AsyncSessionLocal
+    from agents.reporter import reporter
+    from core.telegram_bot import send_message
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not chat_id:
+        return
+    async with AsyncSessionLocal() as db:
+        try:
+            report = await reporter.build_status_report(db)
+        except Exception as e:
+            report = f"⚠️ Ошибка еженедельной аналитики: {str(e)[:120]}"
+    await send_message(chat_id, "📊 <b>Еженедельный отчёт Pakhon Studio</b>\n\n" + report)
+
+
+def start_scheduler():
+    """Расписание по таймзоне Pakhon Studio (Asia/Almaty, UTC+5)."""
+    global _scheduler
+    try:
+        from core.brand import TIMEZONE
+    except Exception:
+        TIMEZONE = os.getenv("NEXUS_TZ", "Asia/Almaty")
+    _scheduler = AsyncIOScheduler(timezone=TIMEZONE)
+
+    # 09:00 — Research/тренды (исследование рынка)
     _scheduler.add_job(run_daily_trends,   CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
-    # 12:00 UTC — Generate content (Agents 3+4)
-    _scheduler.add_job(run_daily_generate, CronTrigger(hour=12, minute=0), id="generate", replace_existing=True)
-    # 18:00 UTC — Publish queue (Agent 5)
-    _scheduler.add_job(run_daily_publish,  CronTrigger(hour=18, minute=0), id="publish",  replace_existing=True)
-    # 23:00 UTC — Daily report (Agent 8)
-    _scheduler.add_job(run_daily_report,   CronTrigger(hour=23, minute=0), id="report",   replace_existing=True)
+    # 09:30 — Фабрика контента (автоцикл Reels)
+    _scheduler.add_job(run_daily_factory,  CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
+    # 10:00 — Генерация материалов на день
+    _scheduler.add_job(run_daily_generate, CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
+    # 19:00 — Публикация (пик активности IG/TG по Алматы)
+    _scheduler.add_job(run_daily_publish,  CronTrigger(hour=19, minute=0), id="publish",  replace_existing=True)
+    # 22:00 — Итоговый статус дня владельцу
+    _scheduler.add_job(run_daily_report,   CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
+    # Воскресенье 20:00 — еженедельная аналитика
+    _scheduler.add_job(run_weekly_analytics, CronTrigger(day_of_week="sun", hour=20, minute=0),
+                       id="weekly", replace_existing=True)
 
     _scheduler.start()
     return _scheduler

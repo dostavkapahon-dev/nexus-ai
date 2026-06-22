@@ -184,21 +184,23 @@ class NexusCore:
             await broadcast(plan.niche_id, {"event": "pipeline_complete"})
 
     async def publish_plan(self, plan_id: str):
-        """Publish a generated plan item to all configured platforms."""
-        from publishers.telegram_pub import publish_telegram
+        """Publish a generated plan item to all configured platforms.
+
+        Использует пер-платформенный текст (platform_versions), официальные API
+        где есть токен, и браузерного агента как fallback. Возвращает отчёт.
+        """
         async with AsyncSessionLocal() as db:
-            from database.models import Publication
+            from database.models import Publication, GeneratedContent
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
             plan = result.scalar_one_or_none()
             if not plan:
-                return
+                return {"ok": False, "error": "plan not found"}
 
             niche_r = await db.execute(select(Niche).where(Niche.id == plan.niche_id))
             niche = niche_r.scalar_one_or_none()
             if not niche:
-                return
+                return {"ok": False, "error": "niche not found"}
 
-            from database.models import GeneratedContent
             content_r = await db.execute(
                 select(GeneratedContent).where(GeneratedContent.plan_id == plan_id).limit(1)
             )
@@ -206,18 +208,60 @@ class NexusCore:
             if not content:
                 raise ValueError("Content not generated yet")
 
-            text = content.text_reviewed or content.text or ""
+            base_text = content.text_reviewed or content.text or ""
             image_url = content.image_url or ""
+            versions = content.platform_versions or {}
             platforms = niche.platforms or ["telegram"]
 
+            report = {}
             for platform in platforms:
-                if platform == "telegram":
-                    tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-                    if tg_chat:
-                        await publish_telegram(tg_chat, text, image_url or None)
-                        db.add(Publication(plan_id=plan_id, platform="telegram", status="published"))
+                text = versions.get(platform) or base_text
+                try:
+                    res = await self._publish_one(platform, text, image_url)
+                except Exception as e:
+                    res = {"ok": False, "error": str(e)}
+                report[platform] = res
+                status = "published" if res.get("ok") else "failed"
+                db.add(Publication(plan_id=plan_id, platform=platform, status=status))
+                await broadcast(plan.niche_id, {"event": "publish_result", "platform": platform, "result": res})
 
-            plan.status = "published"
+            plan.status = "published" if any(r.get("ok") for r in report.values()) else "generated"
             await db.commit()
+            return {"ok": True, "report": report}
+
+    async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
+        """Публикует на одной платформе: официальный API → fallback браузерный агент."""
+        from publishers.browser_publish import publish_via_browser
+
+        if platform == "telegram":
+            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+            if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
+                from publishers.telegram_pub import publish_telegram
+                r = await publish_telegram(tg_chat, text, image_url or None)
+                return {"ok": True, "via": "api", **r}
+            return {"ok": False, "error": "Telegram не настроен"}
+
+        if platform == "instagram":
+            if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
+                from publishers.instagram_pub import publish_instagram
+                r = await publish_instagram(text, image_url or None)
+                return {"ok": True, "via": "api", **r}
+            return await publish_via_browser("instagram", text, image_url)
+
+        if platform == "vk":
+            if os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
+                from publishers.vk_pub import publish_vk
+                r = await publish_vk(text, image_url or None)
+                return {"ok": True, "via": "api", **r}
+            return await publish_via_browser("vk", text, image_url)
+
+        if platform == "youtube":
+            # Прямой аплоад требует OAuth → используем браузерного агента.
+            return await publish_via_browser("youtube", text, image_url)
+
+        if platform == "tiktok":
+            return await publish_via_browser("tiktok", text, image_url)
+
+        return {"ok": False, "error": f"Платформа '{platform}' не поддерживается"}
 
 nexus_core = NexusCore()
