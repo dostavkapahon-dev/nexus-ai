@@ -70,53 +70,97 @@ async def _analyze(topic: str | None) -> dict:
 
 
 async def run_factory(topic: str | None = None, platforms: list | None = None,
-                      dry_run: bool = True, want_video: bool = True) -> dict:
-    """Полный цикл. dry_run=True — всё генерируем, но НЕ публикуем."""
+                      dry_run: bool = True, want_video: bool = True,
+                      content_type: str = "auto") -> dict:
+    """Полный цикл «креативный директор». dry_run=True — генерируем, не публикуем."""
+    from core.creative_director import build_brief, choose_strategy, wow_review
     platforms = platforms or DEFAULT_PLATFORMS
     report = {"steps": [], "assets": {}, "published": {}, "dry_run": dry_run}
 
-    # 1-2. Анализ + план
+    # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
     report["plan"] = plan
-    report["steps"].append({"step": "analysis", "ok": True, "theme": plan.get("theme")})
+    report["steps"].append({"step": "analysis", "ok": "_error" not in plan, "theme": plan.get("theme")})
 
-    # 3a. Обложка (Imagen → fallback)
+    # 2b. Продакшен-ТЗ с раскадровкой и промтами (креативный директор)
+    brief = await build_brief(plan)
+    report["brief"] = brief
+    report["steps"].append({"step": "brief", "ok": "_error" not in brief,
+                            "shots": len(brief.get("storyboard", []))})
+
+    # 2c. Выбор самой дешёвой рабочей стратегии видео
+    strategy = choose_strategy(content_type)
+    report["strategy"] = strategy
+    report["steps"].append({"step": "strategy", "ok": True,
+                            "choice": strategy["strategy"], "est_cost": strategy["est_cost"]})
+
+    from core.media_generator import generate_image, generate_clip
+
+    # 3a. Обложка
     try:
-        from core.media_generator import generate_image
-        img_prompt = cover_prompt(plan.get("hook_text", plan.get("theme", "")))
-        cover = await generate_image(plan.get("image_prompt", img_prompt), platform="instagram")
+        cover = await generate_image(brief.get("cover_prompt") or plan.get("image_prompt")
+                                     or cover_prompt(plan.get("hook_text", "")), platform="instagram")
         report["assets"]["cover"] = cover
         report["steps"].append({"step": "cover", "ok": bool(cover)})
     except Exception as e:
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})
 
-    # 3b. Видео (HeyGen аватар → HiggsField → Runway)
-    if want_video:
+    # 3b. Раскадровка по кадрам (фото — дёшево/безлимит)
+    frames = []
+    for shot in brief.get("storyboard", [])[:4]:
         try:
-            from core.media_generator import generate_clip
-            vid = await generate_clip(prompt=plan.get("image_prompt", ""),
-                                      script=plan.get("avatar_script", ""), provider="auto")
-            report["assets"]["video"] = vid
-            report["steps"].append({"step": "video", "ok": vid.get("ok", False),
-                                    "provider": vid.get("provider"), "error": vid.get("error")})
-        except Exception as e:
-            report["steps"].append({"step": "video", "ok": False, "error": str(e)[:160]})
+            f = await generate_image(shot.get("image_prompt", ""), platform="instagram")
+            if f:
+                frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"), "image": f})
+        except Exception:
+            pass
+    report["assets"]["frames"] = frames
+    report["steps"].append({"step": "storyboard_frames", "ok": True, "count": len(frames)})
 
-    # 4. Публикация по площадкам
+    # 3c. Видео по выбранной стратегии
+    if want_video:
+        vid = {"ok": False}
+        st = strategy["strategy"]
+        first_img = frames[0]["image"] if frames else cover
+        try:
+            if st == "heygen_avatar":
+                vid = await generate_clip(script=brief.get("avatar_script", ""), provider="heygen")
+            elif st == "storyboard_to_higgsfield":
+                vid = await generate_clip(prompt=brief.get("video_motion_prompt", ""),
+                                          image_url=first_img, provider="higgsfield")
+            elif st == "runway":
+                vid = await generate_clip(prompt=brief.get("video_motion_prompt", ""),
+                                          image_url=first_img, provider="runway")
+            else:  # free_slideshow
+                vid = {"ok": bool(frames), "provider": "slideshow",
+                       "note": "Кадры готовы. Сборку mp4 (ffmpeg-монтаж) добавим следующим шагом."}
+        except Exception as e:
+            vid = {"ok": False, "error": str(e)[:160]}
+        report["assets"]["video"] = vid
+        report["steps"].append({"step": "video", "ok": vid.get("ok", False),
+                                "provider": vid.get("provider"), "error": vid.get("error")})
+
+    # 4. «Вау»-ревью: усиливаем хук при низкой оценке
+    wow = await wow_review(brief)
+    report["wow"] = wow
+    if wow.get("score", 7) < 8 and wow.get("new_hook"):
+        plan["hook_text"] = wow["new_hook"]
+    report["steps"].append({"step": "wow_review", "ok": True, "score": wow.get("score")})
+
+    # 5. Публикация
     if not dry_run:
         from core.orchestrator import nexus_core
         for pf in platforms:
             text = _caption_for(pf, plan)
             try:
-                res = await nexus_core._publish_one(pf, text, cover)
-                report["published"][pf] = res
+                report["published"][pf] = await nexus_core._publish_one(pf, text, cover)
             except Exception as e:
                 report["published"][pf] = {"ok": False, "error": str(e)[:160]}
     else:
-        report["published"] = {pf: {"ok": None, "note": "dry-run, не публиковалось"} for pf in platforms}
+        report["published"] = {pf: {"ok": None, "note": "dry-run"} for pf in platforms}
 
-    # 5. Отчёт в Telegram
+    # 6. Отчёт в Telegram
     await _send_report(report, platforms)
     return report
 
@@ -144,12 +188,17 @@ async def _send_report(report: dict, platforms: list) -> None:
     try:
         from core.telegram_bot import send_message
         plan = report.get("plan", {})
-        lines = [f"🏭 <b>Фабрика контента{' (dry-run)' if report['dry_run'] else ''}</b>",
+        strat = report.get("strategy", {})
+        wow = report.get("wow", {})
+        lines = [f"🏭 <b>Фабрика контента{' (превью)' if report['dry_run'] else ''}</b>",
                  f"🎯 Тема: {plan.get('theme', '—')}",
-                 f"🪝 Хук ({plan.get('hook_type', '?')}): {plan.get('hook_text', '—')}", ""]
+                 f"🪝 Хук ({plan.get('hook_type', '?')}): {plan.get('hook_text', '—')}",
+                 f"🎬 Стратегия: {strat.get('strategy', '—')} (~${strat.get('est_cost', 0)})",
+                 f"⭐ Вау-оценка: {wow.get('score', '—')}/10", ""]
         for s in report["steps"]:
             mark = "✅" if s.get("ok") else "⚠️"
             extra = f" [{s.get('provider')}]" if s.get("provider") else ""
+            extra += f" x{s.get('count')}" if s.get("count") else ""
             lines.append(f"{mark} {s['step']}{extra}")
         if not report["dry_run"]:
             lines.append("")
