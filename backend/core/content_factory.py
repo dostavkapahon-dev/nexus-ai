@@ -68,8 +68,16 @@ _ANALYSIS_PROMPT = """\
 async def _analyze(topic: str | None) -> dict:
     """Шаг 1+2: помощник ищет тренды → Claude (мозг) делает анализ + план."""
     from core.ai_router import ai_router
+    from core.hooks import guidance, record
+    g = guidance()
     trends = await _research_trends(topic)
     hint = f"Тема задана пользователем: {topic}." if topic else "Тему выбери сам по трендам ниши."
+    hint += (f"\n\nУКАЗАНИЯ МАРКЕТОЛОГА НА СЕГОДНЯ (соблюдай):\n"
+             f"- Тема дня: {g['day_theme']}\n"
+             f"- Тип хука (ротация, НЕ повторяй {g['avoid_hook_types']}): {g['hook_type']}\n"
+             f"- Формулы хука на выбор: {g['hook_formulas']}\n"
+             f"- Формат ролика: {g['format']}\n"
+             f"- Столп 80/20: {'ПРОМО услуг' if g['pillar']=='promo' else 'ЦЕННОСТЬ/обучение'}")
     if trends:
         hint += f"\n\nСВЕЖИЕ ТРЕНДЫ (от ассистента, учти их):\n{trends}"
     prompt = _ANALYSIS_PROMPT.format(topic_hint=hint)
@@ -86,9 +94,14 @@ async def _analyze(topic: str | None) -> dict:
                 "_error": f"Нет AI-ключа для анализа: {str(e)[:120]}. Добавь GEMINI_API_KEY."}
     try:
         s, e = raw.find("{"), raw.rfind("}") + 1
-        return json.loads(raw[s:e])
+        data = json.loads(raw[s:e])
+        data.setdefault("hook_type", g["hook_type"])
+        data["_format"] = g["format"]
+        record(g["hook_type"], g["format"], g["day_theme"])  # контроль ротации
+        return data
     except Exception:
         return {"theme": topic or "AI для бизнеса", "hook_text": "Смотри до конца",
+                "hook_type": g["hook_type"], "_format": g["format"],
                 "avatar_script": raw[:500], "image_prompt": "dark cinematic AI tech poster",
                 "instagram": {"caption": raw[:300], "hashtags": ["#ai", "#бизнес"]},
                 "youtube": {"title": topic or "AI", "description": raw[:200]},
@@ -114,8 +127,9 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     report["steps"].append({"step": "brief", "ok": "_error" not in brief,
                             "shots": len(brief.get("storyboard", []))})
 
-    # 2c. Выбор самой дешёвой рабочей стратегии видео
-    strategy = choose_strategy(content_type)
+    # 2c. Выбор стратегии видео (формат из ротации: talking_head → HeyGen-аватар)
+    ct = content_type if content_type != "auto" else plan.get("_format", "auto")
+    strategy = choose_strategy(ct)
     report["strategy"] = strategy
     report["steps"].append({"step": "strategy", "ok": True,
                             "choice": strategy["strategy"], "est_cost": strategy["est_cost"]})
