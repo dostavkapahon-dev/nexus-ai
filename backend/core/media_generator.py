@@ -9,8 +9,16 @@ import base64
 from urllib.parse import quote
 
 async def generate_image(prompt: str, provider: str = "auto", platform: str = "telegram") -> str:
-    """Returns image URL. Provider: auto/dalle3/stability/pollinations."""
-    size = "1080x1920" if platform == "tiktok" else "1080x1080"
+    """Returns image URL. Provider: auto/imagen/dalle3/stability/pollinations.
+
+    По ТЗ Pakhon Studio primary — Gemini Imagen, fallback — остальные.
+    """
+    size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
+
+    if provider == "imagen" or (provider == "auto" and os.getenv("GEMINI_API_KEY")):
+        url = await _gemini_imagen(prompt, size)
+        if url:
+            return url
 
     if provider == "dalle3" or (provider == "auto" and os.getenv("OPENAI_API_KEY")):
         url = await _dalle3(prompt, size)
@@ -24,6 +32,32 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
 
     # Always works, free fallback
     return _pollinations(prompt, size)
+
+async def _gemini_imagen(prompt: str, size: str) -> str | None:
+    """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        return None
+    w, h = size.split("x")
+    ratio = "9:16" if int(h) > int(w) else ("1:1" if w == h else "16:9")
+    model = os.getenv("IMAGEN_MODEL", "imagen-3.0-generate-002")
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{model}:predict",
+                params={"key": api_key},
+                json={"instances": [{"prompt": prompt[:2000]}],
+                      "parameters": {"sampleCount": 1, "aspectRatio": ratio}},
+            )
+            if r.status_code != 200:
+                return None
+            preds = r.json().get("predictions", [])
+            if preds and preds[0].get("bytesBase64Encoded"):
+                return f"data:image/png;base64,{preds[0]['bytesBase64Encoded']}"
+            return None
+    except Exception:
+        return None
+
 
 def _pollinations(prompt: str, size: str = "1080x1080") -> str:
     w, h = size.split("x")

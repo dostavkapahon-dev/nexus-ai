@@ -68,3 +68,25 @@ async def publish_multi(plan_id: str, bg: BackgroundTasks):
     from core.orchestrator import nexus_core
     bg.add_task(nexus_core.publish_plan, plan_id)
     return {"ok": True, "message": "Публикация запущена в фоне."}
+
+
+@router.get("/brand")
+async def get_brand():
+    """Бренд Pakhon Studio: голос, платформо-специфика, типы хуков."""
+    from core.brand import get_brand_voice, PLATFORM_SPECS, HOOK_TYPES, BRAND, WINNING_TOPICS
+    return {"brand": BRAND, "voice": get_brand_voice(), "platform_specs": PLATFORM_SPECS,
+            "hook_types": HOOK_TYPES, "winning_topics": WINNING_TOPICS}
+
+
+class BrandVoiceBody(BaseModel):
+    voice: str
+
+
+@router.post("/brand/voice")
+async def update_brand_voice(body: BrandVoiceBody):
+    """Обновить голос бренда (эквивалент команды /prompt)."""
+    from core.brand import set_brand_voice
+    if not body.voice.strip():
+        return {"ok": False, "error": "Пустой текст"}
+    set_brand_voice(body.voice)
+    return {"ok": True}

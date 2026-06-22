@@ -34,6 +34,15 @@ SYSTEM = """\
 - Отвечай и пиши отчёты на русском.
 """
 
+
+def _full_system() -> str:
+    """Бренд-мозг Pakhon Studio + инструкции директора по инструментам."""
+    try:
+        from core.brand import system_prompt
+        return system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + SYSTEM
+    except Exception:
+        return SYSTEM
+
 TOOLS = [
     {
         "name": "run_browser",
@@ -110,7 +119,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
     steps = []
     for _ in range(max_steps):
         resp = await client.messages.create(
-            model=DIRECTOR_MODEL, max_tokens=1500, system=SYSTEM, tools=TOOLS, messages=messages,
+            model=DIRECTOR_MODEL, max_tokens=1500, system=_full_system(), tools=TOOLS, messages=messages,
         )
         messages.append({"role": "assistant", "content": resp.content})
         tool_use = next((b for b in resp.content if b.type == "tool_use"), None)
@@ -156,7 +165,7 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     model = genai.GenerativeModel(
         GEMINI_DIRECTOR_MODEL,
-        system_instruction=SYSTEM + "\n\n" + _GEMINI_DIRECTOR_DOC,
+        system_instruction=_full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC,
         generation_config={"response_mime_type": "application/json"},
     )
     history = ""
