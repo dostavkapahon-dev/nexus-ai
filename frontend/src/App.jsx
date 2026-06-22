@@ -1,6 +1,7 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Zap, LayoutDashboard, PlusCircle, List, Settings, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
+import { Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
+import Control from './pages/Control'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
 import Queue from './pages/Queue'
@@ -12,13 +13,11 @@ import Login from './pages/Login'
 import { auth } from './lib/api'
 
 const NAV = [
-  { to: '/',            icon: LayoutDashboard, label: 'Главная' },
+  { to: '/',            icon: Rocket,          label: 'Центр управления' },
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
-  { to: '/new',         icon: PlusCircle,      label: 'Новая ниша' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
-  { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
-  { to: '/prompts',     icon: Cpu,             label: 'Агенты' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
+  { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
 ]
 
 function RequireAuth({ children }) {
@@ -63,7 +62,7 @@ function Sidebar() {
           className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#5a5a7a] hover:text-red-400 hover:bg-red-500/8 transition w-full">
           <LogOut className="w-3.5 h-3.5" /> Выйти
         </button>
-        <div className="text-[10px] text-[#3a3a55] text-center mt-2">v1.2.0</div>
+        <div className="text-[10px] text-[#3a3a55] text-center mt-2">v2.0 · Pakhon</div>
       </div>
     </aside>
   )
@@ -75,7 +74,8 @@ function Layout() {
       <Sidebar />
       <main className="flex-1 ml-52 p-6 overflow-auto min-h-screen">
         <Routes>
-          <Route path="/"            element={<Dashboard />} />
+          <Route path="/"            element={<Control />} />
+          <Route path="/dash"        element={<Dashboard />} />
           <Route path="/director"    element={<Director />} />
           <Route path="/new"         element={<NewNiche />} />
           <Route path="/queue"       element={<Queue />} />
