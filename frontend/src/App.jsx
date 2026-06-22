@@ -1,17 +1,19 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Zap, LayoutDashboard, PlusCircle, List, Settings, Cpu, BarChart2, Plug, LogOut } from 'lucide-react'
+import { Zap, LayoutDashboard, PlusCircle, List, Settings, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
 import Queue from './pages/Queue'
 import PromptStudio from './pages/PromptStudio'
 import Connections from './pages/Connections'
 import Analytics from './pages/Analytics'
+import Director from './pages/Director'
 import Login from './pages/Login'
 import { auth } from './lib/api'
 
 const NAV = [
   { to: '/',            icon: LayoutDashboard, label: 'Главная' },
+  { to: '/director',    icon: Bot,             label: 'Дирижёр' },
   { to: '/new',         icon: PlusCircle,      label: 'Новая ниша' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
@@ -74,6 +76,7 @@ function Layout() {
       <main className="flex-1 ml-52 p-6 overflow-auto min-h-screen">
         <Routes>
           <Route path="/"            element={<Dashboard />} />
+          <Route path="/director"    element={<Director />} />
           <Route path="/new"         element={<NewNiche />} />
           <Route path="/queue"       element={<Queue />} />
           <Route path="/analytics"   element={<Analytics />} />

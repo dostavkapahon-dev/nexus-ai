@@ -33,6 +33,13 @@ class ConnectionsBody(BaseModel):
     threads_access_token: Optional[str] = None
     threads_user_id: Optional[str] = None
     heygen_api_key: Optional[str] = None
+    heygen_avatar_id: Optional[str] = None
+    heygen_voice_id: Optional[str] = None
+    higgsfield_api_key: Optional[str] = None
+    higgsfield_secret: Optional[str] = None
+    runway_api_key: Optional[str] = None
+    elevenlabs_api_key: Optional[str] = None
+    nexus_token: Optional[str] = None
 
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
