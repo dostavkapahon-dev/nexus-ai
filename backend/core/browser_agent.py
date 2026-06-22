@@ -168,7 +168,7 @@ def _strip_old_images(messages: list) -> None:
                     seen = True
 
 
-async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
+async def _run_anthropic(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
     """Run the vision loop until the task is done, blocked, or steps run out."""
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -246,3 +246,102 @@ async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25
         })
 
     return {"status": "max_steps", "message": f"Достигнут лимит {max_steps} шагов.", "steps": steps}
+
+
+# ── Провайдер зрения: Anthropic (если есть ключ) → иначе Google Gemini ─────────
+def vision_provider() -> str | None:
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic"
+    if os.getenv("GEMINI_API_KEY"):
+        return "google"
+    return None
+
+
+GEMINI_VISION_MODEL = os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-2.0-flash")
+
+_GEMINI_ACTIONS_DOC = """\
+Верни СТРОГО ОДИН JSON-объект (без markdown, без пояснений вокруг) одного из видов:
+{"action":"navigate","url":"https://..."}        — открыть URL
+{"action":"click","x":123,"y":456}               — клик по координатам центра элемента
+{"action":"type_text","text":"...","clear":false}— ввести текст в сфокусированное поле
+{"action":"key","key":"Enter"}                   — нажать клавишу
+{"action":"scroll","dy":600}                     — прокрутить (dy>0 вниз)
+{"action":"wait","seconds":2}                    — подождать загрузку
+{"action":"back"}                                — назад
+{"action":"done","summary":"..."}                — задача выполнена
+{"action":"ask","question":"..."}                — нужен ввод пользователя (пароль/2FA/файл)
+Можно добавить поле "thought" с кратким обоснованием.
+"""
+
+
+async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
+    """Тот же vision-loop, но на бесплатном Google Gemini (JSON-протокол действий)."""
+    import json as _json
+    import base64 as _b64
+    import google.generativeai as genai
+
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    model = genai.GenerativeModel(
+        GEMINI_VISION_MODEL,
+        system_instruction=SYSTEM_PROMPT + "\n\n" + _GEMINI_ACTIONS_DOC,
+        generation_config={"response_mime_type": "application/json"},
+    )
+
+    if start_url:
+        await send_to_desktop({"action": "navigate", "url": start_url}, timeout=40.0)
+
+    steps: list[dict] = []
+    history = ""
+    shot = await _screenshot()
+
+    for step in range(max_steps):
+        img_bytes = _b64.b64decode(shot["screenshot"])
+        prompt = (f"ЗАДАЧА: {task}\n\nИстория действий:\n{history or '—'}\n\n"
+                  f"Текущий URL: {shot.get('url', '?')}\n"
+                  f"Размер экрана: {shot.get('width')}x{shot.get('height')}\n"
+                  f"Реши следующее действие. Текущий скриншот:")
+        resp = await asyncio.to_thread(
+            model.generate_content, [prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
+        )
+        raw = (getattr(resp, "text", "") or "").strip()
+        try:
+            s, e = raw.find("{"), raw.rfind("}") + 1
+            data = _json.loads(raw[s:e])
+        except Exception:
+            return {"status": "stopped", "reason": "bad_json", "message": raw[:300], "steps": steps}
+
+        action = data.get("action", "")
+        thought = data.get("thought", "")
+        steps.append({"step": step + 1, "thought": thought, "action": action, "input": data})
+
+        if action == "done":
+            return {"status": "done", "summary": data.get("summary", ""), "steps": steps}
+        if action == "ask":
+            return {"status": "needs_input", "question": data.get("question", ""), "steps": steps}
+
+        try:
+            payload = _ACTION_MAP[action](data)
+            result = await send_to_desktop(payload, timeout=45.0)
+            ok, err = result.get("ok", False), result.get("error", "")
+        except Exception as ex:
+            ok, err = False, str(ex)
+
+        history += f"\n{step + 1}. {action} -> {'ok' if ok else 'ОШИБКА: ' + err}"
+        try:
+            shot = await _screenshot()
+        except Exception as ex:
+            return {"status": "stopped", "reason": "screenshot_failed", "message": str(ex), "steps": steps}
+
+    return {"status": "max_steps", "message": f"Достигнут лимит {max_steps} шагов.", "steps": steps}
+
+
+async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
+    """Запуск браузерного агента на доступном провайдере зрения."""
+    provider = vision_provider()
+    if provider == "anthropic":
+        return await _run_anthropic(task, start_url, max_steps)
+    if provider == "google":
+        return await _run_gemini(task, start_url, max_steps)
+    return {"status": "error",
+            "error": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
+                     "или ANTHROPIC_API_KEY в Подключениях."}

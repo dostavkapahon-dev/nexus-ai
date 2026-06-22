@@ -26,12 +26,30 @@ def _headers() -> dict:
     return h
 
 
+# Популярные модели HiggsField (значения можно переопределить через UI/env).
+MODELS = [
+    "higgsfield-dop",      # кинематографичная камера (DoP)
+    "higgsfield-soul",     # реалистичные персонажи
+    "higgsfield-turbo",    # быстрая генерация
+    "kling-2.1",           # Kling
+    "minimax-hailuo",      # MiniMax / Hailuo
+    "seedance",            # Seedance
+    "wan-2.2",             # Wan
+    "veo-3",               # Google Veo (через HiggsField)
+]
+
+
 async def create_video(prompt: str, image_url: str = None, motion: str = "general",
-                       ratio: str = "9:16") -> dict:
-    """Запускает генерацию видео. Возвращает {'ok': True, 'job_id': ...}."""
+                       ratio: str = "9:16", model: str = None) -> dict:
+    """Запускает генерацию видео. Возвращает {'ok': True, 'job_id': ...}.
+
+    model — конкретная AI-модель HiggsField (см. MODELS). По умолчанию берётся
+    HIGGSFIELD_MODEL из настроек, иначе 'higgsfield-dop'.
+    """
     if not os.getenv("HIGGSFIELD_API_KEY"):
         return {"ok": False, "error": "HIGGSFIELD_API_KEY not set"}
-    payload = {"prompt": prompt[:1000], "aspect_ratio": ratio, "motion": motion}
+    model = model or os.getenv("HIGGSFIELD_MODEL", "higgsfield-dop")
+    payload = {"prompt": prompt[:1000], "aspect_ratio": ratio, "motion": motion, "model": model}
     if image_url:
         payload["image_url"] = image_url
     try:

@@ -37,6 +37,7 @@ class ConnectionsBody(BaseModel):
     heygen_voice_id: Optional[str] = None
     higgsfield_api_key: Optional[str] = None
     higgsfield_secret: Optional[str] = None
+    higgsfield_model: Optional[str] = None
     runway_api_key: Optional[str] = None
     elevenlabs_api_key: Optional[str] = None
     nexus_token: Optional[str] = None

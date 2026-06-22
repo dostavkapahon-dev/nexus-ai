@@ -34,6 +34,7 @@ class VideoRequest(BaseModel):
     provider: Optional[str] = "auto"
     image_url: Optional[str] = None
     ratio: Optional[str] = "9:16"
+    model: Optional[str] = None  # конкретная модель HiggsField (см. /automation/video/models)
 
 
 @router.post("/video")
@@ -43,11 +44,22 @@ async def generate_video_endpoint(body: VideoRequest):
     try:
         result = await generate_clip(
             prompt=body.prompt, script=body.script or "", image_url=body.image_url,
-            provider=body.provider or "auto", ratio=body.ratio or "9:16",
+            provider=body.provider or "auto", ratio=body.ratio or "9:16", model=body.model,
         )
         return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/video/models")
+async def list_video_models():
+    """Список доступных моделей видео-генерации (в т.ч. много моделей HiggsField)."""
+    from core.higgsfield import MODELS as HF_MODELS
+    return {
+        "heygen": ["avatar (озвучка текста)"],
+        "higgsfield": HF_MODELS,
+        "runway": ["gen3a_turbo"],
+    }
 
 
 @router.post("/publish/{plan_id}")

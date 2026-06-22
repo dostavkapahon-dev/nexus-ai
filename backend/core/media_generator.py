@@ -134,7 +134,7 @@ async def poll_video(task_id: str) -> str | None:
 
 
 async def generate_clip(prompt: str, script: str = "", image_url: str = None,
-                        provider: str = "auto", ratio: str = "9:16") -> dict:
+                        provider: str = "auto", ratio: str = "9:16", model: str = None) -> dict:
     """Единая точка генерации видео-клипа для Reels/Shorts/TikTok/VK.
 
     provider:
@@ -158,7 +158,7 @@ async def generate_clip(prompt: str, script: str = "", image_url: str = None,
                     return {"ok": True, "url": done["url"], "provider": "heygen"}
         elif p == "higgsfield" and os.getenv("HIGGSFIELD_API_KEY"):
             from core.higgsfield import create_video, poll_video as hf_poll
-            started = await create_video(prompt, image_url=image_url, ratio=ratio)
+            started = await create_video(prompt, image_url=image_url, ratio=ratio, model=model)
             if started.get("ok"):
                 done = await hf_poll(started["job_id"])
                 if done.get("ok"):

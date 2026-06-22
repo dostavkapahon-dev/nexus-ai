@@ -58,17 +58,19 @@ const PROVIDERS = [
   },
   {
     id: 'higgsfield', name: 'HiggsField AI', icon: '🌌', color: 'from-amber-500 to-orange-600',
-    description: 'Кинематографичные «вирусные» видео-клипы из текста/картинки',
+    description: 'Много AI-моделей видео: DoP, Soul, Kling, MiniMax, Seedance, Veo-3 и др.',
     fields: [
       { key: 'higgsfield_api_key', label: 'API Key', placeholder: 'hf_...', secret: true },
       { key: 'higgsfield_secret', label: 'Secret (опц.)', placeholder: '...', secret: true },
+      { key: 'higgsfield_model', label: 'Модель по умолчанию', placeholder: 'higgsfield-dop', secret: false },
     ],
     steps: [
       { text: 'Откройте', link: 'https://higgsfield.ai', linkText: 'higgsfield.ai' },
       { text: 'Перейдите в раздел разработчика / API и создайте ключ' },
       { text: 'Вставьте ключ — он используется генератором видео (provider=higgsfield)' },
+      { text: 'Модель можно менять на лету в запросе генерации видео' },
     ],
-    models: [],
+    models: ['dop', 'soul', 'kling-2.1', 'minimax', 'seedance', 'veo-3'],
   },
   {
     id: 'vk', name: 'ВКонтакте', icon: '🅥', color: 'from-blue-600 to-indigo-600',

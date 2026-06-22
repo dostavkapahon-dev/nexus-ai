@@ -11,6 +11,7 @@ Marketing Director — главный AI-дирижёр (запуск «чере
 """
 import os
 import json
+import asyncio
 
 import anthropic
 
@@ -98,7 +99,7 @@ async def _exec_tool(name: str, inp: dict) -> dict:
     return {"ok": False, "error": f"unknown tool {name}"}
 
 
-async def run_director(goal: str, context: str = "", max_steps: int = 12) -> dict:
+async def _run_director_anthropic(goal: str, context: str = "", max_steps: int = 12) -> dict:
     """Главный цикл дирижёра. Возвращает {'status', 'summary', 'steps'}."""
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     messages = [{
@@ -135,3 +136,62 @@ async def run_director(goal: str, context: str = "", max_steps: int = 12) -> dic
             }],
         })
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
+
+
+# ── Gemini-путь (бесплатный Google-ключ), JSON-протокол инструментов ───────────
+GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.0-flash")
+
+_GEMINI_DIRECTOR_DOC = """\
+Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
+{"tool":"run_browser","args":{"task":"...","start_url":"..."}}
+{"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
+{"tool":"publish","args":{"platform":"instagram","text":"...","image_url":"..."}}
+{"tool":"done","args":{"summary":"..."}}
+Можно добавить поле "thought" с кратким планом/обоснованием.
+"""
+
+
+async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12) -> dict:
+    import google.generativeai as genai
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    model = genai.GenerativeModel(
+        GEMINI_DIRECTOR_MODEL,
+        system_instruction=SYSTEM + "\n\n" + _GEMINI_DIRECTOR_DOC,
+        generation_config={"response_mime_type": "application/json"},
+    )
+    history = ""
+    steps = []
+    for _ in range(max_steps):
+        prompt = (f"ЦЕЛЬ: {goal}\n\nКОНТЕКСТ: {context or '—'}\n\n"
+                  f"Журнал выполнения:\n{history or '—'}\n\nРеши следующий шаг.")
+        resp = await asyncio.to_thread(model.generate_content, prompt)
+        raw = (getattr(resp, "text", "") or "").strip()
+        try:
+            s, e = raw.find("{"), raw.rfind("}") + 1
+            data = json.loads(raw[s:e])
+        except Exception:
+            return {"status": "stopped", "summary": raw[:300], "steps": steps}
+
+        tool = data.get("tool", "")
+        args = data.get("args", {}) or {}
+        thought = data.get("thought", "")
+        if tool == "done":
+            steps.append({"action": "done", "thought": thought})
+            return {"status": "done", "summary": args.get("summary", thought), "steps": steps}
+
+        result = await _exec_tool(tool, args)
+        ok = result.get("ok", result.get("status") == "done")
+        steps.append({"action": tool, "input": args, "thought": thought, "result_ok": ok})
+        history += f"\n- {tool}: {'ok' if ok else 'ошибка'} :: {json.dumps(result, ensure_ascii=False)[:400]}"
+    return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
+
+
+async def run_director(goal: str, context: str = "", max_steps: int = 12) -> dict:
+    """Запуск дирижёра на доступном AI: Anthropic если есть ключ, иначе Gemini."""
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return await _run_director_anthropic(goal, context, max_steps)
+    if os.getenv("GEMINI_API_KEY"):
+        return await _run_director_gemini(goal, context, max_steps)
+    return {"status": "error",
+            "summary": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
+                       "или ANTHROPIC_API_KEY в Подключениях."}
