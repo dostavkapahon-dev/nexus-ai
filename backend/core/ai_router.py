@@ -14,6 +14,7 @@ AI_ROUTING = {
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
     # Google
+    "gemini-2.0-flash": "google",
     "gemini-1.5-pro": "google",
     "gemini-1.5-flash": "google",
     # Perplexity
@@ -55,6 +56,7 @@ COST_PER_1K = {
     "claude-haiku-4-5-20251001": 0.00025,
     "gpt-4o": 0.005,
     "gpt-4o-mini": 0.00015,
+    "gemini-2.0-flash": 0.0001,
     "gemini-1.5-flash": 0.000075,
     "gemini-1.5-pro": 0.00125,
     "sonar": 0.001,

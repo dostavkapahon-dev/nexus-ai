@@ -131,3 +131,45 @@ async def poll_video(task_id: str) -> str | None:
             return None
     except Exception:
         return None
+
+
+async def generate_clip(prompt: str, script: str = "", image_url: str = None,
+                        provider: str = "auto", ratio: str = "9:16") -> dict:
+    """Единая точка генерации видео-клипа для Reels/Shorts/TikTok/VK.
+
+    provider:
+      - heygen      → говорящий AI-аватар, озвучивает `script` (нужен HEYGEN_API_KEY)
+      - higgsfield  → кинематографичный клип из `prompt`/image (HIGGSFIELD_API_KEY)
+      - runway      → image-to-video (RUNWAY_API_KEY)
+      - auto        → первый доступный по наличию ключа
+    Возвращает {'ok': bool, 'url'|'error', 'provider'}.
+    """
+    order = (
+        [provider] if provider != "auto"
+        else ["heygen", "higgsfield", "runway"]
+    )
+    for p in order:
+        if p == "heygen" and os.getenv("HEYGEN_API_KEY"):
+            from core.heygen import create_avatar_video, poll_avatar_video
+            started = await create_avatar_video(script or prompt, ratio=ratio)
+            if started.get("ok"):
+                done = await poll_avatar_video(started["video_id"])
+                if done.get("ok"):
+                    return {"ok": True, "url": done["url"], "provider": "heygen"}
+        elif p == "higgsfield" and os.getenv("HIGGSFIELD_API_KEY"):
+            from core.higgsfield import create_video, poll_video as hf_poll
+            started = await create_video(prompt, image_url=image_url, ratio=ratio)
+            if started.get("ok"):
+                done = await hf_poll(started["job_id"])
+                if done.get("ok"):
+                    return {"ok": True, "url": done["url"], "provider": "higgsfield"}
+        elif p == "runway" and os.getenv("RUNWAY_API_KEY"):
+            task_id = await generate_video(prompt, image_url)
+            if task_id:
+                for _ in range(30):
+                    await asyncio.sleep(10)
+                    url = await poll_video(task_id)
+                    if url:
+                        return {"ok": True, "url": url, "provider": "runway"}
+    return {"ok": False, "error": "Нет доступного видео-провайдера (HeyGen/HiggsField/Runway). "
+                                   "Добавьте ключ в Подключениях.", "provider": None}

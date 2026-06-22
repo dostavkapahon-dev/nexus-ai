@@ -9,6 +9,19 @@ class PlatformAdapter(BaseAgent):
         try:
             start = raw.find('{')
             end = raw.rfind('}') + 1
-            return json.loads(raw[start:end])
+            data = json.loads(raw[start:end])
         except Exception:
-            return {"telegram": text, "instagram": text, "tiktok": text}
+            data = {}
+        # Гарантируем версии для всех поддерживаемых платформ.
+        defaults = {
+            "telegram": text,
+            "instagram": text,
+            "vk": text,
+            "youtube": text,
+            "tiktok": text,
+            "threads": text,
+        }
+        for k, v in defaults.items():
+            data.setdefault(k, v)
+        return data
+
