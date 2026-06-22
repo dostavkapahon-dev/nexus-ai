@@ -80,41 +80,40 @@ async def build_brief(analysis: dict) -> dict:
 
 
 def choose_strategy(content_type: str = "auto") -> dict:
-    """Выбирает самый дешёвый РАБОЧИЙ путь сборки видео из доступных ключей.
+    """Выбор пути видео. ОСНОВНОЙ продакшен — HiggsField или HeyGen.
 
-    Логика стоимости (от дешёвого к дорогому):
-      1) раскадровка из фото (Imagen/Pollinations) → анимация в HiggsField (image2video)
-      2) HeyGen аватар (если нужен говорящий ведущий)
-      3) Runway
-      4) слайдшоу из обложек (бесплатно, если видео-провайдеров нет)
+    Приоритет:
+      1) HeyGen аватар — если нужен говорящий ведущий (talking_head/explainer)
+      2) HiggsField — раскадровка из фото (безлимит) → анимация (image2video), дёшево и динамично
+      3) HeyGen / Runway — если только они доступны
+      4) (аварийно) ffmpeg-слайдшоу — ТОЛЬКО если нет ключей HiggsField/HeyGen/Runway
     """
     has_hf = bool(os.getenv("HIGGSFIELD_API_KEY"))
     has_hg = bool(os.getenv("HEYGEN_API_KEY"))
     has_rw = bool(os.getenv("RUNWAY_API_KEY"))
 
-    # Если контент «говорящая голова/объяснение» и есть HeyGen — аватар.
     if content_type in ("talking_head", "explainer") and has_hg:
         return {"strategy": "heygen_avatar", "reason": "Говорящий ведущий — аватар HeyGen",
-                "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY"}
+                "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
 
-    # Самый дешёвый динамичный путь: фото-раскадровка (безлимит) → анимация HiggsField.
     if has_hf:
         return {"strategy": "storyboard_to_higgsfield",
-                "reason": "Безлимит фото (Imagen/Pollinations) → анимация в HiggsField — дёшево и динамично",
+                "reason": "HiggsField: раскадровка (безлимит фото) → анимация image2video",
                 "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
-                "needs": "HIGGSFIELD_API_KEY"}
+                "needs": "HIGGSFIELD_API_KEY", "fallback": False}
 
     if has_hg:
-        return {"strategy": "heygen_avatar", "reason": "Есть только HeyGen — делаем аватар",
-                "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY"}
+        return {"strategy": "heygen_avatar", "reason": "HeyGen аватар",
+                "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
     if has_rw:
-        return {"strategy": "runway", "reason": "Есть Runway", "est_cost": COST_HINT["runway_video"],
-                "needs": "RUNWAY_API_KEY"}
+        return {"strategy": "runway", "reason": "Runway image2video",
+                "est_cost": COST_HINT["runway_video"], "needs": "RUNWAY_API_KEY", "fallback": False}
 
-    # Фолбэк без видео-ключей: бесплатное слайдшоу из обложек.
-    return {"strategy": "free_slideshow",
-            "reason": "Нет видео-ключей — собираем бесплатное слайдшоу из кадров (Pollinations)",
-            "est_cost": 0.0, "needs": "—"}
+    # Аварийный режим — нормальное видео требует HiggsField или HeyGen.
+    return {"strategy": "free_slideshow", "fallback": True,
+            "reason": "Нет ключей HiggsField/HeyGen — аварийный ffmpeg-слайдшоу. "
+                      "Для нормального видео добавь HIGGSFIELD_API_KEY или HEYGEN_API_KEY.",
+            "est_cost": 0.0, "needs": "HIGGSFIELD_API_KEY или HEYGEN_API_KEY"}
 
 
 async def wow_review(brief: dict) -> dict:

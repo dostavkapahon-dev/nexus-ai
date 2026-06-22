@@ -20,6 +20,25 @@ from core.brand import system_prompt, cover_prompt, PLATFORM_SPECS
 # Платформы по умолчанию
 DEFAULT_PLATFORMS = ["instagram", "youtube", "tiktok", "telegram"]
 
+# Мозг-аналитик и креативный контроль — Claude. Помощники: Perplexity (поиск
+# трендов в реальном времени) и Gemini (резерв). Claude всё видит и решает.
+BRAIN_MODEL = "claude-sonnet-4-6"
+TREND_HELPER_MODEL = "sonar-pro"  # Perplexity; при отсутствии ключа ai_router сам уйдёт в фолбэк
+
+
+async def _research_trends(topic: str | None) -> str:
+    """Помощник ищет актуальные тренды (реальный поиск через Perplexity)."""
+    from core.ai_router import ai_router
+    q = (f"Найди 5 свежих вирусных трендов в нише AI/digital бизнес "
+         f"{'по теме: ' + topic if topic else 'в Instagram Reels и YouTube Shorts на этой неделе'}. "
+         f"Учитывай Казахстан/СНГ. Кратко: тема + почему залетает.")
+    try:
+        res = await ai_router.call(TREND_HELPER_MODEL,
+                                   "Ты ассистент-аналитик трендов. Отвечай кратко, по делу.", q)
+        return res.get("text", "")[:1500]
+    except Exception:
+        return ""
+
 _ANALYSIS_PROMPT = """\
 Ты — AI-маркетолог Pakhon Studio. Придумай ОДНУ тему дня для ниши AI/digital
 бизнес (Казахстан/СНГ) и распиши её так, чтобы Reels ЗАЛЕТЕЛ.
@@ -43,12 +62,15 @@ _ANALYSIS_PROMPT = """\
 
 
 async def _analyze(topic: str | None) -> dict:
-    """Шаг 1+2: анализ + план через AI (работает и на Gemini)."""
+    """Шаг 1+2: помощник ищет тренды → Claude (мозг) делает анализ + план."""
     from core.ai_router import ai_router
+    trends = await _research_trends(topic)
     hint = f"Тема задана пользователем: {topic}." if topic else "Тему выбери сам по трендам ниши."
+    if trends:
+        hint += f"\n\nСВЕЖИЕ ТРЕНДЫ (от ассистента, учти их):\n{trends}"
     prompt = _ANALYSIS_PROMPT.format(topic_hint=hint)
     try:
-        result = await ai_router.call("claude-sonnet-4-6", system_prompt(), prompt)
+        result = await ai_router.call(BRAIN_MODEL, system_prompt(), prompt)
         raw = result.get("text", "")
     except Exception as e:
         return {"theme": topic or "AI для бизнеса", "hook_type": "тайна",
