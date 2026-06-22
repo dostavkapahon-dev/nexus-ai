@@ -90,3 +90,29 @@ async def update_brand_voice(body: BrandVoiceBody):
         return {"ok": False, "error": "Пустой текст"}
     set_brand_voice(body.voice)
     return {"ok": True}
+
+
+class FactoryBody(BaseModel):
+    topic: Optional[str] = None
+    platforms: Optional[list] = None
+    dry_run: Optional[bool] = True
+    want_video: Optional[bool] = True
+
+
+@router.post("/factory")
+async def run_factory_endpoint(body: FactoryBody):
+    """Единый конвейер: анализ → генерация (Gemini/HeyGen/HiggsField/Imagen) →
+    публикация в Instagram/YouTube/TikTok/Telegram → отчёт.
+
+    dry_run=True (по умолчанию) — всё генерируем, но не публикуем.
+    """
+    from core.content_factory import run_factory
+    try:
+        result = await run_factory(
+            topic=body.topic, platforms=body.platforms,
+            dry_run=body.dry_run if body.dry_run is not None else True,
+            want_video=body.want_video if body.want_video is not None else True,
+        )
+        return {"ok": True, **result}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

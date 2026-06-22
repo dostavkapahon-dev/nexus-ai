@@ -188,6 +188,16 @@ async def _handle_command(chat_id: str, text: str):
         asyncio.create_task(nexus_core.generate_content_for_plan(args[0]))
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
+    elif cmd == "factory":
+        # Полный цикл: анализ → генерация → публикация. Без аргумента — dry-run.
+        from core.content_factory import run_factory
+        topic = " ".join(args) if args else None
+        publish = bool(args) and args[-1].lower() in ("post", "publish", "go")
+        if publish:
+            topic = " ".join(args[:-1]) or None
+        await send_message(chat_id, f"🏭 Фабрика контента запущена{' (публикация)' if publish else ' (превью)'}...")
+        asyncio.create_task(run_factory(topic=topic, dry_run=not publish))
+
     elif cmd.startswith("set_goal"):
         try:
             goal = int(args[0])
@@ -211,6 +221,8 @@ async def _handle_command(chat_id: str, text: str):
     else:
         cmds = [
             "/status   — статус системы",
+            "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
+            "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
             "/create   — создать контент",
             "/generate [id] — генерация по пункту плана",
