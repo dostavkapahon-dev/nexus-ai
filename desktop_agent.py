@@ -57,7 +57,57 @@ async def handle_command(cmd: dict) -> dict:
             page = await ensure_browser()
             img = await page.screenshot(type="jpeg", quality=60)
             b64 = base64.b64encode(img).decode()
-            return {"req_id": req_id, "ok": True, "screenshot": b64, "url": page.url}
+            size = page.viewport_size or {"width": 1280, "height": 720}
+            return {"req_id": req_id, "ok": True, "screenshot": b64, "url": page.url,
+                    "title": await page.title(), "width": size["width"], "height": size["height"]}
+
+        elif action == "click_xy":
+            # Click at absolute viewport coordinates (used by the vision agent).
+            page = await ensure_browser()
+            x = float(cmd.get("x", 0))
+            y = float(cmd.get("y", 0))
+            await page.mouse.click(x, y)
+            await asyncio.sleep(1)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "type_text":
+            # Type into the currently focused element (after a click).
+            page = await ensure_browser()
+            text = cmd.get("text", "")
+            clear = cmd.get("clear", False)
+            if clear:
+                await page.keyboard.press("Control+A")
+                await page.keyboard.press("Delete")
+            await page.keyboard.type(text, delay=30)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "key":
+            page = await ensure_browser()
+            await page.keyboard.press(cmd.get("key", "Enter"))
+            await asyncio.sleep(0.5)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "scroll":
+            page = await ensure_browser()
+            dy = int(cmd.get("dy", 600))
+            await page.mouse.wheel(0, dy)
+            await asyncio.sleep(0.8)
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "wait":
+            await asyncio.sleep(min(float(cmd.get("seconds", 2)), 15))
+            return {"req_id": req_id, "ok": True}
+
+        elif action == "back":
+            page = await ensure_browser()
+            await page.go_back(timeout=15000)
+            await asyncio.sleep(1)
+            return {"req_id": req_id, "ok": True, "url": page.url}
+
+        elif action == "page_text":
+            page = await ensure_browser()
+            text = await page.inner_text("body")
+            return {"req_id": req_id, "ok": True, "text": text[:6000]}
 
         elif action == "navigate":
             url = cmd.get("url", "")
