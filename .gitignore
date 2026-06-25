@@ -5,7 +5,6 @@ __pycache__/
 .venv/
 venv/
 node_modules/
-frontend/dist/
 browser_session/
 backend/output/
 backend/data/hook_history.json
