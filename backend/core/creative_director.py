@@ -88,7 +88,14 @@ def choose_strategy(content_type: str = "auto") -> dict:
       3) HeyGen / Runway — если только они доступны
       4) (аварийно) ffmpeg-слайдшоу — ТОЛЬКО если нет ключей HiggsField/HeyGen/Runway
     """
-    has_hf = bool(os.getenv("HIGGSFIELD_API_KEY"))
+    # HiggsField доступен через API-ключ ИЛИ через ваш аккаунт (браузер-агент)
+    def _agent_on():
+        try:
+            from api.routes_desktop import desktop_connected
+            return desktop_connected()
+        except Exception:
+            return False
+    has_hf = bool(os.getenv("HIGGSFIELD_API_KEY")) or _agent_on()
     has_hg = bool(os.getenv("HEYGEN_API_KEY"))
     has_rw = bool(os.getenv("RUNWAY_API_KEY"))
 
@@ -97,10 +104,11 @@ def choose_strategy(content_type: str = "auto") -> dict:
                 "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
 
     if has_hf:
+        via = "API" if os.getenv("HIGGSFIELD_API_KEY") else "ваш аккаунт (браузер-агент)"
         return {"strategy": "storyboard_to_higgsfield",
-                "reason": "HiggsField: раскадровка (безлимит фото) → анимация image2video",
+                "reason": f"HiggsField ({via}): раскадровка (безлимит фото) → анимация image2video",
                 "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
-                "needs": "HIGGSFIELD_API_KEY", "fallback": False}
+                "needs": "HIGGSFIELD_API_KEY или браузер-агент", "fallback": False}
 
     if has_hg:
         return {"strategy": "heygen_avatar", "reason": "HeyGen аватар",
