@@ -24,8 +24,9 @@ class GoogleLoginBody(BaseModel):
 async def login(body: LoginBody, request: Request):
     ip = request.client.host if request.client else "unknown"
     check_rate(f"login:{ip}")
-    expected = os.getenv("ADMIN_PASSWORD", "nexus-change-me")
-    if body.password != expected:
+    # .strip() — устойчивость к случайным пробелам/переносам в env-переменной
+    expected = os.getenv("ADMIN_PASSWORD", "nexus-change-me").strip()
+    if body.password.strip() != expected:
         raise HTTPException(status_code=401, detail="Неверный пароль")
     return {"token": make_token(), "method": "password"}
 
