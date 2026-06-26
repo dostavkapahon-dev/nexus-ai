@@ -3,12 +3,14 @@ services:
     name: nexus-ai
     runtime: python
     rootDir: backend
-    buildCommand: pip install -r requirements.txt && (cd ../frontend && npm install && npm run build || echo "frontend build skipped — using committed dist")
+    # Фронт уже собран и закоммичен (frontend/dist) — npm не нужен.
+    # Сборка только Python: лёгкая и не падает.
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
-      - key: ANTHROPIC_API_KEY
+      - key: ADMIN_PASSWORD
         sync: false
-      - key: OPENAI_API_KEY
+      - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY
         sync: false
@@ -16,30 +18,7 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      # Публикации
-      - key: INSTAGRAM_ACCESS_TOKEN
-        sync: false
-      - key: INSTAGRAM_ACCOUNT_ID
-        sync: false
-      - key: VK_ACCESS_TOKEN
-        sync: false
-      - key: VK_GROUP_ID
-        sync: false
-      - key: YOUTUBE_API_KEY
-        sync: false
-      # Генерация видео
-      - key: HEYGEN_API_KEY
-        sync: false
       - key: HIGGSFIELD_API_KEY
         sync: false
-      - key: RUNWAY_API_KEY
+      - key: HEYGEN_API_KEY
         sync: false
-      - key: ELEVENLABS_API_KEY
-        sync: false
-      # Браузерный агент
-      - key: NEXUS_TOKEN
-        sync: false
-    disk:
-      name: nexus-data
-      mountPath: /opt/render/project/src/backend
-      sizeGB: 1
