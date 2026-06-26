@@ -62,12 +62,19 @@ async def higgsfield_reel(motion_prompt: str, seed_image: str = None,
 
     Платим только за анимацию: сид-картинку берём бесплатно (Pollinations),
     HiggsField оживляет её. Промт движения короткий — экономим всё.
-    """
-    if not os.getenv("HIGGSFIELD_API_KEY"):
-        return {"ok": False, "error": "HIGGSFIELD_API_KEY не задан"}
-    from core.higgsfield import create_video, poll_video
 
+    Два пути:
+      1) API-ключ HIGGSFIELD_API_KEY → прямой вызов API
+      2) нет ключа, но подключён браузер-агент → генерация ЧЕРЕЗ ВАШ АККАУНТ
+         higgsfield.ai руками агента (MCP/account-вход, без ключа)
+    """
     seed = seed_image or free_image(fallback_image_prompt or "dark cinematic AI tech, gold neon")
+
+    if not os.getenv("HIGGSFIELD_API_KEY"):
+        # Путь через браузер-агента и ваш залогиненный аккаунт higgsfield.ai
+        return await higgsfield_via_browser(motion_prompt or "", seed)
+
+    from core.higgsfield import create_video, poll_video
     motion = (motion_prompt or "slow cinematic push-in, subtle parallax, dynamic light")[:400]
     started = await create_video(prompt=motion, image_url=seed, ratio="9:16")
     if not started.get("ok"):
@@ -76,3 +83,35 @@ async def higgsfield_reel(motion_prompt: str, seed_image: str = None,
     if done.get("ok"):
         return {"ok": True, "url": done["url"], "provider": "higgsfield", "seed": seed}
     return {"ok": False, "error": done.get("error", "higgsfield poll failed")}
+
+
+async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
+                                 max_steps: int = 32) -> dict:
+    """Генерация видео ЧЕРЕЗ ВАШ аккаунт higgsfield.ai руками браузер-агента.
+
+    Не нужен API-ключ: агент работает в вашем залогиненном браузере (start_agent.bat).
+    Подходит, когда HiggsField даёт доступ только через аккаунт/MCP, без ключа.
+    """
+    from api.routes_desktop import desktop_connected
+    if not desktop_connected():
+        return {"ok": False, "provider": "higgsfield_browser",
+                "error": "Браузер-агент не подключён. Запусти start_agent.bat и войди в higgsfield.ai."}
+
+    from core.browser_agent import run_agent
+    motion = (motion_prompt or "slow cinematic push-in, dynamic light, parallax")[:400]
+    task = (
+        "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй короткое вертикальное видео 9:16:\n"
+        "1. Открой создание видео (image-to-video или text-to-video).\n"
+        f"2. Вставь промт движения: {motion}\n"
+        + (f"3. Если можно задать первый кадр по ссылке — используй: {seed_image}\n" if seed_image else "")
+        + "4. Выбери формат 9:16 (вертикальный) и запусти генерацию.\n"
+        "5. Дождись готовности: делай wait по 10-15 сек и периодически скриншоть, пока видео не появится.\n"
+        "6. Когда готово — открой/скопируй ссылку на видео (кнопка Download/Share) и вызови done "
+        "с этой ссылкой в summary. Если требуется оплата/кредиты или вход — вызови ask."
+    )
+    res = await run_agent(task=task, start_url="https://higgsfield.ai/create", max_steps=max_steps)
+    ok = res.get("status") == "done"
+    return {"ok": ok, "provider": "higgsfield_browser",
+            "url": res.get("summary") if ok else None,
+            "status": res.get("status"), "detail": res.get("summary") or res.get("question"),
+            "steps": res.get("steps")}
