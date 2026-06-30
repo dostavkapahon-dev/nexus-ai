@@ -66,6 +66,7 @@ export default function Control() {
   // Фото
   const [photoPrompt, setPhotoPrompt] = useState('')
   const [photoPlatform, setPhotoPlatform] = useState('telegram')
+  const [photoProvider, setPhotoProvider] = useState('higgsfield')
   const [photoBusy, setPhotoBusy] = useState(false)
   const [photo, setPhoto] = useState(null)
 
@@ -98,7 +99,7 @@ export default function Control() {
     if (!photoPrompt.trim()) return
     setPhotoBusy(true); setPhoto(null)
     try {
-      const r = await automation.image({ prompt: photoPrompt, platform: photoPlatform })
+      const r = await automation.image({ prompt: photoPrompt, platform: photoPlatform, provider: photoProvider })
       setPhoto(r.data)
     } catch (e) {
       setPhoto({ ok: false, error: e.response?.data?.error || e.message })
@@ -197,16 +198,27 @@ export default function Control() {
             placeholder="Опиши кадр. Напр.: курьер на электровелосипеде, неоновый город ночью, кинематографично"
             className="w-full bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-3 py-2 text-sm text-[#e8e8f5] placeholder-[#5a5a7a] focus:border-cyan-500 outline-none resize-none" />
           <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
-            <label className="flex items-center gap-2 text-xs text-[#c0c0e0]">
-              Формат
-              <select value={photoPlatform} onChange={e => setPhotoPlatform(e.target.value)}
-                className="bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-2 py-1 text-xs text-[#e8e8f5] focus:border-cyan-500 outline-none">
-                <option value="telegram">Квадрат 1:1 (Telegram/пост)</option>
-                <option value="instagram">Вертикаль 9:16 (Stories/Reels)</option>
-                <option value="tiktok">Вертикаль 9:16 (TikTok)</option>
-                <option value="youtube">Вертикаль 9:16 (Shorts)</option>
-              </select>
-            </label>
+            <div className="flex items-center gap-3 flex-wrap">
+              <label className="flex items-center gap-2 text-xs text-[#c0c0e0]">
+                Движок
+                <select value={photoProvider} onChange={e => setPhotoProvider(e.target.value)}
+                  className="bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-2 py-1 text-xs text-[#e8e8f5] focus:border-cyan-500 outline-none">
+                  <option value="higgsfield">HiggsField Soul 🌌</option>
+                  <option value="auto">Авто (Imagen/DALL-E/беспл.)</option>
+                  <option value="pollinations">Pollinations (беспл.)</option>
+                </select>
+              </label>
+              <label className="flex items-center gap-2 text-xs text-[#c0c0e0]">
+                Формат
+                <select value={photoPlatform} onChange={e => setPhotoPlatform(e.target.value)}
+                  className="bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-2 py-1 text-xs text-[#e8e8f5] focus:border-cyan-500 outline-none">
+                  <option value="telegram">Квадрат 1:1 (Telegram/пост)</option>
+                  <option value="instagram">Вертикаль 9:16 (Stories/Reels)</option>
+                  <option value="tiktok">Вертикаль 9:16 (TikTok)</option>
+                  <option value="youtube">Вертикаль 9:16 (Shorts)</option>
+                </select>
+              </label>
+            </div>
             <button onClick={createPhoto} disabled={photoBusy || !photoPrompt.trim()}
               className="btn-primary flex items-center gap-2 disabled:opacity-50">
               {photoBusy ? <Loader className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
@@ -222,7 +234,12 @@ export default function Control() {
               </a>
             </div>
           )}
-          {photo?.ok === false && <div className="mt-3 text-xs text-red-400">{photo.error}</div>}
+          {photo?.ok === false && (
+            <div className="mt-3 text-xs text-red-400">
+              {photo.error || photo.detail || 'Не удалось создать фото'}
+              {photo.status === 'needs_input' && <span className="text-amber-400"> — агенту нужен ввод (кредиты/вход).</span>}
+            </div>
+          )}
         </div>
 
         {/* СЕРВИСЫ */}
