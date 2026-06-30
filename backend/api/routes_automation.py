@@ -51,6 +51,38 @@ async def generate_video_endpoint(body: VideoRequest):
         return {"ok": False, "error": str(e)}
 
 
+class ImageRequest(BaseModel):
+    prompt: str
+    provider: Optional[str] = "auto"  # auto/imagen/dalle3/stability/pollinations/higgsfield
+    platform: Optional[str] = "telegram"  # влияет на размер кадра
+
+
+@router.post("/image")
+async def generate_image_endpoint(body: ImageRequest):
+    """Создать фото/изображение по текстовому описанию.
+
+    Провайдеры: Imagen → DALL-E 3 → Stability → Pollinations (бесплатный fallback),
+    либо higgsfield (модель Soul) — через API-ключ или ваш аккаунт (браузер-агент).
+    """
+    if not body.prompt.strip():
+        return {"ok": False, "error": "Поле 'prompt' обязательно."}
+    vertical = (body.platform or "telegram") in ("tiktok", "instagram", "youtube")
+    try:
+        if (body.provider or "").lower() == "higgsfield":
+            from core.skills import higgsfield_photo
+            return await higgsfield_photo(body.prompt.strip(), ratio="9:16" if vertical else "1:1")
+
+        from core.media_generator import generate_image
+        url = await generate_image(
+            body.prompt.strip(),
+            provider=body.provider or "auto",
+            platform=body.platform or "telegram",
+        )
+        return {"ok": True, "url": url}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 @router.get("/video/models")
 async def list_video_models():
     """Список доступных моделей видео-генерации (в т.ч. много моделей HiggsField)."""

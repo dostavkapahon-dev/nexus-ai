@@ -82,3 +82,48 @@ async def poll_video(job_id: str, attempts: int = 30, delay: float = 10) -> dict
         return {"ok": False, "error": "timeout waiting for HiggsField video"}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# Модель HiggsField для генерации фото (Soul — реалистичные кадры).
+IMAGE_MODEL_DEFAULT = "higgsfield-soul"
+
+
+async def create_image(prompt: str, ratio: str = "1:1", model: str = None) -> dict:
+    """Запускает генерацию фото (HiggsField Soul). Возвращает {'ok': True, 'job_id': ...}."""
+    if not os.getenv("HIGGSFIELD_API_KEY"):
+        return {"ok": False, "error": "HIGGSFIELD_API_KEY not set"}
+    model = model or os.getenv("HIGGSFIELD_IMAGE_MODEL", IMAGE_MODEL_DEFAULT)
+    path = os.getenv("HIGGSFIELD_IMAGE_PATH", "text2image")
+    payload = {"prompt": prompt[:1000], "aspect_ratio": ratio, "model": model}
+    try:
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"{_base()}/{path}", headers=_headers(), json=payload)
+            data = r.json()
+            if r.status_code >= 400:
+                return {"ok": False, "error": str(data)}
+            return {"ok": True, "job_id": data.get("id") or data.get("job_id")}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+async def poll_image(job_id: str, attempts: int = 30, delay: float = 5) -> dict:
+    """Опрашивает статус фото-задачи. Возвращает {'ok': True, 'url': ...} когда готово."""
+    if not os.getenv("HIGGSFIELD_API_KEY") or not job_id:
+        return {"ok": False, "error": "no api key or job_id"}
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            for _ in range(attempts):
+                r = await c.get(f"{_base()}/jobs/{job_id}", headers=_headers())
+                d = r.json()
+                status = (d.get("status") or "").lower()
+                if status in ("completed", "succeeded", "success"):
+                    out = d.get("output") or {}
+                    url = (d.get("image_url") or out.get("url")
+                           or (out.get("images") or [None])[0])
+                    return {"ok": True, "url": url}
+                if status in ("failed", "error"):
+                    return {"ok": False, "error": d.get("error", "generation failed")}
+                await asyncio.sleep(delay)
+        return {"ok": False, "error": "timeout waiting for HiggsField image"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

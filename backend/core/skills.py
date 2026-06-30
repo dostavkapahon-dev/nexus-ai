@@ -115,3 +115,55 @@ async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
             "url": res.get("summary") if ok else None,
             "status": res.get("status"), "detail": res.get("summary") or res.get("question"),
             "steps": res.get("steps")}
+
+
+async def higgsfield_photo(prompt: str, ratio: str = "1:1") -> dict:
+    """СКИЛЛ HiggsField: генерация ФОТО (модель Soul) по текстовому описанию.
+
+    Два пути (как и для видео):
+      1) API-ключ HIGGSFIELD_API_KEY → прямой вызов API
+      2) нет ключа, но подключён браузер-агент → генерация ЧЕРЕЗ ВАШ АККАУНТ
+         higgsfield.ai руками агента (account-вход, без ключа)
+    """
+    if not os.getenv("HIGGSFIELD_API_KEY"):
+        return await higgsfield_image_via_browser(prompt or "", ratio)
+
+    from core.higgsfield import create_image, poll_image
+    started = await create_image(prompt=(prompt or "")[:1000], ratio=ratio)
+    if not started.get("ok"):
+        return {"ok": False, "provider": "higgsfield", "error": started.get("error", "higgsfield image start failed")}
+    done = await poll_image(started["job_id"])
+    if done.get("ok"):
+        return {"ok": True, "url": done["url"], "provider": "higgsfield"}
+    return {"ok": False, "provider": "higgsfield", "error": done.get("error", "higgsfield image poll failed")}
+
+
+async def higgsfield_image_via_browser(prompt: str, ratio: str = "1:1",
+                                       max_steps: int = 32) -> dict:
+    """Генерация ФОТО ЧЕРЕЗ ВАШ аккаунт higgsfield.ai руками браузер-агента.
+
+    Не нужен API-ключ: агент работает в вашем залогиненном браузере (start_agent.bat).
+    """
+    from api.routes_desktop import desktop_connected
+    if not desktop_connected():
+        return {"ok": False, "provider": "higgsfield_browser",
+                "error": "Браузер-агент не подключён. Запусти start_agent.bat и войди в higgsfield.ai."}
+
+    from core.browser_agent import run_agent
+    desc = (prompt or "cinematic realistic photo")[:600]
+    vertical = ratio in ("9:16", "2:3", "3:4")
+    task = (
+        "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй ФОТО (image generation, модель Soul):\n"
+        "1. Открой создание изображения (Soul / Image / text-to-image).\n"
+        f"2. Вставь промт описания кадра: {desc}\n"
+        f"3. Выбери формат {'9:16 (вертикальный)' if vertical else '1:1 (квадрат)'} и запусти генерацию.\n"
+        "4. Дождись готовности: делай wait по 5-10 сек и периодически скриншоть, пока фото не появится.\n"
+        "5. Когда готово — открой/скопируй ссылку на изображение (Download/Share) и вызови done "
+        "с этой ссылкой в summary. Если требуется оплата/кредиты или вход — вызови ask."
+    )
+    res = await run_agent(task=task, start_url="https://higgsfield.ai/create", max_steps=max_steps)
+    ok = res.get("status") == "done"
+    return {"ok": ok, "provider": "higgsfield_browser",
+            "url": res.get("summary") if ok else None,
+            "status": res.get("status"), "detail": res.get("summary") or res.get("question"),
+            "steps": res.get("steps")}
