@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import {
   Rocket, Wand2, Loader, Save, CheckCircle, XCircle, Monitor, MonitorOff,
-  Clapperboard, Megaphone, Star, Film, Brain, Video, Send, RefreshCw
+  Clapperboard, Megaphone, Star, Film, Brain, Video, Send, RefreshCw,
+  Image as ImageIcon, Download
 } from 'lucide-react'
 import { connections as connApi, automation, desktop } from '../lib/api'
 
@@ -62,6 +63,12 @@ export default function Control() {
   const [running, setRunning] = useState(false)
   const [res, setRes] = useState(null)
 
+  // Фото
+  const [photoPrompt, setPhotoPrompt] = useState('')
+  const [photoPlatform, setPhotoPlatform] = useState('telegram')
+  const [photoBusy, setPhotoBusy] = useState(false)
+  const [photo, setPhoto] = useState(null)
+
   // Голос бренда
   const [voice, setVoice] = useState('')
   const [voiceSaved, setVoiceSaved] = useState(false)
@@ -85,6 +92,18 @@ export default function Control() {
     try { const r = await automation.factory({ topic: topic || null, dry_run: !publish }); setRes(r.data) }
     catch (e) { setRes({ ok: false, error: e.response?.data?.error || e.message }) }
     setRunning(false)
+  }
+
+  const createPhoto = async () => {
+    if (!photoPrompt.trim()) return
+    setPhotoBusy(true); setPhoto(null)
+    try {
+      const r = await automation.image({ prompt: photoPrompt, platform: photoPlatform })
+      setPhoto(r.data)
+    } catch (e) {
+      setPhoto({ ok: false, error: e.response?.data?.error || e.message })
+    }
+    setPhotoBusy(false)
   }
 
   const plan = res?.plan || {}, strat = res?.strategy || {}, wow = res?.wow || {}
@@ -165,6 +184,45 @@ export default function Control() {
             </div>
           )}
           {res?.ok === false && <div className="mt-3 text-xs text-red-400">{res.error}</div>}
+        </div>
+
+        {/* ФОТО */}
+        <div className="card p-5 lg:col-span-2">
+          <div className="flex items-center gap-2 mb-3">
+            <ImageIcon className="w-5 h-5 text-cyan-400" />
+            <span className="font-semibold">Создать фото</span>
+            <span className="text-[11px] text-[#5a5a7a]">— описание → изображение (Imagen / DALL-E / Stability / беспл.)</span>
+          </div>
+          <textarea rows={2} value={photoPrompt} onChange={e => setPhotoPrompt(e.target.value)}
+            placeholder="Опиши кадр. Напр.: курьер на электровелосипеде, неоновый город ночью, кинематографично"
+            className="w-full bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-3 py-2 text-sm text-[#e8e8f5] placeholder-[#5a5a7a] focus:border-cyan-500 outline-none resize-none" />
+          <div className="flex items-center justify-between mt-3 flex-wrap gap-2">
+            <label className="flex items-center gap-2 text-xs text-[#c0c0e0]">
+              Формат
+              <select value={photoPlatform} onChange={e => setPhotoPlatform(e.target.value)}
+                className="bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-2 py-1 text-xs text-[#e8e8f5] focus:border-cyan-500 outline-none">
+                <option value="telegram">Квадрат 1:1 (Telegram/пост)</option>
+                <option value="instagram">Вертикаль 9:16 (Stories/Reels)</option>
+                <option value="tiktok">Вертикаль 9:16 (TikTok)</option>
+                <option value="youtube">Вертикаль 9:16 (Shorts)</option>
+              </select>
+            </label>
+            <button onClick={createPhoto} disabled={photoBusy || !photoPrompt.trim()}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50">
+              {photoBusy ? <Loader className="w-4 h-4 animate-spin" /> : <Wand2 className="w-4 h-4" />}
+              {photoBusy ? 'Рисую...' : 'Создать фото'}
+            </button>
+          </div>
+          {photo?.ok && photo.url && (
+            <div className="mt-4 flex flex-col items-center gap-2">
+              <img src={photo.url} alt="" className="rounded-lg max-h-96 border border-[#1c1c30]" />
+              <a href={photo.url} target="_blank" rel="noreferrer" download
+                className="text-xs text-cyan-400 hover:underline flex items-center gap-1">
+                <Download className="w-3 h-3" /> Открыть / скачать
+              </a>
+            </div>
+          )}
+          {photo?.ok === false && <div className="mt-3 text-xs text-red-400">{photo.error}</div>}
         </div>
 
         {/* СЕРВИСЫ */}
