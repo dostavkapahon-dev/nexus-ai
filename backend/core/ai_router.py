@@ -3,7 +3,7 @@ import time
 import asyncio
 import anthropic
 import openai
-import google.generativeai as genai
+from core import gemini_rest
 
 AI_ROUTING = {
     # Anthropic
@@ -24,7 +24,41 @@ AI_ROUTING = {
     # DeepSeek
     "deepseek-chat": "deepseek",
     "deepseek-reasoner": "deepseek",
+    # xAI Grok (OpenAI-совместимый)
+    "grok-2-latest": "xai",
+    "grok-beta": "xai",
+    # Mistral
+    "mistral-large-latest": "mistral",
+    "mistral-small-latest": "mistral",
 }
+
+# OpenAI-совместимые провайдеры: провайдер → (env-ключа, base_url).
+# Чтобы добавить НОВЫЙ ИИ — достаточно вписать сюда строку и env-ключ.
+OPENAI_COMPATIBLE = {
+    "openai":     ("OPENAI_API_KEY",     None),
+    "perplexity": ("PERPLEXITY_API_KEY", "https://api.perplexity.ai"),
+    "deepseek":   ("DEEPSEEK_API_KEY",   "https://api.deepseek.com"),
+    "xai":        ("XAI_API_KEY",        "https://api.x.ai/v1"),
+    "mistral":    ("MISTRAL_API_KEY",    "https://api.mistral.ai/v1"),
+    # OpenRouter — один ключ открывает СОТНИ моделей. Модель вида "vendor/model"
+    # (например "meta-llama/llama-3.1-70b-instruct") маршрутизируется сюда автоматически.
+    "openrouter": ("OPENROUTER_API_KEY", "https://openrouter.ai/api/v1"),
+    # Свой endpoint (локальная LLM / Ollama / любой OpenAI-совместимый сервер).
+    "custom":     ("CUSTOM_AI_API_KEY",  None),  # base_url = CUSTOM_AI_BASE_URL
+}
+
+
+def _resolve_provider(model: str) -> str:
+    """Определяет провайдера для модели. Неизвестные модели с '/' в имени
+    (формат OpenRouter) или при заданном OPENROUTER_API_KEY идут в OpenRouter,
+    иначе — в свой endpoint (custom), иначе — openai по умолчанию."""
+    if model in AI_ROUTING:
+        return AI_ROUTING[model]
+    if "/" in model or os.getenv("OPENROUTER_API_KEY"):
+        return "openrouter"
+    if os.getenv("CUSTOM_AI_BASE_URL"):
+        return "custom"
+    return "openai"
 
 # Минимум: мозг — Claude, бесплатный резерв — Gemini. Остальные (GPT/DeepSeek)
 # подхватываются автоматически, только если их ключи заданы.
@@ -85,54 +119,36 @@ class AIRouter:
         tokens = msg.usage.input_tokens + msg.usage.output_tokens
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.003), "model_used": model}
 
-    async def _call_openai(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    async def _call_openai_compatible(self, provider, model, system, prompt):
+        env_key, base_url = OPENAI_COMPATIBLE[provider]
+        if provider == "custom":
+            base_url = os.getenv("CUSTOM_AI_BASE_URL") or base_url
+        client = openai.AsyncOpenAI(api_key=os.getenv(env_key), base_url=base_url)
         resp = await client.chat.completions.create(model=model, max_tokens=4096,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
         text = resp.choices[0].message.content
-        tokens = resp.usage.total_tokens
-        return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.005), "model_used": model}
+        tokens = resp.usage.total_tokens if resp.usage else len(text.split()) * 2
+        return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.002), "model_used": model}
 
     async def _call_gemini(self, model, system, prompt):
-        genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        m = genai.GenerativeModel(model, system_instruction=system)
-        resp = await asyncio.to_thread(m.generate_content, prompt)
-        text = resp.text
+        text = await gemini_rest.generate(model, system, prompt)
         tokens = len(text.split()) * 2
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.0001), "model_used": model}
-
-    async def _call_perplexity(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("PERPLEXITY_API_KEY"), base_url="https://api.perplexity.ai")
-        resp = await client.chat.completions.create(model=model, max_tokens=4096,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
-        text = resp.choices[0].message.content
-        tokens = resp.usage.total_tokens if resp.usage else len(text.split()) * 2
-        return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.003), "model_used": model}
-
-    async def _call_deepseek(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
-        resp = await client.chat.completions.create(model=model, max_tokens=4096,
-            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
-        text = resp.choices[0].message.content
-        tokens = resp.usage.total_tokens if resp.usage else len(text.split()) * 2
-        return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.00014), "model_used": model}
 
     async def call(self, model: str, system: str, prompt: str) -> dict:
         models_to_try = [model] + [m for m in FALLBACK_CHAIN if m != model]
         last_error = None
         for m in models_to_try:
-            provider = AI_ROUTING.get(m, "openai")
+            provider = _resolve_provider(m)
             for attempt in range(3):
                 try:
                     t0 = time.time()
                     if provider == "anthropic":
                         result = await self._call_claude(m, system, prompt)
-                    elif provider == "perplexity":
-                        result = await self._call_perplexity(m, system, prompt)
-                    elif provider == "deepseek":
-                        result = await self._call_deepseek(m, system, prompt)
-                    elif provider == "openai":
-                        result = await self._call_openai(m, system, prompt)
+                    elif provider == "google":
+                        result = await self._call_gemini(m, system, prompt)
+                    elif provider in OPENAI_COMPATIBLE:
+                        result = await self._call_openai_compatible(provider, m, system, prompt)
                     else:
                         result = await self._call_gemini(m, system, prompt)
                     result["duration_sec"] = round(time.time() - t0, 2)

@@ -20,6 +20,11 @@ class ConnectionsBody(BaseModel):
     openai_api_key: Optional[str] = None
     gemini_api_key: Optional[str] = None
     perplexity_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    xai_api_key: Optional[str] = None
+    mistral_api_key: Optional[str] = None
+    custom_ai_base_url: Optional[str] = None
+    custom_ai_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
@@ -134,6 +139,31 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
                     results["telegram_bot_token"] = {"ok": False, "message": d.get("description","Неверный токен")}
         except Exception as e:
             results["telegram_bot_token"] = {"ok": False, "message": str(e)[:120]}
+
+    # OpenAI-совместимые провайдеры (OpenRouter / Grok / Mistral / свой endpoint)
+    compat = {
+        "openrouter_api_key": ("https://openrouter.ai/api/v1", "OpenRouter"),
+        "xai_api_key": ("https://api.x.ai/v1", "Grok (xAI)"),
+        "mistral_api_key": ("https://api.mistral.ai/v1", "Mistral"),
+    }
+    for field, (base_url, label) in compat.items():
+        if key := resolve(field):
+            try:
+                import openai
+                client = openai.AsyncOpenAI(api_key=key, base_url=base_url)
+                await client.models.list()
+                results[field] = {"ok": True, "message": f"{label} подключён ✓"}
+            except Exception as e:
+                results[field] = {"ok": False, "message": str(e)[:120]}
+
+    if (base := resolve("custom_ai_base_url")):
+        try:
+            import openai
+            client = openai.AsyncOpenAI(api_key=resolve("custom_ai_api_key") or "none", base_url=base)
+            await client.models.list()
+            results["custom_ai_base_url"] = {"ok": True, "message": "Свой endpoint отвечает ✓"}
+        except Exception as e:
+            results["custom_ai_base_url"] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("instagram_access_token"):
         try:
