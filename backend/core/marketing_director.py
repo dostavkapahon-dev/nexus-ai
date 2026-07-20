@@ -161,20 +161,15 @@ _GEMINI_DIRECTOR_DOC = """\
 
 
 async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12) -> dict:
-    import google.generativeai as genai
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel(
-        GEMINI_DIRECTOR_MODEL,
-        system_instruction=_full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC,
-        generation_config={"response_mime_type": "application/json"},
-    )
+    from core import gemini_rest
+    system = _full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC
     history = ""
     steps = []
     for _ in range(max_steps):
         prompt = (f"ЦЕЛЬ: {goal}\n\nКОНТЕКСТ: {context or '—'}\n\n"
                   f"Журнал выполнения:\n{history or '—'}\n\nРеши следующий шаг.")
-        resp = await asyncio.to_thread(model.generate_content, prompt)
-        raw = (getattr(resp, "text", "") or "").strip()
+        raw = (await gemini_rest.generate(
+            GEMINI_DIRECTOR_MODEL, system, prompt, json_mode=True) or "").strip()
         try:
             s, e = raw.find("{"), raw.rfind("}") + 1
             data = json.loads(raw[s:e])
