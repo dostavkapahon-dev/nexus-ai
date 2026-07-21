@@ -11,7 +11,7 @@ DEFAULT_PROMPTS = {
     },
     "viral_hunter": {
         "system": "You are ViralHunter, expert at identifying viral content patterns. Respond in JSON.",
-        "template": "Find viral content patterns for niche: {niche}\nPlatforms: {platforms}\nAudience: {audience}\n\nRespond with JSON: {\"viral_topics\": [...], \"hooks\": [...], \"formats\": [...], \"hashtags\": [...]}",
+        "template": "Find viral content patterns for niche: {niche}\nPlatforms: {platforms}\nAudience: {audience}\n\nReal account data (bio, followers, and TOP performing posts by engagement — base ideas on what actually worked here):\n{account_data}\n\nRespond with JSON: {\"viral_topics\": [...], \"hooks\": [...], \"formats\": [...], \"hashtags\": [...]}",
         "model": "claude-sonnet-4-20250514"
     },
     "strategist": {

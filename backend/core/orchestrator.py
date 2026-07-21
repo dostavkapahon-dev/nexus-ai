@@ -70,9 +70,22 @@ class NexusCore:
                 niche_profile = await analyst.analyze(db, niche_id, niche.name, niche.city or "", niche.goal, niche.tone_of_voice)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "niche_analyst"})
 
+                # Досье аккаунта из Ayrshare (шапка + топ роликов) — чтобы бот
+                # планировал контент на реальных данных, а не вслепую.
+                account_intel = None
+                try:
+                    from publishers.ayrshare_pub import is_configured as ayr_ready, get_account_intelligence
+                    if ayr_ready():
+                        ig_platforms = [p for p in (niche.platforms or []) if p in
+                                        ("instagram", "tiktok", "youtube", "facebook", "twitter", "linkedin")]
+                        account_intel = await get_account_intelligence(ig_platforms or ["instagram"])
+                        await broadcast(niche_id, {"event": "account_intel", "data": bool(account_intel)})
+                except Exception:
+                    account_intel = None
+
                 await broadcast(niche_id, {"event": "agent_start", "agent": "viral_hunter"})
                 hunter = ViralHunter()
-                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}))
+                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}), account_intel)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "viral_hunter"})
 
                 # Upload to Google Drive
@@ -95,7 +108,7 @@ class NexusCore:
                 db.add(NicheAnalysisCache(
                     niche_key=niche_key, drive_file_id=drive_file_id,
                     drive_url=drive_url,
-                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data}
+                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data, "account_intel": account_intel}
                 ))
                 await db.commit()
 
