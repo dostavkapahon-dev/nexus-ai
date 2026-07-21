@@ -26,9 +26,24 @@ AI_ROUTING = {
     "deepseek-reasoner": "deepseek",
 }
 
-# Минимум: мозг — Claude, бесплатный резерв — Gemini. Остальные (GPT/DeepSeek)
-# подхватываются автоматически, только если их ключи заданы.
-FALLBACK_CHAIN = ["claude-sonnet-4-6", "gemini-2.0-flash"]
+# Резерв на случай сбоя основной модели. Порядок «дёшево → дорого»:
+# сначала самые дешёвые/бесплатные, Claude — в самом конце как надёжный мозг.
+FALLBACK_CHAIN = ["gemini-1.5-flash", "gemini-2.0-flash", "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
+
+# Какая env-переменная с ключом нужна каждому провайдеру.
+PROVIDER_KEY_ENV = {
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "perplexity": "PERPLEXITY_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+}
+
+
+def _has_key(model: str) -> bool:
+    """Есть ли ключ у провайдера этой модели (иначе нет смысла её пробовать)."""
+    provider = AI_ROUTING.get(model, "openai")
+    return bool(os.getenv(PROVIDER_KEY_ENV.get(provider, ""), ""))
 
 PREMIUM_MODELS = {
     "niche_analyst": "sonar-pro",
@@ -118,7 +133,12 @@ class AIRouter:
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.00014), "model_used": model}
 
     async def call(self, model: str, system: str, prompt: str) -> dict:
-        models_to_try = [model] + [m for m in FALLBACK_CHAIN if m != model]
+        # Порядок: запрошенная модель → cheap-first фолбэк.
+        ordered = [model] + [m for m in FALLBACK_CHAIN if m != model]
+        # Пропускаем модели без ключа провайдера, чтобы не жечь время на заведомый сбой.
+        with_keys = [m for m in ordered if _has_key(m)]
+        # Если ключей нет вовсе (напр. локальный тест) — пробуем как есть.
+        models_to_try = with_keys or ordered
         last_error = None
         for m in models_to_try:
             provider = AI_ROUTING.get(m, "openai")
