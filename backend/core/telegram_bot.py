@@ -37,8 +37,9 @@ def _main_menu_kb() -> dict:
          {"text": "📋 План", "callback_data": "plan"}],
         [{"text": "✍️ Создать", "callback_data": "create"},
          {"text": "📤 Опубликовать", "callback_data": "publish"}],
-        [{"text": "🏭 Фабрика (превью)", "callback_data": "factory"},
+        [{"text": "🧠 Стратегия", "callback_data": "strategy"},
          {"text": "📈 Тренды", "callback_data": "trend"}],
+        [{"text": "🏭 Фабрика (превью)", "callback_data": "factory"}],
         [{"text": "⏸ Пауза", "callback_data": "pause"},
          {"text": "▶️ Возобновить", "callback_data": "resume"}],
         [{"text": "⚙️ Настройки", "callback_data": "config"}],
@@ -59,6 +60,7 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "status", "description": "Статус системы"},
+        {"command": "strategy", "description": "Анализ + выбор стратегии"},
         {"command": "factory", "description": "Весь цикл: анализ→генерация→превью"},
         {"command": "create", "description": "Создать контент"},
         {"command": "publish", "description": "Опубликовать очередь"},
@@ -87,6 +89,40 @@ async def _handle_command(chat_id: str, text: str):
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
                            reply_markup=_main_menu_kb())
+        return
+
+    if cmd == "strategy":
+        await send_message(chat_id, "🧠 Анализирую свой аккаунт и тренды, готовлю варианты стратегии...")
+        async with AsyncSessionLocal() as db:
+            from core.strategy_advisor import build_options
+            data = await build_options(db)
+        analysis = data.get("analysis", [])
+        options = data.get("options", [])
+        lines = ["📊 <b>Анализ</b>"] + [f"• {a}" for a in analysis]
+        lines += ["", "🎯 <b>Варианты стратегии</b>"]
+        for i, o in enumerate(options):
+            lines.append(f"\n<b>{i+1}. {o.get('title','')}</b>\n{o.get('desc','')}\n<i>{o.get('plan','')}</i>")
+        kb = {"inline_keyboard": [[
+            {"text": f"Взять вариант {i+1}", "callback_data": f"strat_{i}"}
+        ] for i in range(len(options))]} if options else None
+        await send_message(chat_id, "\n".join(lines), reply_markup=kb)
+        return
+
+    if cmd.startswith("strat_"):
+        try:
+            idx = int(cmd.split("_", 1)[1])
+        except (ValueError, IndexError):
+            await send_message(chat_id, "❌ Не понял выбор")
+            return
+        async with AsyncSessionLocal() as db:
+            from core.strategy_advisor import choose_option
+            chosen = await choose_option(db, idx)
+        if chosen:
+            await send_message(chat_id,
+                               f"✅ Принята стратегия: <b>{chosen.get('title','')}</b>\n"
+                               f"{chosen.get('plan','')}\n\nТеперь /create будет учитывать её.")
+        else:
+            await send_message(chat_id, "❌ Список вариантов устарел — запусти /strategy заново")
         return
 
     if cmd == "status":
@@ -279,6 +315,7 @@ async def _handle_command(chat_id: str, text: str):
         cmds = [
             "/menu     — пульт с кнопками",
             "/status   — статус системы",
+            "/strategy — анализ + выбор стратегии",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",

@@ -123,6 +123,15 @@ class NexusCore:
                     msg += f"\n📂 <a href=\"{drive_url}\">Открыть анализ на Google Диске</a>"
                 await _send_telegram_report(msg)
 
+            # Если пользователь выбрал стратегию в Telegram (/strategy) — учитываем её.
+            try:
+                from core.strategy_advisor import get_chosen
+                chosen = await get_chosen(db)
+                if chosen:
+                    viral_data = {**(viral_data or {}), "chosen_strategy": chosen}
+            except Exception:
+                pass
+
             await broadcast(niche_id, {"event": "agent_start", "agent": "strategist"})
             strategist = Strategist()
             plan_items = await strategist.create_plan(
