@@ -7,6 +7,7 @@ import NewNiche from './pages/NewNiche'
 import Queue from './pages/Queue'
 import PromptStudio from './pages/PromptStudio'
 import Connections from './pages/Connections'
+import BotSetup from './pages/BotSetup'
 import Analytics from './pages/Analytics'
 import Director from './pages/Director'
 import Login from './pages/Login'
@@ -17,6 +18,7 @@ const NAV = [
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
+  { to: '/bot',         icon: Bot,             label: 'Telegram-бот' },
   { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
 ]
 
@@ -82,6 +84,7 @@ function Layout() {
           <Route path="/analytics"   element={<Analytics />} />
           <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />
+          <Route path="/bot"         element={<BotSetup />} />
         </Routes>
       </main>
     </div>

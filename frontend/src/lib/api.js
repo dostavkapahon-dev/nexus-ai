@@ -71,6 +71,15 @@ export const infrastructure = {
   check: () => api.post('/infrastructure/check'),
 }
 
+export const bot = {
+  status: () => api.get('/bot/status'),
+  testPost: (chat_id) => api.post('/bot/test-post', { chat_id }),
+}
+
+export const social = {
+  accounts: () => api.get('/social/accounts'),
+}
+
 export const desktop = {
   status: () => api.get('/desktop/status'),
   command: (body) => api.post('/desktop/command', body),

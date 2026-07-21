@@ -22,6 +22,7 @@ class ConnectionsBody(BaseModel):
     perplexity_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
+    telegram_post_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
     ayrshare_api_key: Optional[str] = None
@@ -233,6 +234,56 @@ async def social_intelligence(body: SocialAnalyticsBody):
         return await get_account_intelligence(body.platforms)
     except Exception as e:
         return {"error": str(e)[:200]}
+
+
+@router.get("/api/bot/status")
+async def bot_status(db: AsyncSession = Depends(get_db)):
+    """Статус Telegram-бота: имя, задан ли админ-чат и группа постов."""
+    db_result = await db.execute(select(Connection))
+    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    admin = db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    group = db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "")
+    out = {"has_token": bool(token), "admin_chat_id": bool(admin),
+           "post_chat_id": group or "", "username": None, "ok": False}
+    if not token:
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+            d = r.json()
+            if d.get("ok"):
+                out["ok"] = True
+                out["username"] = d["result"].get("username")
+    except Exception as e:
+        out["error"] = str(e)[:120]
+    return out
+
+
+class BotTestBody(BaseModel):
+    chat_id: Optional[str] = None
+
+
+@router.post("/api/bot/test-post")
+async def bot_test_post(body: BotTestBody, db: AsyncSession = Depends(get_db)):
+    """Отправляет тестовое сообщение в группу постов (или указанный chat_id)."""
+    db_result = await db.execute(select(Connection))
+    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = body.chat_id or db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "") \
+        or db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        return {"ok": False, "message": "Не задан токен бота или chat_id группы"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                             json={"chat_id": chat, "text": "✅ NEXUS AI: группа подключена — сюда будут приходить посты."})
+            d = r.json()
+            if d.get("ok"):
+                return {"ok": True, "message": "Отправлено ✓ Проверь группу"}
+            return {"ok": False, "message": d.get("description", "Ошибка")[:150]}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:150]}
 
 
 @router.get("/api/analytics/{niche_id}")

@@ -16,13 +16,61 @@ _offset = 0
 def _url(method: str) -> str:
     return f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN', '')}/{method}"
 
-async def send_message(chat_id: str, text: str, parse_mode: str = "HTML"):
+async def send_message(chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None):
+    try:
+        payload = {
+            "chat_id": chat_id, "text": text,
+            "parse_mode": parse_mode, "disable_web_page_preview": True
+        }
+        if reply_markup:
+            payload["reply_markup"] = reply_markup
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(_url("sendMessage"), json=payload)
+    except Exception:
+        pass
+
+
+def _main_menu_kb() -> dict:
+    """Инлайн-кнопки пульта управления."""
+    return {"inline_keyboard": [
+        [{"text": "📊 Статус", "callback_data": "status"},
+         {"text": "📋 План", "callback_data": "plan"}],
+        [{"text": "✍️ Создать", "callback_data": "create"},
+         {"text": "📤 Опубликовать", "callback_data": "publish"}],
+        [{"text": "🏭 Фабрика (превью)", "callback_data": "factory"},
+         {"text": "📈 Тренды", "callback_data": "trend"}],
+        [{"text": "⏸ Пауза", "callback_data": "pause"},
+         {"text": "▶️ Возобновить", "callback_data": "resume"}],
+        [{"text": "⚙️ Настройки", "callback_data": "config"}],
+    ]}
+
+
+async def _answer_callback(callback_id: str, text: str = ""):
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(_url("sendMessage"), json={
-                "chat_id": chat_id, "text": text,
-                "parse_mode": parse_mode, "disable_web_page_preview": True
-            })
+            await c.post(_url("answerCallbackQuery"),
+                         json={"callback_query_id": callback_id, "text": text})
+    except Exception:
+        pass
+
+
+async def setup_bot_commands():
+    """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
+    cmds = [
+        {"command": "menu", "description": "Пульт управления (кнопки)"},
+        {"command": "status", "description": "Статус системы"},
+        {"command": "factory", "description": "Весь цикл: анализ→генерация→превью"},
+        {"command": "create", "description": "Создать контент"},
+        {"command": "publish", "description": "Опубликовать очередь"},
+        {"command": "plan", "description": "Контент-план на неделю"},
+        {"command": "trend", "description": "Тренды сейчас"},
+        {"command": "pause", "description": "Пауза"},
+        {"command": "resume", "description": "Возобновить"},
+        {"command": "config", "description": "Настройки"},
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(_url("setMyCommands"), json={"commands": cmds})
     except Exception:
         pass
 
@@ -31,7 +79,15 @@ async def _handle_command(chat_id: str, text: str):
     from agents.reporter import reporter
 
     cmd = text.strip().split()[0].lower().replace("/", "")
+    # убираем @botusername из команды (в группах Telegram добавляет его)
+    cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
+
+    if cmd in ("menu", "start"):
+        await send_message(chat_id,
+                           "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
+                           reply_markup=_main_menu_kb())
+        return
 
     if cmd == "status":
         async with AsyncSessionLocal() as db:
@@ -144,7 +200,8 @@ async def _handle_command(chat_id: str, text: str):
                 f"🎯 Режим: {(p.ai_mode or 'economy').upper()}\n"
                 f"📝 Продукт: {(p.product_description or '—')[:100]}\n"
                 f"🗓 Стратегия: {p.strategy_focus} · {p.strategy_duration} дней\n"
-                f"📂 Google Drive: {'✅' if p.google_drive_folder_id else '❌'}"
+                f"📂 Google Drive: {'✅' if p.google_drive_folder_id else '❌'}\n"
+                f"📢 Группа постов: {'✅ ' + os.getenv('TELEGRAM_POST_CHAT_ID') if os.getenv('TELEGRAM_POST_CHAT_ID') else '❌ (постим в этот чат)'}"
             )
         else:
             msg = "⚙️ Профиль не настроен. Зайди в дашборд."
@@ -220,6 +277,7 @@ async def _handle_command(chat_id: str, text: str):
 
     else:
         cmds = [
+            "/menu     — пульт с кнопками",
             "/status   — статус системы",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
@@ -252,6 +310,17 @@ async def poll_updates():
                 updates = r.json().get("result", [])
                 for upd in updates:
                     _offset = upd["update_id"] + 1
+
+                    # Нажатие инлайн-кнопки пульта
+                    cb = upd.get("callback_query")
+                    if cb:
+                        cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                        data = cb.get("data", "")
+                        if not chat_id or cb_chat_id == chat_id:
+                            await _answer_callback(cb["id"])
+                            asyncio.create_task(_handle_command(cb_chat_id, "/" + data))
+                        continue
+
                     msg = upd.get("message", {})
                     text = msg.get("text", "")
                     upd_chat_id = str(msg.get("chat", {}).get("id", ""))
@@ -263,4 +332,6 @@ async def poll_updates():
 
 def start_polling():
     """Start the Telegram polling loop as background task."""
+    if os.getenv("TELEGRAM_BOT_TOKEN"):
+        asyncio.create_task(setup_bot_commands())
     asyncio.create_task(poll_updates())

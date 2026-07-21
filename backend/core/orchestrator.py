@@ -257,7 +257,8 @@ class NexusCore:
 
         # Единственная прямая интеграция — Telegram (свой бот).
         if platform == "telegram":
-            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+            # Посты идут в отдельную группу/канал; если она не задана — в админ-чат.
+            tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")
             if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
                 from publishers.telegram_pub import publish_telegram
                 r = await publish_telegram(tg_chat, text, image_url or None)
