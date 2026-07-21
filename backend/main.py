@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -56,6 +57,9 @@ async def lifespan(app: FastAPI):
     set_broadcast(manager.broadcast)
     start_scheduler()
     start_polling()
+    # Сервер сам делает разбор аккаунта и шлёт в Telegram (раз в сутки).
+    from core.auto_report import auto_analyze_on_start
+    asyncio.create_task(auto_analyze_on_start())
     yield
 
 app = FastAPI(lifespan=lifespan, title="NEXUS AI", docs_url=None, redoc_url=None)
