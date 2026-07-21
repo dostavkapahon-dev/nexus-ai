@@ -130,8 +130,22 @@ const PROVIDERS = [
     models: [],
   },
   {
+    id: 'ayrshare', name: 'Instagram (Ayrshare)', icon: '📷', color: 'from-fuchsia-500 to-pink-600',
+    description: 'Простое подключение Instagram через сервис-посредник — без своего Meta-приложения и ревью',
+    fields: [
+      { key: 'ayrshare_api_key', label: 'Ayrshare API Key', placeholder: 'XXXX-XXXX...', secret: true },
+    ],
+    steps: [
+      { text: 'Зарегистрируйтесь (бесплатно) на', link: 'https://www.ayrshare.com', linkText: 'Ayrshare' },
+      { text: 'В дашборде Ayrshare нажмите Link у Instagram и войдите в аккаунт (OAuth держит Ayrshare)' },
+      { text: 'Откройте', link: 'https://app.ayrshare.com/api', linkText: 'раздел API Key' },
+      { text: 'Скопируйте API Key и вставьте сюда — публикация в Instagram пойдёт через Ayrshare автоматически' },
+    ],
+    models: [],
+  },
+  {
     id: 'instagram', name: 'Instagram Business', icon: '📸', color: 'from-pink-500 to-purple-500',
-    description: 'Публикация фото-постов в Instagram Business аккаунт',
+    description: 'Прямой способ через Graph API (нужно своё Meta-приложение). Ayrshare выше — проще',
     fields: [
       { key: 'instagram_access_token', label: 'Page Access Token', placeholder: 'EAAo3ELgu...', secret: true },
       { key: 'instagram_account_id', label: 'Instagram Account ID', placeholder: '17841400...', secret: false },

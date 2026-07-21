@@ -70,9 +70,22 @@ class NexusCore:
                 niche_profile = await analyst.analyze(db, niche_id, niche.name, niche.city or "", niche.goal, niche.tone_of_voice)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "niche_analyst"})
 
+                # Досье аккаунта из Ayrshare (шапка + топ роликов) — чтобы бот
+                # планировал контент на реальных данных, а не вслепую.
+                account_intel = None
+                try:
+                    from publishers.ayrshare_pub import is_configured as ayr_ready, get_account_intelligence
+                    if ayr_ready():
+                        ig_platforms = [p for p in (niche.platforms or []) if p in
+                                        ("instagram", "tiktok", "youtube", "facebook", "twitter", "linkedin")]
+                        account_intel = await get_account_intelligence(ig_platforms or ["instagram"])
+                        await broadcast(niche_id, {"event": "account_intel", "data": bool(account_intel)})
+                except Exception:
+                    account_intel = None
+
                 await broadcast(niche_id, {"event": "agent_start", "agent": "viral_hunter"})
                 hunter = ViralHunter()
-                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}))
+                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}), account_intel)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "viral_hunter"})
 
                 # Upload to Google Drive
@@ -95,7 +108,7 @@ class NexusCore:
                 db.add(NicheAnalysisCache(
                     niche_key=niche_key, drive_file_id=drive_file_id,
                     drive_url=drive_url,
-                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data}
+                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data, "account_intel": account_intel}
                 ))
                 await db.commit()
 
@@ -109,6 +122,15 @@ class NexusCore:
                 if drive_url:
                     msg += f"\n📂 <a href=\"{drive_url}\">Открыть анализ на Google Диске</a>"
                 await _send_telegram_report(msg)
+
+            # Если пользователь выбрал стратегию в Telegram (/strategy) — учитываем её.
+            try:
+                from core.strategy_advisor import get_chosen
+                chosen = await get_chosen(db)
+                if chosen:
+                    viral_data = {**(viral_data or {}), "chosen_strategy": chosen}
+            except Exception:
+                pass
 
             await broadcast(niche_id, {"event": "agent_start", "agent": "strategist"})
             strategist = Strategist()
@@ -230,38 +252,35 @@ class NexusCore:
             return {"ok": True, "report": report}
 
     async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
-        """Публикует на одной платформе: официальный API → fallback браузерный агент."""
-        from publishers.browser_publish import publish_via_browser
+        """Публикация одной площадки.
 
+        Схема простая:
+          • Telegram — напрямую своим ботом (быстро и бесплатно);
+          • всё остальное — через сервис-посредник Ayrshare одним ключом
+            (Instagram, TikTok, Threads, Facebook, X, YouTube, LinkedIn, ...);
+          • если Ayrshare не подключён или площадку не умеет (напр. VK) —
+            запасной путь через браузерного агента.
+        """
+        from publishers.browser_publish import publish_via_browser
+        from publishers.ayrshare_pub import is_configured as ayr_ready, supports as ayr_supports, ayr_name
+
+        # Единственная прямая интеграция — Telegram (свой бот).
         if platform == "telegram":
-            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
+            # Посты идут в отдельную группу/канал; если она не задана — в админ-чат.
+            tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")
             if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
                 from publishers.telegram_pub import publish_telegram
                 r = await publish_telegram(tg_chat, text, image_url or None)
-                return {"ok": True, "via": "api", **r}
+                return {"ok": True, "via": "telegram", **r}
             return {"ok": False, "error": "Telegram не настроен"}
 
-        if platform == "instagram":
-            if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
-                from publishers.instagram_pub import publish_instagram
-                r = await publish_instagram(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("instagram", text, image_url)
+        # Все остальные площадки — через Ayrshare.
+        if ayr_ready() and ayr_supports(platform):
+            from publishers.ayrshare_pub import publish_ayrshare
+            r = await publish_ayrshare(text, [ayr_name(platform)], image_url=image_url or None)
+            return {"ok": True, "via": "ayrshare", **r}
 
-        if platform == "vk":
-            if os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
-                from publishers.vk_pub import publish_vk
-                r = await publish_vk(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("vk", text, image_url)
-
-        if platform == "youtube":
-            # Прямой аплоад требует OAuth → используем браузерного агента.
-            return await publish_via_browser("youtube", text, image_url)
-
-        if platform == "tiktok":
-            return await publish_via_browser("tiktok", text, image_url)
-
-        return {"ok": False, "error": f"Платформа '{platform}' не поддерживается"}
+        # Запасной путь — браузерный агент (Ayrshare не подключён / не поддерживает).
+        return await publish_via_browser(platform, text, image_url)
 
 nexus_core = NexusCore()

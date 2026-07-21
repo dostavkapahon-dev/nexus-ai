@@ -22,8 +22,10 @@ class ConnectionsBody(BaseModel):
     perplexity_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
+    telegram_post_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
+    ayrshare_api_key: Optional[str] = None
     tiktok_access_token: Optional[str] = None
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
@@ -147,7 +149,142 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
         except Exception as e:
             results["instagram_access_token"] = {"ok": False, "message": str(e)[:120]}
 
+    if key := resolve("ayrshare_api_key"):
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(
+                    "https://api.ayrshare.com/api/user",
+                    headers={"Authorization": f"Bearer {key}"},
+                )
+                d = r.json()
+                if r.status_code == 200 and not d.get("status") == "error":
+                    active = d.get("activeSocialAccounts") or d.get("displayNames") or []
+                    names = ", ".join(active) if isinstance(active, list) and active and isinstance(active[0], str) else ""
+                    results["ayrshare_api_key"] = {"ok": True, "message": f"Ayrshare подключён ✓ {names}".strip()}
+                else:
+                    results["ayrshare_api_key"] = {"ok": False, "message": str(d.get("message") or d)[:120]}
+        except Exception as e:
+            results["ayrshare_api_key"] = {"ok": False, "message": str(e)[:120]}
+
     return results
+
+@router.get("/api/social/accounts")
+async def social_accounts():
+    """Какие соцсети подключены к Ayrshare (сервис-посредник)."""
+    from publishers.ayrshare_pub import is_configured, get_user
+    if not is_configured():
+        return {"configured": False, "accounts": []}
+    try:
+        d = await get_user()
+        return {"configured": True, "accounts": d.get("activeSocialAccounts", []), "raw": d}
+    except Exception as e:
+        return {"configured": True, "error": str(e)[:200]}
+
+
+class SocialAnalyticsBody(BaseModel):
+    platforms: list[str] = ["instagram"]
+    post_id: Optional[str] = None
+    last_records: Optional[int] = 20
+
+
+@router.post("/api/social/analytics/profile")
+async def social_profile_analytics(body: SocialAnalyticsBody):
+    """Аналитика профиля/шапки: подписчики, охваты, вовлечённость по площадкам."""
+    from publishers.ayrshare_pub import is_configured, get_profile_analytics
+    if not is_configured():
+        return {"error": "Ayrshare не подключён"}
+    try:
+        return await get_profile_analytics(body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/analytics/post")
+async def social_post_analytics(body: SocialAnalyticsBody):
+    """Аналитика поста/ролика: лайки, комментарии, просмотры, охват."""
+    from publishers.ayrshare_pub import is_configured, get_post_analytics
+    if not is_configured():
+        return {"error": "Ayrshare не подключён"}
+    try:
+        return await get_post_analytics(body.post_id, body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/history")
+async def social_history(body: SocialAnalyticsBody):
+    """История опубликованных постов/роликов через Ayrshare."""
+    from publishers.ayrshare_pub import is_configured, get_recent_posts
+    if not is_configured():
+        return {"error": "Ayrshare не подключён"}
+    try:
+        return await get_recent_posts(body.platforms, body.last_records or 20)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/intelligence")
+async def social_intelligence(body: SocialAnalyticsBody):
+    """Досье аккаунта: профиль + топ роликов по вовлечённости — чтобы бот делал
+    Reels на основе того, ЧТО за аккаунт и ЧТО реально зашло, а не вслепую."""
+    from publishers.ayrshare_pub import is_configured, get_account_intelligence
+    if not is_configured():
+        return {"error": "Ayrshare не подключён"}
+    try:
+        return await get_account_intelligence(body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.get("/api/bot/status")
+async def bot_status(db: AsyncSession = Depends(get_db)):
+    """Статус Telegram-бота: имя, задан ли админ-чат и группа постов."""
+    db_result = await db.execute(select(Connection))
+    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    admin = db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    group = db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "")
+    out = {"has_token": bool(token), "admin_chat_id": bool(admin),
+           "post_chat_id": group or "", "username": None, "ok": False}
+    if not token:
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+            d = r.json()
+            if d.get("ok"):
+                out["ok"] = True
+                out["username"] = d["result"].get("username")
+    except Exception as e:
+        out["error"] = str(e)[:120]
+    return out
+
+
+class BotTestBody(BaseModel):
+    chat_id: Optional[str] = None
+
+
+@router.post("/api/bot/test-post")
+async def bot_test_post(body: BotTestBody, db: AsyncSession = Depends(get_db)):
+    """Отправляет тестовое сообщение в группу постов (или указанный chat_id)."""
+    db_result = await db.execute(select(Connection))
+    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = body.chat_id or db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "") \
+        or db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        return {"ok": False, "message": "Не задан токен бота или chat_id группы"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                             json={"chat_id": chat, "text": "✅ NEXUS AI: группа подключена — сюда будут приходить посты."})
+            d = r.json()
+            if d.get("ok"):
+                return {"ok": True, "message": "Отправлено ✓ Проверь группу"}
+            return {"ok": False, "message": d.get("description", "Ошибка")[:150]}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:150]}
+
 
 @router.get("/api/analytics/{niche_id}")
 async def get_analytics(niche_id: str, db: AsyncSession = Depends(get_db)):

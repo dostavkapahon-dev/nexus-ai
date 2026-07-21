@@ -183,6 +183,27 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         report["steps"].append({"step": "video", "ok": vid.get("ok", False),
                                 "provider": vid.get("provider"), "error": vid.get("error")})
 
+        # 3d. Монтаж (Роль 3): караоке-субтитры из сценария + роялти-фри музыка.
+        if vid.get("ok"):
+            try:
+                from core.video_editor import edit_reel, ensure_local_video
+                local_v = await ensure_local_video(vid)
+                if local_v:
+                    script_for_subs = (brief.get("avatar_script")
+                                       or plan.get("hook_text")
+                                       or plan.get("instagram", {}).get("caption", ""))
+                    edited = await edit_reel(local_v, script_text=script_for_subs,
+                                             mood=brief.get("tone") or plan.get("tone"))
+                    if edited.get("ok"):
+                        vid = {**vid, **edited, "edited": True}
+                        report["assets"]["video"] = vid
+                    report["steps"].append({"step": "montage", "ok": edited.get("ok", False),
+                                            "subtitles": edited.get("subtitles"),
+                                            "music": edited.get("music"),
+                                            "error": edited.get("error")})
+            except Exception as e:
+                report["steps"].append({"step": "montage", "ok": False, "error": str(e)[:160]})
+
     # 4. «Вау»-ревью: усиливаем хук при низкой оценке
     wow = await wow_review(brief)
     report["wow"] = wow
