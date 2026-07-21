@@ -245,56 +245,32 @@ class NexusCore:
     async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
         """Публикация одной площадки.
 
-        Приоритет: единый сервис-посредник Ayrshare (одним ключом постит IG,
-        TikTok, Threads, Facebook, X, YouTube, LinkedIn, Pinterest и др.) →
-        официальный API площадки (если задан токен) → браузерный агент.
-        Telegram и VK идут своим путём (VK в Ayrshare нет, Telegram — свой бот).
+        Схема простая:
+          • Telegram — напрямую своим ботом (быстро и бесплатно);
+          • всё остальное — через сервис-посредник Ayrshare одним ключом
+            (Instagram, TikTok, Threads, Facebook, X, YouTube, LinkedIn, ...);
+          • если Ayrshare не подключён или площадку не умеет (напр. VK) —
+            запасной путь через браузерного агента.
         """
         from publishers.browser_publish import publish_via_browser
         from publishers.ayrshare_pub import is_configured as ayr_ready, supports as ayr_supports, ayr_name
 
-        # Telegram — собственный бот (надёжнее и бесплатно).
+        # Единственная прямая интеграция — Telegram (свой бот).
         if platform == "telegram":
             tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
             if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
                 from publishers.telegram_pub import publish_telegram
                 r = await publish_telegram(tg_chat, text, image_url or None)
-                return {"ok": True, "via": "api", **r}
+                return {"ok": True, "via": "telegram", **r}
             return {"ok": False, "error": "Telegram не настроен"}
 
-        # Единый маршрут через Ayrshare для всех его площадок.
+        # Все остальные площадки — через Ayrshare.
         if ayr_ready() and ayr_supports(platform):
             from publishers.ayrshare_pub import publish_ayrshare
             r = await publish_ayrshare(text, [ayr_name(platform)], image_url=image_url or None)
             return {"ok": True, "via": "ayrshare", **r}
 
-        # --- Fallback-пути, когда Ayrshare не подключён ---
-
-        if platform == "instagram":
-            if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
-                from publishers.instagram_pub import publish_instagram
-                r = await publish_instagram(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("instagram", text, image_url)
-
-        if platform == "threads":
-            if os.getenv("THREADS_ACCESS_TOKEN") and os.getenv("THREADS_USER_ID"):
-                from publishers.threads_pub import publish_threads
-                r = await publish_threads(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("threads", text, image_url)
-
-        if platform == "vk":
-            if os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
-                from publishers.vk_pub import publish_vk
-                r = await publish_vk(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("vk", text, image_url)
-
-        # tiktok / youtube / facebook / x / linkedin / pinterest без Ayrshare — браузер.
-        if platform in ("tiktok", "youtube", "facebook", "x", "twitter", "linkedin", "pinterest"):
-            return await publish_via_browser(platform, text, image_url)
-
-        return {"ok": False, "error": f"Платформа '{platform}' не поддерживается"}
+        # Запасной путь — браузерный агент (Ayrshare не подключён / не поддерживает).
+        return await publish_via_browser(platform, text, image_url)
 
 nexus_core = NexusCore()
