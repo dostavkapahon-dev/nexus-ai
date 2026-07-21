@@ -281,7 +281,24 @@ class NexusCore:
             return await publish_via_browser("youtube", text, image_url)
 
         if platform == "tiktok":
+            from publishers.ayrshare_pub import is_configured as ayr_ready
+            if ayr_ready():
+                from publishers.ayrshare_pub import publish_ayrshare
+                r = await publish_ayrshare(text, ["tiktok"], image_url=image_url or None)
+                return {"ok": True, "via": "ayrshare", **r}
             return await publish_via_browser("tiktok", text, image_url)
+
+        if platform == "threads":
+            from publishers.ayrshare_pub import is_configured as ayr_ready
+            if ayr_ready():
+                from publishers.ayrshare_pub import publish_ayrshare
+                r = await publish_ayrshare(text, ["threads"], image_url=image_url or None)
+                return {"ok": True, "via": "ayrshare", **r}
+            if os.getenv("THREADS_ACCESS_TOKEN") and os.getenv("THREADS_USER_ID"):
+                from publishers.threads_pub import publish_threads
+                r = await publish_threads(text, image_url or None)
+                return {"ok": True, "via": "api", **r}
+            return await publish_via_browser("threads", text, image_url)
 
         return {"ok": False, "error": f"Платформа '{platform}' не поддерживается"}
 
