@@ -113,8 +113,13 @@ async def run_daily_publish():
                                 db.add(Publication(plan_id=plan.id, platform="telegram", status="published"))
 
                         elif platform == "instagram":
-                            from publishers.instagram_pub import publish_instagram
-                            if os.getenv("INSTAGRAM_ACCESS_TOKEN"):
+                            from publishers.ayrshare_pub import is_configured as ayr_ready
+                            if ayr_ready():
+                                from publishers.ayrshare_pub import publish_instagram_ayrshare
+                                await publish_instagram_ayrshare(text, image_url or None)
+                                db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
+                            elif os.getenv("INSTAGRAM_ACCESS_TOKEN"):
+                                from publishers.instagram_pub import publish_instagram
                                 await publish_instagram(text, image_url or None)
                                 db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
 

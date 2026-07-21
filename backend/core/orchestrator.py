@@ -242,10 +242,18 @@ class NexusCore:
             return {"ok": False, "error": "Telegram не настроен"}
 
         if platform == "instagram":
+            # 1) Сторонний сервис-посредник Ayrshare (OAuth держит он, без Meta-ревью)
+            from publishers.ayrshare_pub import is_configured as ayr_ready
+            if ayr_ready():
+                from publishers.ayrshare_pub import publish_instagram_ayrshare
+                r = await publish_instagram_ayrshare(text, image_url or None)
+                return {"ok": True, "via": "ayrshare", **r}
+            # 2) Официальный Graph API (свой токен)
             if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
                 from publishers.instagram_pub import publish_instagram
                 r = await publish_instagram(text, image_url or None)
                 return {"ok": True, "via": "api", **r}
+            # 3) Fallback — браузерный агент
             return await publish_via_browser("instagram", text, image_url)
 
         if platform == "vk":
