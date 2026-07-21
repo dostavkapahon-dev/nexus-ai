@@ -211,15 +211,18 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         plan["hook_text"] = wow["new_hook"]
     report["steps"].append({"step": "wow_review", "ok": True, "score": wow.get("score")})
 
-    # 5. Публикация
+    # 5. Публикация — через согласование в Telegram (сначала превью, потом аппрув).
     if not dry_run:
-        from core.orchestrator import nexus_core
-        for pf in platforms:
-            text = _caption_for(pf, plan)
-            try:
-                report["published"][pf] = await nexus_core._publish_one(pf, text, cover)
-            except Exception as e:
-                report["published"][pf] = {"ok": False, "error": str(e)[:160]}
+        vid_url = vid.get("url") if isinstance(vid, dict) else None
+        media = vid_url if (vid_url and str(vid_url).startswith("http")) else cover
+        caption = _caption_for(platforms[0] if platforms else "instagram", plan)
+        try:
+            from core.moderation import send_for_approval
+            pid = await send_for_approval(caption, media_url=media, platforms=platforms, kind="factory")
+            report["published"] = {"status": "awaiting_approval", "pid": pid,
+                                   "note": "ролик отправлен в Telegram на согласование"}
+        except Exception as e:
+            report["published"] = {"status": "error", "error": str(e)[:160]}
     else:
         report["published"] = {pf: {"ok": None, "note": "dry-run"} for pf in platforms}
 

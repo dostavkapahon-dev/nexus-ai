@@ -155,7 +155,7 @@ class NexusCore:
             await db.commit()
             await broadcast(niche_id, {"event": "pipeline_complete"})
 
-    async def generate_content_for_plan(self, plan_id: str):
+    async def generate_content_for_plan(self, plan_id: str, corrections: str = None):
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
             plan = result.scalar_one_or_none()
@@ -167,9 +167,14 @@ class NexusCore:
             if not niche:
                 return
 
+            # Если пришли правки от админа — учитываем их в задании копирайтеру.
+            hook = plan.hook or ""
+            if corrections:
+                hook = f"{hook}\n\nУчти правки: {corrections}"
+
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "copywriter"})
             copywriter = Copywriter()
-            text = await copywriter.write(db, plan.niche_id, niche.name, plan.topic, plan.hook or "", niche.tone_of_voice, plan.platform, niche.goal)
+            text = await copywriter.write(db, plan.niche_id, niche.name, plan.topic, hook, niche.tone_of_voice, plan.platform, niche.goal)
             await broadcast(plan.niche_id, {"event": "agent_done", "agent": "copywriter"})
 
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "reviewer"})
@@ -201,9 +206,20 @@ class NexusCore:
                 score=score, platform_versions=platform_versions
             )
             db.add(content)
-            plan.status = "generated"
+            plan.status = "awaiting_approval"
             await db.commit()
             await broadcast(plan.niche_id, {"event": "pipeline_complete"})
+
+            # На согласование в Telegram перед публикацией.
+            try:
+                from core.moderation import send_for_approval
+                await send_for_approval(
+                    text_voiced, media_url=visual_result.get("image_url"),
+                    platforms=(niche.platforms or ["instagram"]),
+                    kind="plan", ref=plan_id,
+                )
+            except Exception:
+                pass
 
     async def publish_plan(self, plan_id: str):
         """Publish a generated plan item to all configured platforms.

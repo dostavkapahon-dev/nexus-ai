@@ -108,6 +108,18 @@ async def _handle_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines), reply_markup=kb)
         return
 
+    if cmd.startswith(("pub_", "fix_", "rej_")):
+        action, pid = cmd.split("_", 1)
+        from core import moderation
+        if action == "pub":
+            res = await moderation.approve(pid)
+        elif action == "rej":
+            res = await moderation.reject(pid)
+        else:
+            res = await moderation.request_fix(pid)
+        await send_message(chat_id, res)
+        return
+
     if cmd.startswith("strat_"):
         try:
             idx = int(cmd.split("_", 1)[1])
@@ -332,6 +344,19 @@ async def _handle_command(chat_id: str, text: str):
         ]
         await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
 
+async def _handle_plain_text(chat_id: str, text: str):
+    """Обычное сообщение: если ждём правки к контенту — применяем их."""
+    from core import moderation
+    async with AsyncSessionLocal() as db:
+        pid = await moderation.pending_fix_id(db)
+    if not pid:
+        return  # нечего править — игнорируем свободный текст
+    await send_message(chat_id, "🔄 Применяю правки, секунду...")
+    res = await moderation.apply_fix(text)
+    if res:
+        await send_message(chat_id, res)
+
+
 async def poll_updates():
     """Long-polling loop for Telegram updates."""
     global _offset
@@ -361,8 +386,13 @@ async def poll_updates():
                     msg = upd.get("message", {})
                     text = msg.get("text", "")
                     upd_chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if text.startswith("/") and (not chat_id or upd_chat_id == chat_id):
+                    if not text or (chat_id and upd_chat_id != chat_id):
+                        continue
+                    if text.startswith("/"):
                         asyncio.create_task(_handle_command(upd_chat_id, text))
+                    else:
+                        # Обычный текст — возможно, это правки к контенту на согласовании.
+                        asyncio.create_task(_handle_plain_text(upd_chat_id, text))
         except Exception:
             await asyncio.sleep(5)
         await asyncio.sleep(1)
