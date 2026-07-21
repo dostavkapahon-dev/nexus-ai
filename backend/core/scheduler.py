@@ -104,43 +104,16 @@ async def run_daily_publish():
 
                 platforms = niche.platforms or ["telegram"]
 
+                # Единый диспетчер публикации (тот же, что в оркестраторе):
+                # Ayrshare → официальный API → браузер.
+                from core.orchestrator import nexus_core
                 for platform in platforms:
                     try:
-                        if platform == "telegram":
-                            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-                            if tg_chat:
-                                await publish_telegram(tg_chat, text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="telegram", status="published"))
-
-                        elif platform == "instagram":
-                            from publishers.ayrshare_pub import is_configured as ayr_ready
-                            if ayr_ready():
-                                from publishers.ayrshare_pub import publish_instagram_ayrshare
-                                await publish_instagram_ayrshare(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
-                            elif os.getenv("INSTAGRAM_ACCESS_TOKEN"):
-                                from publishers.instagram_pub import publish_instagram
-                                await publish_instagram(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
-
-                        elif platform == "tiktok":
-                            from publishers.tiktok_pub import publish_tiktok_photo
-                            if os.getenv("TIKTOK_ACCESS_TOKEN") and image_url:
-                                await publish_tiktok_photo(text, image_url)
-                                db.add(Publication(plan_id=plan.id, platform="tiktok", status="published"))
-
-                        elif platform == "vk":
-                            from publishers.vk_pub import publish_vk
-                            if os.getenv("VK_ACCESS_TOKEN"):
-                                await publish_vk(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="vk", status="published"))
-
-                        elif platform == "threads":
-                            from publishers.threads_pub import publish_threads
-                            if os.getenv("THREADS_ACCESS_TOKEN"):
-                                await publish_threads(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="threads", status="published"))
-
+                        res = await nexus_core._publish_one(platform, text, image_url or "")
+                        status = "published" if res.get("ok") else "failed"
+                        db.add(Publication(plan_id=plan.id, platform=platform, status=status))
+                        if not res.get("ok") and chat_id:
+                            await send_message(chat_id, f"⚠️ {platform}: {str(res.get('error'))[:80]}")
                     except Exception as e:
                         if chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(e)[:80]}")

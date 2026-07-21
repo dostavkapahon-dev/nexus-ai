@@ -27,6 +27,27 @@ def is_configured() -> bool:
     return bool(_api_key())
 
 
+# Площадки, которые Ayrshare умеет публиковать одним API-вызовом.
+SUPPORTED_PLATFORMS = {
+    "instagram", "facebook", "twitter", "x", "tiktok", "youtube",
+    "linkedin", "pinterest", "threads", "telegram", "reddit",
+    "bluesky", "gmb", "snapchat",
+}
+
+# Нормализация имён под идентификаторы Ayrshare.
+_ALIASES = {"x": "twitter"}
+
+
+def ayr_name(platform: str) -> str:
+    p = (platform or "").lower().strip()
+    return _ALIASES.get(p, p)
+
+
+def supports(platform: str) -> bool:
+    """Умеет ли Ayrshare постить в эту площадку."""
+    return (platform or "").lower().strip() in SUPPORTED_PLATFORMS
+
+
 async def publish_ayrshare(
     text: str,
     platforms: list[str],
