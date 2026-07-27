@@ -59,6 +59,7 @@ async def setup_bot_commands():
     """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
+        {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "status", "description": "Статус системы"},
         {"command": "strategy", "description": "Анализ + выбор стратегии"},
         {"command": "factory", "description": "Весь цикл: анализ→генерация→превью"},
@@ -72,11 +73,36 @@ async def setup_bot_commands():
     ]
     try:
         async with httpx.AsyncClient(timeout=10) as c:
+            # Снимаем webhook — иначе getUpdates (long-polling) вернёт 409 и бот «молчит».
+            await c.post(_url("deleteWebhook"), json={"drop_pending_updates": False})
             await c.post(_url("setMyCommands"), json={"commands": cmds})
     except Exception:
         pass
 
 async def _handle_command(chat_id: str, text: str):
+    """Неубиваемая обёртка: любая ошибка команды уходит в чат, а не в тишину."""
+    try:
+        await _dispatch_command(chat_id, text)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        msg = str(e)
+        if "All AI providers failed" in msg or "authentication" in msg.lower():
+            hint = ("⚠️ Не задан ключ ИИ — анализ и генерация не работают.\n\n"
+                    "Добавь хотя бы один (дешёвый) ключ в Render → Environment или в "
+                    "Настройках сайта:\n"
+                    "• <code>DEEPSEEK_API_KEY</code> (дёшево) или\n"
+                    "• <code>GEMINI_API_KEY</code> (почти бесплатно)\n\n"
+                    "Проверить что подключено: /diag")
+        else:
+            hint = f"⚠️ Ошибка команды: {type(e).__name__}: {msg[:200]}"
+        try:
+            await send_message(chat_id, hint)
+        except Exception:
+            pass
+
+
+async def _dispatch_command(chat_id: str, text: str):
     from core.orchestrator import nexus_core
     from agents.reporter import reporter
 
@@ -89,6 +115,28 @@ async def _handle_command(chat_id: str, text: str):
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
                            reply_markup=_main_menu_kb())
+        return
+
+    if cmd == "diag":
+        def yn(v):
+            return "✅" if v else "❌"
+        ai_keys = {
+            "Claude": os.getenv("ANTHROPIC_API_KEY"),
+            "OpenAI": os.getenv("OPENAI_API_KEY"),
+            "Gemini": os.getenv("GEMINI_API_KEY"),
+            "DeepSeek": os.getenv("DEEPSEEK_API_KEY"),
+        }
+        any_ai = any(ai_keys.values())
+        lines = [
+            "🩺 <b>Диагностика</b>",
+            f"{yn(os.getenv('TELEGRAM_BOT_TOKEN'))} Telegram-бот токен",
+            f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
+            f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",
+            f"{yn(os.getenv('AYRSHARE_API_KEY'))} Ayrshare (соцсети)",
+            f"{yn(any_ai)} ИИ-ключ (" + ", ".join(k for k, v in ai_keys.items() if v) + ")" if any_ai
+            else "❌ ИИ-ключ — НЕ задан ни один (анализ/генерация не будут работать)",
+        ]
+        await send_message(chat_id, "\n".join(lines))
         return
 
     if cmd == "strategy":
@@ -326,6 +374,7 @@ async def _handle_command(chat_id: str, text: str):
     else:
         cmds = [
             "/menu     — пульт с кнопками",
+            "/diag     — что подключено (диагностика)",
             "/status   — статус системы",
             "/strategy — анализ + выбор стратегии",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
