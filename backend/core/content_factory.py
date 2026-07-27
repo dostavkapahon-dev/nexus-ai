@@ -116,6 +116,16 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     platforms = platforms or DEFAULT_PLATFORMS
     report = {"steps": [], "assets": {}, "published": {}, "dry_run": dry_run}
 
+    # 0. Рецепт вируса из разведки (/viral) — подмешиваем в тему, если есть.
+    try:
+        from core.viral_research import get_recipe
+        recipe = await get_recipe()
+        if recipe and recipe.get("recipe"):
+            hint = f"{recipe.get('recipe','')} Хуки: {'; '.join(recipe.get('hook_patterns', [])[:3])}"
+            topic = f"{topic or ''}\n\n[Рецепт залетевших роликов — используй: {hint}]".strip()
+    except Exception:
+        pass
+
     # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
     report["plan"] = plan

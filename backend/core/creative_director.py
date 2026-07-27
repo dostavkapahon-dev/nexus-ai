@@ -99,7 +99,16 @@ def choose_strategy(content_type: str = "auto") -> dict:
     has_hg = bool(os.getenv("HEYGEN_API_KEY"))
     has_rw = bool(os.getenv("RUNWAY_API_KEY"))
 
-    if content_type in ("talking_head", "explainer") and has_hg:
+    # Принудительный выбор провайдера видео через env VIDEO_PROVIDER.
+    forced = os.getenv("VIDEO_PROVIDER", "").lower().strip()
+    if forced == "higgsfield":
+        via = "API" if os.getenv("HIGGSFIELD_API_KEY") else "ваш аккаунт (браузер-агент)"
+        return {"strategy": "storyboard_to_higgsfield",
+                "reason": f"HiggsField ({via}) — принудительно (VIDEO_PROVIDER)",
+                "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
+                "needs": "HIGGSFIELD_API_KEY или браузер-агент", "fallback": False}
+
+    if content_type in ("talking_head", "explainer") and has_hg and forced != "higgsfield":
         return {"strategy": "heygen_avatar", "reason": "Говорящий ведущий — аватар HeyGen",
                 "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
 
