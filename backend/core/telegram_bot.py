@@ -114,9 +114,25 @@ async def _handle_command(chat_id: str, text: str):
             pass
 
 
+async def _refresh_env_from_db():
+    """Подтягивает ключи из БД в окружение — чтобы сохранённое в дашборде
+    работало сразу, без перезапуска сервера (процесс бота читал env на старте)."""
+    try:
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            res = await db.execute(select(Connection))
+            for c in res.scalars():
+                if c.key_value and "****" not in (c.key_value or ""):
+                    os.environ[c.key_name.upper()] = c.key_value
+    except Exception:
+        pass
+
+
 async def _dispatch_command(chat_id: str, text: str):
     from core.orchestrator import nexus_core
     from agents.reporter import reporter
+
+    await _refresh_env_from_db()  # ключи из дашборда — сразу, без рестарта
 
     cmd = text.strip().split()[0].lower().replace("/", "")
     # убираем @botusername из команды (в группах Telegram добавляет его)
