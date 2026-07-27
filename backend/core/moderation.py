@@ -55,11 +55,28 @@ async def _tg(method: str, payload: dict):
 
 
 def _kb(pid: str) -> dict:
-    return {"inline_keyboard": [[
-        {"text": "✅ Опубликовать", "callback_data": f"pub_{pid}"},
-        {"text": "✏️ Правки", "callback_data": f"fix_{pid}"},
-        {"text": "❌ Отклонить", "callback_data": f"rej_{pid}"},
-    ]]}
+    return {"inline_keyboard": [
+        [{"text": "✅ Опубликовать", "callback_data": f"pub_{pid}"},
+         {"text": "✏️ Правки", "callback_data": f"fix_{pid}"}],
+        [{"text": "🔍 Разбор визуала", "callback_data": f"see_{pid}"},
+         {"text": "❌ Отклонить", "callback_data": f"rej_{pid}"}],
+    ]}
+
+
+async def analyze_media_for(pid: str) -> str:
+    """Разбирает визуал (картинку/ролик) элемента на согласовании через vision."""
+    async with AsyncSessionLocal() as db:
+        item = await _get_item(db, pid)
+    if not item:
+        return "❌ Элемент не найден"
+    media = item.get("media_url")
+    if not media:
+        return "❌ У этого поста нет медиа для разбора"
+    from core.vision import analyze_media
+    res = await analyze_media(media)
+    if res.get("ok"):
+        return "🔍 <b>Разбор визуала</b>\n\n" + res["analysis"]
+    return f"⚠️ {res.get('error')}"
 
 
 async def send_for_approval(text: str, media_url: str = None, platforms: list = None,

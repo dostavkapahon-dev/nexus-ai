@@ -156,16 +156,30 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines), reply_markup=kb)
         return
 
-    if cmd.startswith(("pub_", "fix_", "rej_")):
+    if cmd.startswith(("pub_", "fix_", "rej_", "see_")):
         action, pid = cmd.split("_", 1)
         from core import moderation
         if action == "pub":
             res = await moderation.approve(pid)
         elif action == "rej":
             res = await moderation.reject(pid)
+        elif action == "see":
+            await send_message(chat_id, "🔍 Смотрю визуал, секунду...")
+            res = await moderation.analyze_media_for(pid)
         else:
             res = await moderation.request_fix(pid)
         await send_message(chat_id, res)
+        return
+
+    if cmd == "see":
+        if not args:
+            await send_message(chat_id, "❗ Дай ссылку на картинку/видео: /see https://...")
+            return
+        await send_message(chat_id, "🔍 Анализирую визуал, секунду...")
+        from core.vision import analyze_media
+        r = await analyze_media(args[0])
+        await send_message(chat_id, ("🔍 <b>Разбор</b>\n\n" + r["analysis"]) if r.get("ok")
+                           else f"⚠️ {r.get('error')}")
         return
 
     if cmd.startswith("strat_"):
@@ -377,6 +391,7 @@ async def _dispatch_command(chat_id: str, text: str):
             "/diag     — что подключено (диагностика)",
             "/status   — статус системы",
             "/strategy — анализ + выбор стратегии",
+            "/see [url] — разбор картинки/ролика (зрение)",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
