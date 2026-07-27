@@ -62,6 +62,8 @@ async def setup_bot_commands():
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "status", "description": "Статус системы"},
         {"command": "strategy", "description": "Анализ + выбор стратегии"},
+        {"command": "hunt", "description": "Топ залетевших в YouTube по нише"},
+        {"command": "viral", "description": "Разбор чужих роликов → рецепт"},
         {"command": "factory", "description": "Весь цикл: анализ→генерация→превью"},
         {"command": "create", "description": "Создать контент"},
         {"command": "publish", "description": "Опубликовать очередь"},
@@ -169,6 +171,54 @@ async def _dispatch_command(chat_id: str, text: str):
         else:
             res = await moderation.request_fix(pid)
         await send_message(chat_id, res)
+        return
+
+    if cmd == "viral":
+        if not args:
+            await send_message(chat_id, "❗ Дай 1-5 ссылок на залетевшие ролики (YT/TikTok/IG):\n/viral https://... https://...")
+            return
+        await send_message(chat_id, "🕵️ Разбираю референсы (метрики + смотрю кадры)... это займёт минуту.")
+        from core.viral_research import research
+        niche = ""
+        async with AsyncSessionLocal() as db:
+            nr = await db.execute(select(Niche).where(Niche.status == "active").limit(1))
+            n = nr.scalar_one_or_none()
+            niche = n.name if n else ""
+        rec = await research(args, niche)
+        lines = ["🧬 <b>Рецепт вируса</b> (сохранён, учту в генерации)", ""]
+        if rec.get("why_viral"):
+            lines += ["<b>Почему заходят:</b>"] + [f"• {x}" for x in rec["why_viral"][:5]]
+        if rec.get("hook_patterns"):
+            lines += ["", "<b>Хуки:</b>"] + [f"• {x}" for x in rec["hook_patterns"][:5]]
+        if rec.get("structure"):
+            lines += ["", f"<b>Структура:</b> {rec['structure']}"]
+        if rec.get("recipe"):
+            lines += ["", f"<b>Как собрать наш:</b> {rec['recipe']}"]
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "hunt":
+        query = " ".join(args)
+        if not query:
+            async with AsyncSessionLocal() as db:
+                nr = await db.execute(select(Niche).where(Niche.status == "active").limit(1))
+                n = nr.scalar_one_or_none()
+                query = n.name if n else ""
+        if not query:
+            await send_message(chat_id, "❗ Укажи нишу: /hunt смм для кофейни")
+            return
+        await send_message(chat_id, f"🔎 Ищу топ YouTube по «{query}»...")
+        from core.viral_research import youtube_search
+        tops = await youtube_search(query, 8)
+        if not tops:
+            await send_message(chat_id, "❌ Ничего не нашёл (или yt-dlp недоступен)")
+            return
+        lines = [f"🔥 <b>Топ по «{query}»</b> (по просмотрам)", ""]
+        for m in tops[:8]:
+            v = m.get("views")
+            lines.append(f"• {(m.get('title') or '')[:60]} — {v:,} просм." if v else f"• {(m.get('title') or '')[:60]}")
+        lines += ["", "Скинь лучшие ссылки в /viral — соберу рецепт."]
+        await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
     if cmd == "see":
@@ -391,6 +441,8 @@ async def _dispatch_command(chat_id: str, text: str):
             "/diag     — что подключено (диагностика)",
             "/status   — статус системы",
             "/strategy — анализ + выбор стратегии",
+            "/hunt [ниша] — топ залетевших в YouTube",
+            "/viral [ссылки] — разобрать чужие ролики → рецепт",
             "/see [url] — разбор картинки/ролика (зрение)",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
