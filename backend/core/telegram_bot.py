@@ -90,14 +90,24 @@ async def _handle_command(chat_id: str, text: str):
         traceback.print_exc()
         msg = str(e)
         if "All AI providers failed" in msg or "authentication" in msg.lower():
-            hint = ("⚠️ Не задан ключ ИИ — анализ и генерация не работают.\n\n"
-                    "Добавь хотя бы один (дешёвый) ключ в Render → Environment или в "
-                    "Настройках сайта:\n"
-                    "• <code>DEEPSEEK_API_KEY</code> (дёшево) или\n"
-                    "• <code>GEMINI_API_KEY</code> (почти бесплатно)\n\n"
-                    "Проверить что подключено: /diag")
+            keys = {"ANTHROPIC": os.getenv("ANTHROPIC_API_KEY"),
+                    "OPENAI": os.getenv("OPENAI_API_KEY"),
+                    "GEMINI": os.getenv("GEMINI_API_KEY"),
+                    "DEEPSEEK": os.getenv("DEEPSEEK_API_KEY")}
+            present = [k for k, v in keys.items() if v]
+            if present:
+                # Ключи ЕСТЬ — значит сам вызов упал. Показываем реальную причину.
+                hint = ("⚠️ Ключи ИИ есть (" + ", ".join(present) + "), но вызов упал.\n"
+                        "Причина: <code>" + msg[-350:] + "</code>\n\n"
+                        "Обычно это неверный ключ или недоступная модель. Проверь /diag.")
+            else:
+                hint = ("⚠️ На сервере не найден ни один ключ ИИ.\n\n"
+                        "Похоже, ключи сохранены не там. Добавь в <b>Render → Environment</b>:\n"
+                        "• <code>GEMINI_API_KEY</code> (бесплатно) или\n"
+                        "• <code>DEEPSEEK_API_KEY</code>\n\n"
+                        "Проверить: /diag")
         else:
-            hint = f"⚠️ Ошибка команды: {type(e).__name__}: {msg[:200]}"
+            hint = f"⚠️ Ошибка команды: {type(e).__name__}: {msg[:300]}"
         try:
             await send_message(chat_id, hint)
         except Exception:
