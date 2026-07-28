@@ -145,6 +145,21 @@ async def _dispatch_command(chat_id: str, text: str):
                            reply_markup=_main_menu_kb())
         return
 
+    if cmd == "montage":
+        if len(args) < 2:
+            await send_message(chat_id, "❗ Дай 2+ ссылки на клипы (склею в один ролик):\n/montage https://...mp4 https://...mp4")
+            return
+        await send_message(chat_id, f"🎬 Склеиваю {len(args)} клипа в один ролик + музыка... это займёт минуту.")
+        from core.montage import assemble_and_send
+        res = await assemble_and_send(args, chat_id, caption="🎬 Готовый ролик")
+        if res.get("ok") and res.get("sent"):
+            return  # видео уже отправлено
+        if res.get("ok"):
+            await send_message(chat_id, f"✅ Собрано ({res.get('clips')} сцен), но не смог отправить файл — велик размер?")
+        else:
+            await send_message(chat_id, f"⚠️ {res.get('error')}")
+        return
+
     if cmd == "diag":
         def yn(v):
             return "✅" if v else "❌"
@@ -470,6 +485,7 @@ async def _dispatch_command(chat_id: str, text: str):
             "/hunt [ниша] — топ залетевших в YouTube",
             "/viral [ссылки] — разобрать чужие ролики → рецепт",
             "/see [url] — разбор картинки/ролика (зрение)",
+            "/montage [ссылки] — склеить клипы в один ролик",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
