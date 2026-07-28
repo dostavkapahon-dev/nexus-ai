@@ -146,12 +146,22 @@ async def _dispatch_command(chat_id: str, text: str):
         return
 
     if cmd == "montage":
-        if len(args) < 2:
-            await send_message(chat_id, "❗ Дай 2+ ссылки на клипы (склею в один ролик):\n/montage https://...mp4 https://...mp4")
+        # Формат: /montage url1 url2 ... [| текст титров для караоке]
+        raw = text.split(" ", 1)[1] if " " in text else ""
+        script = None
+        if "|" in raw:
+            raw, script = raw.split("|", 1)
+            script = script.strip() or None
+        urls = [u for u in raw.split() if u.startswith("http")]
+        if len(urls) < 2:
+            await send_message(chat_id,
+                "❗ Дай 2+ ссылки на клипы. Титры — после | :\n"
+                "/montage https://...mp4 https://...mp4 | Слева я. Справа ИИ-я. Работаем вместе")
             return
-        await send_message(chat_id, f"🎬 Склеиваю {len(args)} клипа в один ролик + музыка... это займёт минуту.")
+        await send_message(chat_id, f"🎬 Собираю ролик из {len(urls)} сцен"
+                           + (" + титры" if script else "") + " + музыка... минуту.")
         from core.montage import assemble_and_send
-        res = await assemble_and_send(args, chat_id, caption="🎬 Готовый ролик")
+        res = await assemble_and_send(urls, chat_id, caption="🎬 Готовый ролик", script=script)
         if res.get("ok") and res.get("sent"):
             return  # видео уже отправлено
         if res.get("ok"):
