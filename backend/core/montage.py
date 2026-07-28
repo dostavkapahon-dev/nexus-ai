@@ -28,8 +28,40 @@ async def _normalize(ff: str, src: str, dst: str) -> bool:
     ])
 
 
+# Плавные переходы между сценами (ffmpeg xfade). Чередуются для живости.
+TRANSITIONS = ["fade", "wipeleft", "slideup", "circleopen", "dissolve"]
+XFADE_DUR = 0.4  # длительность перехода, сек
+
+
+async def _concat_with_transitions(ff: str, clips: list, out: str) -> bool:
+    """Склейка с плавными переходами xfade. True — получилось."""
+    from core.video_editor import _duration
+    durs = [_duration(c) for c in clips]
+    if any(d <= XFADE_DUR for d in durs):
+        return False  # слишком короткие клипы — переход не влезет
+
+    # Строим цепочку: [0][1]xfade → [v01]; [v01][2]xfade → [v012] ...
+    parts, offset, prev = [], 0.0, "[0:v]"
+    for i in range(1, len(clips)):
+        offset += durs[i - 1] - XFADE_DUR
+        label = f"[v{i}]"
+        tr = TRANSITIONS[(i - 1) % len(TRANSITIONS)]
+        parts.append(f"{prev}[{i}:v]xfade=transition={tr}:duration={XFADE_DUR}"
+                     f":offset={offset:.2f}{label}")
+        prev = label
+
+    args = [ff, "-y"]
+    for c in clips:
+        args += ["-i", c]
+    args += ["-filter_complex", ";".join(parts), "-map", prev,
+             "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p", out]
+    ok = await asyncio.to_thread(_run, args)
+    return bool(ok and os.path.exists(out))
+
+
 async def assemble(clip_urls: list, music_mood: str = None, out_dir: str = None,
-                   script: str = None, voice_url: str = None) -> dict:
+                   script: str = None, voice_url: str = None,
+                   transitions: bool = True) -> dict:
     """Профессиональная склейка: клипы → один ролик 9:16 с караоке-титрами,
     озвучкой и музыкой (приглушённой под голос).
 
@@ -63,16 +95,21 @@ async def assemble(clip_urls: list, music_mood: str = None, out_dir: str = None,
     if not norm_clips:
         return {"ok": False, "error": "ни один клип не подготовлен. " + "; ".join(diag)}
 
-    # 2. Склейка (concat demuxer — одинаковые параметры уже гарантированы).
-    listfile = os.path.join(work, "list.txt")
-    with open(listfile, "w") as f:
-        for c in norm_clips:
-            f.write(f"file '{c}'\n")
+    # 2. Склейка. С переходами (xfade) — выглядит профессионально; при сбое —
+    #    обычный concat встык как надёжный запасной путь.
     joined = os.path.join(work, "joined.mp4")
-    if not await asyncio.to_thread(_run, [
-        ff, "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", joined,
-    ]) or not os.path.exists(joined):
-        return {"ok": False, "error": "склейка не удалась"}
+    used_transitions = False
+    if transitions and len(norm_clips) > 1:
+        used_transitions = await _concat_with_transitions(ff, norm_clips, joined)
+    if not used_transitions:
+        listfile = os.path.join(work, "list.txt")
+        with open(listfile, "w") as f:
+            for c in norm_clips:
+                f.write(f"file '{c}'\n")
+        if not await asyncio.to_thread(_run, [
+            ff, "-y", "-f", "concat", "-safe", "0", "-i", listfile, "-c", "copy", joined,
+        ]) or not os.path.exists(joined):
+            return {"ok": False, "error": "склейка не удалась"}
 
     out = os.path.join(out_dir, f"reel_{date.today().isoformat()}_{os.getpid()}.mp4")
 
@@ -131,6 +168,7 @@ async def assemble(clip_urls: list, music_mood: str = None, out_dir: str = None,
         os.replace(joined, out)  # что-то не легло — отдаём хотя бы склейку
 
     return {"ok": True, "path": out, "clips": len(norm_clips),
+            "transitions": used_transitions,
             "music": bool(track), "voice": bool(voice_local), "captions": bool(ass_path)}
 
 

@@ -60,6 +60,32 @@ def normalize_mood(tone: str | None) -> str:
     return MOOD_ALIASES.get(t, t)
 
 
+async def add_track_from_url(url: str, mood: str = "universal", name: str = None) -> dict:
+    """Скачивает трек по прямой ссылке в библиотеку и проставляет тег настроения."""
+    import json
+    import httpx
+    os.makedirs(MUSIC_DIR, exist_ok=True)
+    fname = name or os.path.basename(url.split("?")[0]) or "track.mp3"
+    if not fname.lower().endswith(AUDIO_EXT):
+        fname += ".mp3"
+    dst = os.path.join(MUSIC_DIR, fname)
+    try:
+        async with httpx.AsyncClient(timeout=120, follow_redirects=True) as c:
+            r = await c.get(url)
+            r.raise_for_status()
+        with open(dst, "wb") as f:
+            f.write(r.content)
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:150]}
+
+    tags = _tags()
+    tags[fname] = {"mood": normalize_mood(mood)}
+    with open(os.path.join(MUSIC_DIR, "tags.json"), "w", encoding="utf-8") as f:
+        json.dump(tags, f, ensure_ascii=False, indent=2)
+    return {"ok": True, "file": fname, "mood": normalize_mood(mood),
+            "total": len(list_tracks())}
+
+
 def pick_track(mood: str | None = None) -> str | None:
     """Возвращает путь к треку по настроению. Нет совпадения — любой. Пусто — None."""
     tracks = list_tracks()
