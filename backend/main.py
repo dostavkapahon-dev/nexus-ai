@@ -104,6 +104,12 @@ app.include_router(automation_router, dependencies=[Depends(require_auth)])
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
 
+@app.get("/api/health")
+async def health():
+    """Лёгкий health-эндпоинт для внешней «пробуждалки» (UptimeRobot и т.п.),
+    чтобы бесплатный Render не засыпал и Telegram-бот не замолкал."""
+    return {"ok": True, "service": "nexus-ai"}
+
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):
     await manager.connect(niche_id, websocket)
