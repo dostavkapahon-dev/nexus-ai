@@ -145,6 +145,31 @@ async def _dispatch_command(chat_id: str, text: str):
                            reply_markup=_main_menu_kb())
         return
 
+    if cmd == "music":
+        from core import music_library as ml
+        if not args:
+            tracks = ml.list_tracks()
+            if not tracks:
+                await send_message(chat_id,
+                    "🎵 <b>Библиотека музыки пуста</b>\n\n"
+                    "Добавь трек прямой ссылкой на mp3:\n"
+                    "<code>/music https://...mp3 energetic</code>\n\n"
+                    "Настроения: energetic / calm / fun / dramatic\n"
+                    "Бесплатные треки: Pixabay Music, YouTube Audio Library, FMA")
+                return
+            lines = [f"🎵 <b>Треков: {len(tracks)}</b>"] + [f"• {t['file']} — {t['mood']}" for t in tracks[:20]]
+            await send_message(chat_id, "\n".join(lines))
+            return
+        url = args[0]
+        mood = args[1] if len(args) > 1 else "universal"
+        await send_message(chat_id, "⬇️ Скачиваю трек...")
+        r = await ml.add_track_from_url(url, mood)
+        if r.get("ok"):
+            await send_message(chat_id, f"✅ Добавлен: {r['file']} ({r['mood']}). Всего треков: {r['total']}")
+        else:
+            await send_message(chat_id, f"⚠️ Не скачался: {r.get('error')}")
+        return
+
     if cmd == "montage":
         # Формат: /montage url1 url2 ... [| текст титров для караоке]
         raw = text.split(" ", 1)[1] if " " in text else ""
