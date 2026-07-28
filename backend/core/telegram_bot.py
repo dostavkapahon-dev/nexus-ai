@@ -60,6 +60,8 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
+        {"command": "pc", "description": "Статус ПК (браузер-агент)"},
+        {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
         {"command": "strategy", "description": "Анализ + выбор стратегии"},
         {"command": "hunt", "description": "Топ залетевших в YouTube по нише"},
@@ -143,6 +145,47 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
                            reply_markup=_main_menu_kb())
+        return
+
+    if cmd == "pc":
+        from api.routes_desktop import desktop_connected
+        if desktop_connected():
+            await send_message(chat_id,
+                "🖥 <b>ПК подключён</b> ✅\nБраузер под управлением агента.\n\n"
+                "Дай задачу: <code>/do Открой instagram.com и посмотри уведомления</code>")
+        else:
+            await send_message(chat_id,
+                "🖥 <b>ПК не подключён</b> ❌\n\n"
+                "Как подключить:\n"
+                "1. Скачай <code>start_agent.bat</code> из репозитория\n"
+                "2. Дважды кликни по нему на своём ПК\n"
+                "3. Откроется браузер — войди в нужные аккаунты\n"
+                "4. Не закрывай окно\n\n"
+                "Проверить снова: /pc")
+        return
+
+    if cmd == "do":
+        from api.routes_desktop import desktop_connected
+        if not desktop_connected():
+            await send_message(chat_id, "❌ ПК не подключён. Запусти start_agent.bat — проверь через /pc")
+            return
+        task = " ".join(args)
+        if not task:
+            await send_message(chat_id, "❗ Что сделать? Напр.:\n<code>/do Открой olx.ua и найди цены на iPhone 15</code>")
+            return
+        await send_message(chat_id, f"🖥 Выполняю на твоём ПК: <i>{task[:100]}</i>\nЭто может занять пару минут...")
+        from core.browser_agent import run_agent
+        try:
+            res = await run_agent(task=task, max_steps=25)
+            status = res.get("status")
+            if status == "done":
+                await send_message(chat_id, f"✅ <b>Готово</b>\n{res.get('summary', '')[:1500]}")
+            elif status == "needs_input":
+                await send_message(chat_id, f"❓ Агент спрашивает:\n{res.get('question', '')[:800]}")
+            else:
+                await send_message(chat_id, f"⚠️ Статус: {status}\n{str(res.get('summary') or res.get('error'))[:500]}")
+        except Exception as e:
+            await send_message(chat_id, f"⚠️ Ошибка агента: {str(e)[:200]}")
         return
 
     if cmd == "music":
@@ -521,6 +564,9 @@ async def _dispatch_command(chat_id: str, text: str):
             "/viral [ссылки] — разобрать чужие ролики → рецепт",
             "/see [url] — разбор картинки/ролика (зрение)",
             "/montage [ссылки] — склеить клипы в один ролик",
+            "/music [url] [настроение] — добавить трек",
+            "/pc       — статус подключённого ПК",
+            "/do [задача] — выполнить в браузере на ПК",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
