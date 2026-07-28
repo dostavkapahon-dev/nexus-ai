@@ -165,9 +165,9 @@ async def _dispatch_command(chat_id: str, text: str):
         if res.get("ok") and res.get("sent"):
             return  # видео уже отправлено
         if res.get("ok"):
-            await send_message(chat_id, f"✅ Собрано ({res.get('clips')} сцен), но не смог отправить файл — велик размер?")
+            await send_message(chat_id, f"✅ Ролик собран ({res.get('clips')} сцен), но не отправился: {res.get('send_error', 'неизвестно')}")
         else:
-            await send_message(chat_id, f"⚠️ {res.get('error')}")
+            await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
         return
 
     if cmd == "diag":

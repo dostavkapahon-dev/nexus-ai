@@ -19,7 +19,7 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, Outline, Shadow, Alignment, MarginL, MarginR, MarginV
-Style: Kara, Arial, 96, &H00FFFFFF, &H00000000, &H90000000, 1, 5, 2, 2, 60, 60, 260
+Style: Kara, DejaVu Sans, 96, &H00FFFFFF, &H00000000, &H90000000, 1, 5, 2, 2, 60, 60, 260
 
 [Events]
 Format: Layer, Start, End, Style, Text
