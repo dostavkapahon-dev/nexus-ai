@@ -47,17 +47,21 @@ async def assemble(clip_urls: list, music_mood: str = None, out_dir: str = None,
     out_dir = out_dir or os.path.join(base, "output", date.today().isoformat())
     os.makedirs(out_dir, exist_ok=True)
 
-    # 1. Скачать и нормализовать каждый клип.
+    # 1. Скачать и нормализовать каждый клип (с диагностикой каждого шага).
     norm_clips = []
+    diag = []
     for i, url in enumerate(clip_urls):
         local = await ensure_local_video({"url": url})
         if not local:
+            diag.append(f"клип {i+1}: не скачался (недоступен URL?)")
             continue
         dst = os.path.join(work, f"n{i}.mp4")
         if await _normalize(ff, local, dst) and os.path.exists(dst):
             norm_clips.append(dst)
+        else:
+            diag.append(f"клип {i+1}: ffmpeg-нормализация не удалась")
     if not norm_clips:
-        return {"ok": False, "error": "не удалось скачать/подготовить клипы (CDN?)"}
+        return {"ok": False, "error": "ни один клип не подготовлен. " + "; ".join(diag)}
 
     # 2. Склейка (concat demuxer — одинаковые параметры уже гарантированы).
     listfile = os.path.join(work, "list.txt")
@@ -130,23 +134,31 @@ async def assemble(clip_urls: list, music_mood: str = None, out_dir: str = None,
             "music": bool(track), "voice": bool(voice_local), "captions": bool(ass_path)}
 
 
-async def send_video_to_telegram(path: str, chat_id: str, caption: str = "") -> bool:
-    """Загружает готовый ролик файлом в Telegram (multipart)."""
+async def send_video_to_telegram(path: str, chat_id: str, caption: str = "") -> dict:
+    """Загружает готовый ролик файлом в Telegram (multipart). Возвращает {ok, error}."""
     import httpx
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    if not token or not chat_id or not os.path.exists(path):
-        return False
+    if not token:
+        return {"ok": False, "error": "нет TELEGRAM_BOT_TOKEN"}
+    if not os.path.exists(path):
+        return {"ok": False, "error": "файл ролика не найден"}
+    size_mb = os.path.getsize(path) / 1024 / 1024
+    if size_mb > 49:
+        return {"ok": False, "error": f"ролик {size_mb:.0f} МБ — Telegram-бот лимит 50 МБ"}
     try:
-        async with httpx.AsyncClient(timeout=180) as c:
+        async with httpx.AsyncClient(timeout=300) as c:
             with open(path, "rb") as f:
                 r = await c.post(
                     f"https://api.telegram.org/bot{token}/sendVideo",
                     data={"chat_id": chat_id, "caption": caption[:1024]},
                     files={"video": ("reel.mp4", f, "video/mp4")},
                 )
-            return r.json().get("ok", False)
-    except Exception:
-        return False
+            d = r.json()
+            if d.get("ok"):
+                return {"ok": True}
+            return {"ok": False, "error": d.get("description", "Telegram отклонил")[:150]}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:150]}
 
 
 async def assemble_and_send(clip_urls: list, chat_id: str, music_mood: str = None,
@@ -155,6 +167,8 @@ async def assemble_and_send(clip_urls: list, chat_id: str, music_mood: str = Non
     res = await assemble(clip_urls, music_mood=music_mood, script=script, voice_url=voice_url)
     if not res.get("ok"):
         return res
-    sent = await send_video_to_telegram(res["path"], chat_id, caption)
-    res["sent"] = sent
+    snd = await send_video_to_telegram(res["path"], chat_id, caption)
+    res["sent"] = snd.get("ok")
+    if not snd.get("ok"):
+        res["send_error"] = snd.get("error")
     return res
