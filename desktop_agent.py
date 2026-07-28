@@ -43,16 +43,58 @@ _playwright = None
 # Постоянный профиль браузера: вход в Instagram/VK/др. сохраняется между запусками.
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session")
 
+def _find_chromium() -> str | None:
+    """Ищет уже скачанный Chromium (любой версии) в кэше Playwright."""
+    import glob
+    roots = [os.getenv("PLAYWRIGHT_BROWSERS_PATH", ""),
+             os.path.expanduser("~/.cache/ms-playwright"),
+             os.path.expandvars(r"%USERPROFILE%\AppData\Local\ms-playwright")]
+    patterns = ["chromium-*/chrome-linux/chrome", "chromium-*/chrome-win/chrome.exe",
+                "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"]
+    for root in [r for r in roots if r and os.path.isdir(r)]:
+        for pat in patterns:
+            hits = sorted(glob.glob(os.path.join(root, pat)), reverse=True)
+            if hits:
+                return hits[0]
+    return None
+
+
 async def ensure_browser():
+    """Поднимает браузер с сохранением сессий. Устойчиво к рассинхрону версий
+    Playwright/Chromium: пробует бандл, системный Chrome/Edge, затем явный файл."""
     global _browser, _page, _playwright
     if _browser is None:
         _playwright = await async_playwright().start()
         os.makedirs(PROFILE_DIR, exist_ok=True)
-        # launch_persistent_context хранит cookies/сессии в PROFILE_DIR
-        _browser = await _playwright.chromium.launch_persistent_context(
-            PROFILE_DIR, headless=HEADLESS,
-            viewport={"width": 1280, "height": 800},
-        )
+        opts = {"headless": HEADLESS, "viewport": {"width": 1280, "height": 800}}
+
+        attempts = [
+            ("бандл Playwright", {}),
+            ("системный Chrome", {"channel": "chrome"}),
+            ("системный Edge", {"channel": "msedge"}),
+        ]
+        # Явный путь к браузеру — спасает при рассинхроне версий Playwright/Chromium.
+        exe = os.getenv("BROWSER_PATH") or _find_chromium()
+        if exe:
+            attempts.append((f"файл {os.path.basename(exe)}", {"executable_path": exe}))
+        errors = []
+        for label, extra in attempts:
+            try:
+                _browser = await _playwright.chromium.launch_persistent_context(
+                    PROFILE_DIR, **opts, **extra
+                )
+                print(f"🌐 Браузер запущен ({label})")
+                break
+            except Exception as e:
+                errors.append(f"{label}: {str(e)[:120]}")
+                _browser = None
+
+        if _browser is None:
+            hint = ("Не удалось запустить браузер.\n"
+                    "Выполни:  py -m playwright install chromium\n"
+                    "или установи Google Chrome.\nПодробности:\n  " + "\n  ".join(errors))
+            raise RuntimeError(hint)
+
         _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
     return _page
 
