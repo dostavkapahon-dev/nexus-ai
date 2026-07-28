@@ -28,7 +28,7 @@ if errorlevel 1 (
 REM 2. Скачать desktop_agent.py, если его нет рядом
 if not exist desktop_agent.py (
   echo Скачиваю desktop_agent.py ...
-  curl.exe -L -o desktop_agent.py https://raw.githubusercontent.com/dostavkapahon-dev/nexus-ai/claude/laughing-babbage-v0ldgg/desktop_agent.py
+  curl.exe -L -o desktop_agent.py https://raw.githubusercontent.com/dostavkapahon-dev/nexus-ai/master/desktop_agent.py
 )
 
 REM 3. Установить зависимости (быстро, если уже стоят)
