@@ -41,6 +41,42 @@ PROVIDER_KEY_ENV = {
 }
 
 
+_GEMINI_RESOLVED = None
+
+
+def resolve_gemini_model() -> str | None:
+    """Спрашивает у Google, какие модели реально доступны этому ключу,
+    и возвращает лучшую flash-модель. Результат кэшируется.
+
+    Избавляет от ошибок «модель не найдена», когда Google меняет линейку.
+    """
+    global _GEMINI_RESOLVED
+    if _GEMINI_RESOLVED:
+        return _GEMINI_RESOLVED
+    key = os.getenv("GEMINI_API_KEY", "")
+    if not key:
+        return None
+    try:
+        import httpx
+        r = httpx.get("https://generativelanguage.googleapis.com/v1beta/models",
+                      params={"key": key}, timeout=15)
+        names = [m.get("name", "").replace("models/", "")
+                 for m in r.json().get("models", [])
+                 if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    except Exception:
+        return None
+    if not names:
+        return None
+    # Приоритет: свежие flash (дёшево и быстро) → любые flash → что есть.
+    for pref in ("gemini-2.5-flash", "gemini-2.0-flash", "flash"):
+        hits = [n for n in names if pref in n and "vision" not in n]
+        if hits:
+            _GEMINI_RESOLVED = sorted(hits, key=len)[0]
+            return _GEMINI_RESOLVED
+    _GEMINI_RESOLVED = names[0]
+    return _GEMINI_RESOLVED
+
+
 def _has_key(model: str) -> bool:
     """Есть ли ключ у провайдера этой модели (иначе нет смысла её пробовать)."""
     provider = AI_ROUTING.get(model, "openai")
@@ -111,8 +147,17 @@ class AIRouter:
 
     async def _call_gemini(self, model, system, prompt):
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-        m = genai.GenerativeModel(model, system_instruction=system)
-        resp = await asyncio.to_thread(m.generate_content, prompt)
+        try:
+            m = genai.GenerativeModel(model, system_instruction=system)
+            resp = await asyncio.to_thread(m.generate_content, prompt)
+        except Exception as e:
+            # Модель недоступна для этого ключа → берём реально доступную.
+            alt = await asyncio.to_thread(resolve_gemini_model)
+            if not alt or alt == model:
+                raise
+            m = genai.GenerativeModel(alt, system_instruction=system)
+            resp = await asyncio.to_thread(m.generate_content, prompt)
+            model = alt
         text = resp.text
         tokens = len(text.split()) * 2
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.0001), "model_used": model}
