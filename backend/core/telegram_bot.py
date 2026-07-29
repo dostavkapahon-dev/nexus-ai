@@ -357,11 +357,48 @@ async def _dispatch_command(chat_id: str, text: str):
             f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
             f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",
             f"{yn(os.getenv('AYRSHARE_API_KEY'))} Ayrshare (соцсети)",
-            f"🧠 Gemini-модель: {_gemini_model_line()}",
-            f"{yn(any_ai)} ИИ-ключ (" + ", ".join(k for k, v in ai_keys.items() if v) + ")" if any_ai
-            else "❌ ИИ-ключ — НЕ задан ни один (анализ/генерация не будут работать)",
         ]
-        await send_message(chat_id, "\n".join(lines))
+        await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю ключи ИИ вживую...")
+
+        # Реальная проверка: ключ может быть задан, но невалиден/без квоты.
+        checks = []
+        if key := os.getenv("GEMINI_API_KEY"):
+            try:
+                async with httpx.AsyncClient(timeout=15) as c:
+                    r = await c.get("https://generativelanguage.googleapis.com/v1beta/models",
+                                    params={"key": key})
+                d = r.json()
+                if r.status_code == 200:
+                    from core.ai_router import resolve_gemini_model
+                    checks.append(f"✅ Gemini — рабочий (модель: {resolve_gemini_model() or '—'})")
+                else:
+                    checks.append(f"❌ Gemini — {d.get('error', {}).get('message', 'ошибка')[:90]}")
+            except Exception as e:
+                checks.append(f"❌ Gemini — {str(e)[:80]}")
+        else:
+            checks.append("⬜ Gemini — не задан")
+
+        if key := os.getenv("OPENAI_API_KEY"):
+            try:
+                import openai
+                cl = openai.AsyncOpenAI(api_key=key)
+                await cl.models.list()
+                checks.append("✅ OpenAI — рабочий")
+            except Exception as e:
+                msg = str(e)
+                short = "квота исчерпана" if "insufficient_quota" in msg else msg[:80]
+                checks.append(f"❌ OpenAI — {short}")
+        else:
+            checks.append("⬜ OpenAI — не задан")
+
+        for name, env in (("Claude", "ANTHROPIC_API_KEY"), ("DeepSeek", "DEEPSEEK_API_KEY")):
+            checks.append(f"{'✅' if os.getenv(env) else '⬜'} {name} — "
+                          f"{'задан' if os.getenv(env) else 'не задан'}")
+
+        verdict = ("\n\n<b>Итог:</b> " +
+                   ("система готова ✅" if any("✅" in c for c in checks)
+                    else "рабочих ИИ-ключей нет — анализ и генерация не запустятся ❌"))
+        await send_message(chat_id, "🧠 <b>Ключи ИИ (живая проверка)</b>\n" + "\n".join(checks) + verdict)
         return
 
     if cmd == "strategy":
