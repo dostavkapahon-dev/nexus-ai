@@ -816,12 +816,21 @@ async def _handle_plain_text(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines)[:4000], reply_markup=kb)
         return
 
-    # 2) Иначе — возможно, это правки к контенту на согласовании.
+    # 2) Правки к контенту на согласовании.
     from core import moderation
     async with AsyncSessionLocal() as db:
         pid = await moderation.pending_fix_id(db)
     if not pid:
-        return  # нечего править — игнорируем свободный текст
+        # 3) Свободный текст: понимаем намерение и выполняем нужное действие.
+        from core import intent
+        cmd = await intent.route(text)
+        if cmd and cmd != "/chat":
+            await send_message(chat_id, f"🤖 Понял: <code>{cmd[:80]}</code>")
+            await _handle_command(chat_id, cmd)
+            return
+        reply = await intent.chat_reply(text)
+        await send_message(chat_id, reply)
+        return
     await send_message(chat_id, "🔄 Применяю правки, секунду...")
     res = await moderation.apply_fix(text)
     if res:
