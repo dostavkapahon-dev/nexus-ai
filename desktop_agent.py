@@ -23,8 +23,20 @@ from datetime import datetime
 try:
     import websockets
     from playwright.async_api import async_playwright
-except ImportError:
-    print("Установите зависимости: pip install websockets playwright && playwright install chromium")
+except Exception as _imp_err:
+    # Показываем НАСТОЯЩУЮ причину — иначе непонятно, что чинить.
+    print("\n[ОШИБКА] Не удалось загрузить зависимости.")
+    print(f"Причина: {type(_imp_err).__name__}: {_imp_err}")
+    print(f"Python: {sys.version.split()[0]}  ({sys.executable})")
+    if sys.version_info >= (3, 13):
+        print("\n⚠️  У тебя Python "
+              f"{sys.version_info.major}.{sys.version_info.minor} — слишком новый для Playwright.")
+        print("   Поставь Python 3.12 с https://www.python.org/downloads/release/python-3128/")
+        print("   и запусти:  py -3.12 -m pip install websockets playwright")
+        print("               py -3.12 -m playwright install chromium")
+        print("               py -3.12 desktop_agent.py --server <URL> --token <TOKEN>")
+    else:
+        print("\nПопробуй:  pip install websockets playwright && playwright install chromium")
     sys.exit(1)
 
 parser = argparse.ArgumentParser()
