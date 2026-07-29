@@ -116,6 +116,15 @@ async def _handle_command(chat_id: str, text: str):
             pass
 
 
+def _gemini_model_line() -> str:
+    """Какая Gemini-модель реально доступна ключу (для /diag)."""
+    try:
+        from core.ai_router import resolve_gemini_model
+        return resolve_gemini_model() or "— (ключ не задан или моделей нет)"
+    except Exception as e:
+        return f"ошибка: {str(e)[:60]}"
+
+
 async def _refresh_env_from_db():
     """Подтягивает ключи из БД в окружение — чтобы сохранённое в дашборде
     работало сразу, без перезапуска сервера (процесс бота читал env на старте)."""
@@ -254,6 +263,7 @@ async def _dispatch_command(chat_id: str, text: str):
             f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
             f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",
             f"{yn(os.getenv('AYRSHARE_API_KEY'))} Ayrshare (соцсети)",
+            f"🧠 Gemini-модель: {_gemini_model_line()}",
             f"{yn(any_ai)} ИИ-ключ (" + ", ".join(k for k, v in ai_keys.items() if v) + ")" if any_ai
             else "❌ ИИ-ключ — НЕ задан ни один (анализ/генерация не будут работать)",
         ]
