@@ -32,6 +32,23 @@ def _anthropic_key():
     return os.getenv("ANTHROPIC_API_KEY", "")
 
 
+def _gemini_key():
+    return os.getenv("GEMINI_API_KEY", "")
+
+
+async def _gemini_vision(image_paths: list, question: str) -> str:
+    """Зрение через Gemini — бесплатный вариант, не требует OpenAI."""
+    import google.generativeai as genai
+    genai.configure(api_key=_gemini_key())
+    model = genai.GenerativeModel(os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-2.0-flash"))
+    parts = [question]
+    for p in image_paths:
+        with open(p, "rb") as f:
+            parts.append({"mime_type": "image/png", "data": f.read()})
+    resp = await asyncio.to_thread(model.generate_content, parts)
+    return resp.text
+
+
 async def _download(url: str) -> str | None:
     if not url or not url.startswith("http"):
         return url if (url and os.path.exists(url)) else None
@@ -103,22 +120,28 @@ async def _anthropic_vision(image_paths: list, question: str) -> str:
 
 
 async def analyze_image(url: str, question: str = None) -> dict:
-    """Разбор одной картинки по URL."""
+    """Разбор одной картинки. Провайдеры по наличию ключа: OpenAI → Gemini → Anthropic."""
     q = question or DEFAULT_Q
+    err = "не задан ни один ключ (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)"
+
     if _openai_key():
         try:
             return {"ok": True, "analysis": await _openai_vision([url], q)}
         except Exception as e:
-            err = str(e)[:150]
-    else:
-        err = "нет OPENAI_API_KEY"
-    if _anthropic_key():
-        local = await _download(url)
-        if local:
-            try:
-                return {"ok": True, "analysis": await _anthropic_vision([local], q)}
-            except Exception as e:
-                err = str(e)[:150]
+            err = f"OpenAI: {str(e)[:120]}"
+
+    # Gemini и Anthropic работают с локальным файлом.
+    local = await _download(url) if (_gemini_key() or _anthropic_key()) else None
+    if local and _gemini_key():
+        try:
+            return {"ok": True, "analysis": await _gemini_vision([local], q)}
+        except Exception as e:
+            err = f"Gemini: {str(e)[:120]}"
+    if local and _anthropic_key():
+        try:
+            return {"ok": True, "analysis": await _anthropic_vision([local], q)}
+        except Exception as e:
+            err = f"Anthropic: {str(e)[:120]}"
     return {"ok": False, "error": f"Vision недоступен: {err}"}
 
 
@@ -131,18 +154,22 @@ async def analyze_video(url: str, question: str = None, frames: int = 3) -> dict
     imgs = await asyncio.to_thread(_extract_frames, local, frames)
     if not imgs:
         return {"ok": False, "error": "не удалось вырезать кадры (ffmpeg?)"}
+    err = "не задан ни один ключ (GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY)"
     if _openai_key():
         try:
             return {"ok": True, "analysis": await _openai_vision(imgs, q), "frames": len(imgs)}
         except Exception as e:
-            err = str(e)[:150]
-    elif _anthropic_key():
+            err = f"OpenAI: {str(e)[:120]}"
+    if _gemini_key():
+        try:
+            return {"ok": True, "analysis": await _gemini_vision(imgs, q), "frames": len(imgs)}
+        except Exception as e:
+            err = f"Gemini: {str(e)[:120]}"
+    if _anthropic_key():
         try:
             return {"ok": True, "analysis": await _anthropic_vision(imgs, q), "frames": len(imgs)}
         except Exception as e:
-            err = str(e)[:150]
-    else:
-        err = "нет ключа vision-модели (OPENAI_API_KEY / ANTHROPIC_API_KEY)"
+            err = f"Anthropic: {str(e)[:120]}"
     return {"ok": False, "error": err}
 
 
