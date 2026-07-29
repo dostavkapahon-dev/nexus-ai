@@ -17,6 +17,7 @@ AI_ROUTING = {
     "gemini-2.0-flash": "google",
     "gemini-2.5-flash": "google",
     "gemini-flash-latest": "google",
+    "gemini-2.0-flash-lite": "google",
     # Perplexity
     "sonar-pro": "perplexity",
     "sonar-reasoning-pro": "perplexity",
@@ -28,8 +29,10 @@ AI_ROUTING = {
 
 # Резерв на случай сбоя основной модели. Порядок «дёшево → дорого»:
 # сначала самые дешёвые/бесплатные, Claude — в самом конце как надёжный мозг.
-FALLBACK_CHAIN = ["gemini-2.0-flash", "gemini-flash-latest", "deepseek-chat",
-                  "gpt-4o-mini", "claude-sonnet-4-6"]
+# У каждой Gemini-модели свой лимит бесплатной квоты, поэтому в цепочке их
+# несколько: упёрлись в 429 на одной — пробуем следующую.
+FALLBACK_CHAIN = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest",
+                  "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
 
 # Какая env-переменная с ключом нужна каждому провайдеру.
 PROVIDER_KEY_ENV = {
@@ -68,8 +71,10 @@ def resolve_gemini_model() -> str | None:
     if not names:
         return None
     # Приоритет: свежие flash (дёшево и быстро) → любые flash → что есть.
-    for pref in ("gemini-2.5-flash", "gemini-2.0-flash", "flash"):
-        hits = [n for n in names if pref in n and "vision" not in n]
+    # Приоритет по РАЗМЕРУ бесплатной квоты: lite-модели щедрее «старших».
+    for pref in ("flash-lite", "gemini-2.0-flash", "gemini-2.5-flash", "flash"):
+        hits = [n for n in names if pref in n and "vision" not in n
+                and "thinking" not in n and "exp" not in n]
         if hits:
             _GEMINI_RESOLVED = sorted(hits, key=len)[0]
             return _GEMINI_RESOLVED
@@ -95,10 +100,10 @@ PREMIUM_MODELS = {
 
 ECONOMY_MODELS = {
     "niche_analyst": "deepseek-chat",
-    "viral_hunter": "gemini-2.0-flash",
+    "viral_hunter": "gemini-2.0-flash-lite",
     "strategist": "deepseek-chat",
     "copywriter": "deepseek-chat",
-    "reviewer": "gemini-2.0-flash",
+    "reviewer": "gemini-2.0-flash-lite",
     "voice_adapter": "deepseek-chat",
     "visual_creator": "gpt-4o-mini",
     "adapter": "gpt-4o-mini",
@@ -112,6 +117,7 @@ COST_PER_1K = {
     "gpt-4o-mini": 0.00015,
     "gemini-2.0-flash": 0.0001,
     "gemini-flash-latest": 0.0001,
+    "gemini-2.0-flash-lite": 0.00005,
     "gemini-2.5-flash": 0.0003,
     "sonar": 0.001,
     "sonar-pro": 0.003,
@@ -209,7 +215,7 @@ class AIRouter:
                     errors[m] = f"{type(e).__name__}: {str(e)[:180]}"
                     # Квота/недоступная модель — повторять бессмысленно, идём к следующей.
                     if any(s in str(e).lower() for s in
-                           ("insufficient_quota", "not found", "404", "unsupported", "deprecat")):
+                           ("insufficient_quota", "resource_exhausted", "429", "not found", "unsupported", "deprecat")):
                         break
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)

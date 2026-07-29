@@ -99,7 +99,17 @@ async def _handle_command(chat_id: str, text: str):
                     "GEMINI": os.getenv("GEMINI_API_KEY"),
                     "DEEPSEEK": os.getenv("DEEPSEEK_API_KEY")}
             present = [k for k, v in keys.items() if v]
-            if present:
+            low = msg.lower()
+            if "quota" in low or "429" in low or "resource_exhausted" in low:
+                hint = ("⏳ <b>Лимит бесплатных запросов исчерпан</b> у всех подключённых ИИ.\n\n"
+                        "Что делать:\n"
+                        "• <b>Подождать</b> — квота Gemini обновляется каждые сутки\n"
+                        "• <b>Добавить DeepSeek</b> — очень дёшево (центы за сотни запросов):\n"
+                        "   platform.deepseek.com → API Keys → создать\n"
+                        "   → в Render: <code>DEEPSEEK_API_KEY</code>\n"
+                        "• Либо новый ключ Gemini на другом Google-аккаунте\n\n"
+                        "Проверить: /diag")
+            elif present:
                 # Ключи ЕСТЬ — значит сам вызов упал. Показываем реальную причину.
                 hint = ("⚠️ Ключи ИИ есть (" + ", ".join(present) + "), но вызов упал.\n"
                         "Причина: <code>" + msg[-350:] + "</code>\n\n"
