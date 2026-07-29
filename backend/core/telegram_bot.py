@@ -687,6 +687,62 @@ async def _dispatch_command(chat_id: str, text: str):
         ]
         await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
 
+async def _handle_media(chat_id: str, msg: dict):
+    """Голос → расшифровка → обычная обработка. Медиа → сохранение + разбор зрением."""
+    from core import tg_input
+    try:
+        res = await tg_input.handle_media(msg)
+    except Exception as e:
+        await send_message(chat_id, f"⚠️ Не смог обработать вложение: {str(e)[:150]}")
+        return
+
+    kind = res.get("kind")
+    if not kind:
+        return
+
+    if kind == "voice":
+        text = res.get("text", "").strip()
+        if not text:
+            await send_message(chat_id, "🎤 Не разобрал речь. Нужен GEMINI_API_KEY или OPENAI_API_KEY.")
+            return
+        await send_message(chat_id, f"🎤 <i>Услышал:</i> {text[:300]}")
+        # Речь может быть командой («статус», «сделай рилс») или ответом в интервью.
+        low = text.lower()
+        cmd_map = {"статус": "/status", "меню": "/menu", "стратег": "/strategy",
+                   "автопилот": "/auto", "план": "/plan7", "тренд": "/trend",
+                   "публик": "/publish", "фабрик": "/factory"}
+        for word, cmd in cmd_map.items():
+            if low.startswith(word):
+                await _handle_command(chat_id, cmd)
+                return
+        await _handle_plain_text(chat_id, text)
+        return
+
+    if kind == "audio":
+        await send_message(chat_id, f"🎵 Трек сохранён в библиотеку музыки.\n"
+                                    f"Проверить: /music")
+        return
+
+    if kind == "font":
+        await send_message(chat_id, f"🔤 Шрифт сохранён: {res.get('name', '')}\n"
+                                    "Буду использовать в титрах.")
+        return
+
+    # Фото или видео — сразу разбираем зрением
+    path = res.get("path")
+    await send_message(chat_id, "🔍 Смотрю, что на этом... секунду.")
+    try:
+        from core.vision import analyze_image, analyze_video
+        fn = analyze_video if kind == "video" else analyze_image
+        r = await fn(path)
+        if r.get("ok"):
+            await send_message(chat_id, "🔍 <b>Разбор</b>\n\n" + r["analysis"][:3000])
+        else:
+            await send_message(chat_id, f"💾 Сохранил как референс.\n⚠️ Разбор не вышел: {r.get('error')}")
+    except Exception as e:
+        await send_message(chat_id, f"💾 Сохранил как референс. Разбор не удался: {str(e)[:120]}")
+
+
 async def _handle_plain_text(chat_id: str, text: str):
     """Обычное сообщение: ответ на вопрос автопилота или правки к контенту."""
     from core import autopilot as ap
@@ -764,7 +820,15 @@ async def poll_updates():
                     msg = upd.get("message", {})
                     text = msg.get("text", "")
                     upd_chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if not text or (chat_id and upd_chat_id != chat_id):
+                    if chat_id and upd_chat_id != chat_id:
+                        continue
+
+                    # Голос / фото / видео / шрифт — обрабатываем отдельно.
+                    if not text and any(k in msg for k in
+                                        ("voice", "audio", "photo", "video", "document")):
+                        asyncio.create_task(_handle_media(upd_chat_id, msg))
+                        continue
+                    if not text:
                         continue
                     if text.startswith("/"):
                         asyncio.create_task(_handle_command(upd_chat_id, text))
