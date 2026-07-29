@@ -13,10 +13,10 @@ AI_ROUTING = {
     # OpenAI
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
-    # Google
+    # Google (модели 1.5 отключены Google — не используем)
     "gemini-2.0-flash": "google",
-    "gemini-1.5-pro": "google",
-    "gemini-1.5-flash": "google",
+    "gemini-2.5-flash": "google",
+    "gemini-flash-latest": "google",
     # Perplexity
     "sonar-pro": "perplexity",
     "sonar-reasoning-pro": "perplexity",
@@ -28,7 +28,8 @@ AI_ROUTING = {
 
 # Резерв на случай сбоя основной модели. Порядок «дёшево → дорого»:
 # сначала самые дешёвые/бесплатные, Claude — в самом конце как надёжный мозг.
-FALLBACK_CHAIN = ["gemini-1.5-flash", "gemini-2.0-flash", "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
+FALLBACK_CHAIN = ["gemini-2.0-flash", "gemini-flash-latest", "deepseek-chat",
+                  "gpt-4o-mini", "claude-sonnet-4-6"]
 
 # Какая env-переменная с ключом нужна каждому провайдеру.
 PROVIDER_KEY_ENV = {
@@ -58,10 +59,10 @@ PREMIUM_MODELS = {
 
 ECONOMY_MODELS = {
     "niche_analyst": "deepseek-chat",
-    "viral_hunter": "gemini-1.5-flash",
+    "viral_hunter": "gemini-2.0-flash",
     "strategist": "deepseek-chat",
     "copywriter": "deepseek-chat",
-    "reviewer": "gemini-1.5-flash",
+    "reviewer": "gemini-2.0-flash",
     "voice_adapter": "deepseek-chat",
     "visual_creator": "gpt-4o-mini",
     "adapter": "gpt-4o-mini",
@@ -74,8 +75,8 @@ COST_PER_1K = {
     "gpt-4o": 0.005,
     "gpt-4o-mini": 0.00015,
     "gemini-2.0-flash": 0.0001,
-    "gemini-1.5-flash": 0.000075,
-    "gemini-1.5-pro": 0.00125,
+    "gemini-flash-latest": 0.0001,
+    "gemini-2.5-flash": 0.0003,
     "sonar": 0.001,
     "sonar-pro": 0.003,
     "sonar-reasoning-pro": 0.005,
@@ -140,6 +141,7 @@ class AIRouter:
         # Если ключей нет вовсе (напр. локальный тест) — пробуем как есть.
         models_to_try = with_keys or ordered
         last_error = None
+        errors = {}
         for m in models_to_try:
             provider = AI_ROUTING.get(m, "openai")
             for attempt in range(3):
@@ -159,8 +161,14 @@ class AIRouter:
                     return result
                 except Exception as e:
                     last_error = e
+                    errors[m] = f"{type(e).__name__}: {str(e)[:180]}"
+                    # Квота/недоступная модель — повторять бессмысленно, идём к следующей.
+                    if any(s in str(e).lower() for s in
+                           ("insufficient_quota", "not found", "404", "unsupported", "deprecat")):
+                        break
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
-        raise RuntimeError(f"All AI providers failed. Last error: {last_error}")
+        detail = " | ".join(f"{m} → {err}" for m, err in errors.items()) or str(last_error)
+        raise RuntimeError(f"All AI providers failed. {detail}")
 
 ai_router = AIRouter()
