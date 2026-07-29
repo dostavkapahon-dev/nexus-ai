@@ -4,6 +4,7 @@ Runs as background webhook/polling alongside FastAPI.
 Commands: /status /analyze /create /publish /plan /trends /pause /resume /report /config
 """
 import os
+import json
 import asyncio
 import httpx
 from sqlalchemy import select
@@ -37,6 +38,7 @@ def _main_menu_kb() -> dict:
          {"text": "📋 План", "callback_data": "plan"}],
         [{"text": "✍️ Создать", "callback_data": "create"},
          {"text": "📤 Опубликовать", "callback_data": "publish"}],
+        [{"text": "🚀 Автопилот (полный цикл)", "callback_data": "auto"}],
         [{"text": "🧠 Стратегия", "callback_data": "strategy"},
          {"text": "📈 Тренды", "callback_data": "trend"}],
         [{"text": "🏭 Фабрика (превью)", "callback_data": "factory"}],
@@ -154,6 +156,98 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
                            reply_markup=_main_menu_kb())
+        return
+
+    if cmd == "auto":
+        from core import autopilot as ap
+        await send_message(chat_id, "🔍 <b>Шаг 1/4</b> — собираю полную картину аккаунта, топ-постов и трендов...")
+        analysis = await ap.deep_analysis()
+        acc = analysis.get("account") or {}
+        top = acc.get("top_posts") or []
+        summary = [f"📊 Ниша: {analysis.get('niche') or '—'}",
+                   f"📈 Постов в истории: {acc.get('posts_count', '—')}",
+                   f"🔥 Топ-постов найдено: {len(top) if isinstance(top, list) else 0}"]
+        if analysis.get("account_error"):
+            summary.append(f"⚠️ Ayrshare: {analysis['account_error'][:80]}")
+        await send_message(chat_id, "\n".join(summary))
+
+        await send_message(chat_id, "🧠 <b>Шаг 2/4</b> — чего мне не хватает для полной картины...")
+        questions = await ap.build_questions(analysis)
+        await ap.set_state({"stage": "interview", "analysis": analysis,
+                            "questions": questions, "answers": {}, "idx": 0})
+        await send_message(chat_id,
+            f"❓ <b>Вопрос 1 из {len(questions)}</b>\n\n{questions[0]}\n\n"
+            "<i>Ответь обычным сообщением. Пропустить — напиши «-»</i>")
+        return
+
+    if cmd == "plan7":
+        from core import autopilot as ap
+        st = await ap.get_state()
+        strat = st.get("chosen")
+        if not strat:
+            await send_message(chat_id, "❗ Сначала пройди /auto и выбери стратегию")
+            return
+        await send_message(chat_id, "🗓 Составляю план на 7 дней...")
+        days = await ap.build_week_plan(strat, st.get("analysis", {}))
+        if not days:
+            await send_message(chat_id, "⚠️ Не удалось составить план, попробуй ещё раз")
+            return
+        icons = {"reels": "🎬", "post": "📝", "carousel": "🖼", "stories": "📱", "threads": "🧵"}
+        lines = ["🗓 <b>План на неделю</b>", ""]
+        for d in days:
+            ic = icons.get(str(d.get("format", "")).lower(), "•")
+            lines.append(f"{ic} <b>День {d.get('day')}</b> · {d.get('format')} · {d.get('best_time', '')}\n"
+                         f"   {d.get('topic', '')}\n   <i>Хук: {d.get('hook', '')}</i>")
+        st["week_plan"] = days
+        await ap.set_state(st)
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "predict":
+        from core import autopilot as ap
+        st = await ap.get_state()
+        idea = " ".join(args) or json.dumps(st.get("chosen", {}), ensure_ascii=False)
+        if not idea.strip():
+            await send_message(chat_id, "❗ Опиши идею ролика: /predict хук про ИИ-двойника")
+            return
+        await send_message(chat_id, "📈 Считаю шанс залёта...")
+        p = await ap.predict_virality({"idea": idea}, st.get("analysis", {}))
+        await send_message(chat_id, ap.format_prediction(p))
+        return
+
+    if cmd.startswith("strat2_"):
+        from core import autopilot as ap
+        try:
+            idx = int(cmd.split("_", 1)[1])
+        except (ValueError, IndexError):
+            return
+        st = await ap.get_state()
+        opts = st.get("options", [])
+        if idx >= len(opts):
+            await send_message(chat_id, "❌ Список устарел — запусти /auto заново")
+            return
+        chosen = opts[idx]
+        st["chosen"] = chosen
+        st["stage"] = "ready"
+        await ap.set_state(st)
+        await send_message(chat_id,
+            f"✅ Стратегия принята: <b>{chosen.get('title')}</b>\n{chosen.get('angle', '')}\n\n"
+            f"💡 Первый рилс: {chosen.get('first_reel', '')}")
+        # Сразу прогноз по первой идее
+        p = await ap.predict_virality({"idea": chosen.get("first_reel", "")}, st.get("analysis", {}))
+        await send_message(chat_id, ap.format_prediction(p), reply_markup={"inline_keyboard": [
+            [{"text": "🎬 Создать этот рилс", "callback_data": "makereel"}],
+            [{"text": "🗓 План на неделю", "callback_data": "plan7"}],
+        ]})
+        return
+
+    if cmd == "makereel":
+        from core import autopilot as ap
+        st = await ap.get_state()
+        idea = (st.get("chosen") or {}).get("first_reel", "")
+        await send_message(chat_id, f"🎬 Запускаю фабрику: <i>{idea[:120]}</i>\nПришлю на согласование.")
+        from core.content_factory import run_factory
+        asyncio.create_task(run_factory(topic=idea or None, dry_run=False))
         return
 
     if cmd == "pc":
@@ -594,7 +688,42 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
 
 async def _handle_plain_text(chat_id: str, text: str):
-    """Обычное сообщение: если ждём правки к контенту — применяем их."""
+    """Обычное сообщение: ответ на вопрос автопилота или правки к контенту."""
+    from core import autopilot as ap
+
+    # 1) Идёт интервью автопилота — записываем ответ и задаём следующий вопрос.
+    st = await ap.get_state()
+    if st.get("stage") == "interview":
+        qs = st.get("questions", [])
+        i = st.get("idx", 0)
+        if i < len(qs):
+            st.setdefault("answers", {})[qs[i]] = text.strip()
+            i += 1
+            st["idx"] = i
+        if i < len(qs):
+            await ap.set_state(st)
+            await send_message(chat_id, f"❓ <b>Вопрос {i+1} из {len(qs)}</b>\n\n{qs[i]}")
+            return
+        # Вопросы кончились → строим стратегии
+        st["stage"] = "strategies"
+        await ap.set_state(st)
+        await send_message(chat_id, "🎯 <b>Шаг 3/4</b> — собираю варианты стратегии на основе всего...")
+        opts = await ap.build_strategies(st.get("analysis", {}), st.get("answers", {}))
+        if not opts:
+            await send_message(chat_id, "⚠️ Не удалось собрать стратегии — попробуй /auto ещё раз")
+            return
+        st["options"] = opts
+        await ap.set_state(st)
+        lines = ["🎯 <b>Варианты стратегии</b>", ""]
+        for n, o in enumerate(opts):
+            lines.append(f"<b>{n+1}. {o.get('title','')}</b>\n{o.get('angle','')}\n"
+                         f"<i>Почему: {o.get('why','')}</i>\n💡 Первый рилс: {o.get('first_reel','')}\n")
+        kb = {"inline_keyboard": [[{"text": f"Взять «{o.get('title','')[:20]}»",
+                                    "callback_data": f"strat2_{n}"}] for n, o in enumerate(opts)]}
+        await send_message(chat_id, "\n".join(lines)[:4000], reply_markup=kb)
+        return
+
+    # 2) Иначе — возможно, это правки к контенту на согласовании.
     from core import moderation
     async with AsyncSessionLocal() as db:
         pid = await moderation.pending_fix_id(db)

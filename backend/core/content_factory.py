@@ -126,6 +126,19 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     except Exception:
         pass
 
+    # 0б. Самопроверка перед дорогой генерацией: агент уточняет задачу сам,
+    #     чтобы не гонять тяжёлые модели вслепую (экономия токенов).
+    try:
+        from core.self_critique import pre_check
+        chk = await pre_check("content_factory", topic or "выбрать тему по трендам",
+                              context=str(platforms))
+        if chk.get("improved_task") and topic:
+            topic = chk["improved_task"][:2000]
+        report["steps"].append({"step": "self_check", "ok": True,
+                                "ready": chk.get("ready"), "missing": chk.get("missing", [])[:3]})
+    except Exception:
+        pass
+
     # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
     report["plan"] = plan
