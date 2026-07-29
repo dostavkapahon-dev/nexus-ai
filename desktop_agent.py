@@ -244,6 +244,21 @@ async def main():
     print(f"NEXUS AI Desktop Agent")
     print(f"Server: {WS_URL}")
     print(f"Headless: {HEADLESS}")
+
+    # Открываем браузер СРАЗУ, чтобы можно было войти в аккаунты до первой задачи.
+    if not HEADLESS:
+        print("Открываю браузер...")
+        try:
+            page = await ensure_browser()
+            try:
+                await page.goto("https://www.instagram.com", timeout=30000)
+            except Exception:
+                pass  # нет сети/долго грузится — окно всё равно открыто
+            print("👉 Войди в нужные аккаунты в открывшемся окне. Окно НЕ закрывай.")
+        except Exception as e:
+            print(f"[ВНИМАНИЕ] Браузер не открылся: {str(e)[:300]}")
+            print("Агент продолжит работу — браузер попробует открыться при первой задаче.")
+
     print(f"Connecting...")
 
     while True:
