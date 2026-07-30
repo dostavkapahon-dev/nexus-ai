@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
 import { connections as connectionsApi } from '../lib/api'
 

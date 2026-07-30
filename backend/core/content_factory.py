@@ -20,6 +20,10 @@ from core.brand import system_prompt, cover_prompt, PLATFORM_SPECS
 # Платформы по умолчанию
 DEFAULT_PLATFORMS = ["instagram", "youtube", "tiktok", "telegram"]
 
+# Шаги, без которых результат конвейера бессмысленен. Провал остальных
+# (видео, монтаж) оставляет годный текст + обложку — это ещё успех.
+CRITICAL_STEPS = ("analysis", "brief")
+
 # Мозг-аналитик и креативный контроль — Claude. Помощники: Perplexity (поиск
 # трендов в реальном времени) и Gemini (резерв). Claude всё видит и решает.
 BRAIN_MODEL = "claude-sonnet-4-6"
@@ -134,10 +138,11 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
                               context=str(platforms))
         if chk.get("improved_task") and topic:
             topic = chk["improved_task"][:2000]
-        report["steps"].append({"step": "self_check", "ok": True,
-                                "ready": chk.get("ready"), "missing": chk.get("missing", [])[:3]})
-    except Exception:
-        pass
+        report["steps"].append({"step": "self_check", "ok": chk.get("checked", True),
+                                "ready": chk.get("ready"), "missing": chk.get("missing", [])[:3],
+                                "error": chk.get("error")})
+    except Exception as e:
+        report["steps"].append({"step": "self_check", "ok": False, "error": str(e)[:160]})
 
     # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
@@ -178,7 +183,9 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
                            "image": free_image(prompt_img)})
     report["assets"]["frames"] = frames
-    report["steps"].append({"step": "storyboard_frames", "ok": True, "count": len(frames)})
+    # Нет раскадровки → нет кадров: это не «успешный» шаг, а следствие сбоя брифа.
+    report["steps"].append({"step": "storyboard_frames", "ok": bool(frames),
+                            "count": len(frames)})
 
     # 3c. Видео по выбранной стратегии
     if want_video:
@@ -248,6 +255,16 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             report["published"] = {"status": "error", "error": str(e)[:160]}
     else:
         report["published"] = {pf: {"ok": None, "note": "dry-run"} for pf in platforms}
+
+    # 6б. Итог: конвейер «удался» только если прошли ключевые шаги. Иначе
+    #      наверх уходил ok=true при полностью провалившейся генерации.
+    failed = [s["step"] for s in report["steps"] if not s.get("ok")]
+    report["failed_steps"] = failed
+    report["ok"] = not [s for s in failed if s in CRITICAL_STEPS]
+    if not report["ok"]:
+        report["hint"] = ("Не прошли шаги: " + ", ".join(failed) +
+                          ". Обычно причина — нет ключа ИИ: добавьте GEMINI_API_KEY "
+                          "(бесплатно) или ANTHROPIC_API_KEY в Подключениях.")
 
     # 6. Отчёт в Telegram
     await _send_report(report, platforms)

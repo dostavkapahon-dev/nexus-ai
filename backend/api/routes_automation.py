@@ -23,7 +23,8 @@ async def run_director_endpoint(body: DirectorRequest):
         return {"ok": False, "error": "Поле 'goal' обязательно."}
     try:
         result = await run_director(body.goal, body.context or "", int(body.max_steps or 12))
-        return {"ok": True, **result}
+        # status="error" — это провал, а не успех: раньше уходило ok=true.
+        return {"ok": result.get("status") != "error", **result}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -113,6 +114,8 @@ async def run_factory_endpoint(body: FactoryBody):
             dry_run=body.dry_run if body.dry_run is not None else True,
             want_video=body.want_video if body.want_video is not None else True,
         )
-        return {"ok": True, **result}
+        # ok приходит из отчёта конвейера: раньше здесь стояло True, и провал
+        # генерации выглядел как успех.
+        return {"ok": result.get("ok", True), **result}
     except Exception as e:
         return {"ok": False, "error": str(e)}

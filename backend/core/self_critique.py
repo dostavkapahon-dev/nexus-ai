@@ -31,8 +31,10 @@ JSON:
 async def pre_check(agent: str, task: str, context: str = "", model: str = None) -> dict:
     """Дешёвая самопроверка перед запуском агента.
 
-    Возвращает {ready, missing, questions, improved_task, skip_reason}.
-    При любой ошибке — считаем, что можно работать (не блокируем конвейер).
+    Возвращает {checked, ready, missing, questions, improved_task, skip_reason}.
+    При любой ошибке — считаем, что можно работать (не блокируем конвейер),
+    но `checked=False` честно говорит, что проверки не было: иначе отчёт
+    показывает «готов к работе» там, где просто не отвечает ИИ.
     """
     model = model or ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash")
     prompt = CHECK_TEMPLATE.format(agent=agent, task=task[:1500],
@@ -45,7 +47,9 @@ async def pre_check(agent: str, task: str, context: str = "", model: str = None)
         data.setdefault("ready", True)
         data.setdefault("questions", [])
         data.setdefault("improved_task", task)
+        data["checked"] = True
         return data
-    except Exception:
-        return {"ready": True, "missing": [], "questions": [],
-                "improved_task": task, "skip_reason": ""}
+    except Exception as e:
+        return {"checked": False, "error": str(e)[:200], "ready": True,
+                "missing": [], "questions": [], "improved_task": task,
+                "skip_reason": ""}

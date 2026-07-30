@@ -1,4 +1,4 @@
-﻿"""
+"""
 Desktop Agent WebSocket bridge.
 The local desktop_agent.py connects here and receives commands.
 Dashboard sends commands; desktop agent executes them on the user PC.

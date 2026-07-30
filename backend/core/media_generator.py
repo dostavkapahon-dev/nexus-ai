@@ -1,4 +1,4 @@
-﻿"""
+"""
 Unified media generation: images and video.
 Providers: DALL-E 3, Stability AI, Pollinations (free), Runway ML, ElevenLabs (audio).
 """

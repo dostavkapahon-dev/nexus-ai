@@ -1,4 +1,4 @@
-﻿import os
+import os
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
