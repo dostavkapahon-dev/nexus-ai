@@ -67,7 +67,3 @@ async def google_client_id():
     """Frontend fetches this to init Google sign-in button."""
     cid = os.getenv("GOOGLE_CLIENT_ID", "")
     return {"client_id": cid, "enabled": bool(cid)}
-
-@router.get("/api/health")
-async def health():
-    return {"status": "ok"}
