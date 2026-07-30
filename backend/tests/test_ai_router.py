@@ -102,7 +102,7 @@ async def test_models_without_key_are_skipped(router, monkeypatch):
 def test_fallback_chain_is_cheap_first():
     costs = [ar.COST_PER_1K[m] for m in ar.FALLBACK_CHAIN]
     assert costs == sorted(costs), ar.FALLBACK_CHAIN
-    assert ar.FALLBACK_CHAIN[0] == "gemini-2.0-flash-lite"
+    assert ar.FALLBACK_CHAIN[0] == "nvidia-free"   # бесплатный — раньше платных
 
 
 def test_no_disabled_gemini_15_models():

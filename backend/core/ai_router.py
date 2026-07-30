@@ -25,14 +25,17 @@ AI_ROUTING = {
     # DeepSeek
     "deepseek-chat": "deepseek",
     "deepseek-reasoner": "deepseek",
+    # NVIDIA NIM (build.nvidia.com) — открытые модели на DGX Cloud, бесплатная квота.
+    # Псевдоним: конкретный id модели подбирается на лету (каталог NVIDIA часто меняется).
+    "nvidia-free": "nvidia",
 }
 
 # Резерв на случай сбоя основной модели. Порядок «дёшево → дорого»:
 # сначала самые дешёвые/бесплатные, Claude — в самом конце как надёжный мозг.
 # У каждой Gemini-модели свой лимит бесплатной квоты, поэтому в цепочке их
 # несколько: упёрлись в 429 на одной — пробуем следующую.
-FALLBACK_CHAIN = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest",
-                  "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
+FALLBACK_CHAIN = ["nvidia-free", "gemini-2.0-flash-lite", "gemini-2.0-flash",
+                  "gemini-flash-latest", "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
 
 # Какая env-переменная с ключом нужна каждому провайдеру.
 PROVIDER_KEY_ENV = {
@@ -41,6 +44,7 @@ PROVIDER_KEY_ENV = {
     "google": "GEMINI_API_KEY",
     "perplexity": "PERPLEXITY_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
+    "nvidia": "NVIDIA_API_KEY",
 }
 
 
@@ -80,6 +84,56 @@ def resolve_gemini_model() -> str | None:
             return _GEMINI_RESOLVED
     _GEMINI_RESOLVED = names[0]
     return _GEMINI_RESOLVED
+
+
+# ── NVIDIA NIM ────────────────────────────────────────────────────────────────
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
+
+# Что просим у каталога NVIDIA, в порядке предпочтения. Конкретные id живут
+# недолго, поэтому это лишь подсказки для поиска по списку доступных моделей.
+NVIDIA_PREFERENCES = (
+    "llama-3.3-70b-instruct",
+    "nemotron",
+    "llama-3.1-70b-instruct",
+    "qwen2.5-72b-instruct",
+    "deepseek-r1",
+    "gemma",
+    "llama",
+)
+
+_NVIDIA_RESOLVED = None
+
+
+def resolve_nvidia_model() -> str | None:
+    """Спрашивает у NVIDIA, какие модели доступны ключу, и берёт лучшую из них.
+
+    Каталог build.nvidia.com обновляется постоянно (модели приходят и уходят),
+    поэтому зашитый id рано или поздно отвалится с «model not found». Результат
+    кэшируется на процесс.
+    """
+    global _NVIDIA_RESOLVED
+    if _NVIDIA_RESOLVED:
+        return _NVIDIA_RESOLVED
+    key = os.getenv("NVIDIA_API_KEY", "")
+    if not key:
+        return None
+    try:
+        import httpx
+        r = httpx.get(f"{NVIDIA_BASE_URL}/models",
+                      headers={"Authorization": f"Bearer {key}"}, timeout=20)
+        ids = [m.get("id", "") for m in (r.json().get("data") or [])]
+    except Exception:
+        return None
+    ids = [i for i in ids if i and "embed" not in i and "rerank" not in i]
+    if not ids:
+        return None
+    for pref in NVIDIA_PREFERENCES:
+        hits = [i for i in ids if pref in i.lower()]
+        if hits:
+            _NVIDIA_RESOLVED = sorted(hits, key=len)[0]
+            return _NVIDIA_RESOLVED
+    _NVIDIA_RESOLVED = ids[0]
+    return _NVIDIA_RESOLVED
 
 
 def _has_key(model: str) -> bool:
@@ -124,6 +178,7 @@ COST_PER_1K = {
     "sonar-reasoning-pro": 0.005,
     "deepseek-chat": 0.00014,
     "deepseek-reasoner": 0.00055,
+    "nvidia-free": 0.0,   # бесплатная квота NVIDIA — списываются их кредиты, не деньги
 }
 
 def estimate_cost(ai_mode: str, posts_per_day: int, days: int) -> float:
@@ -176,6 +231,22 @@ class AIRouter:
         tokens = resp.usage.total_tokens if resp.usage else len(text.split()) * 2
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.003), "model_used": model}
 
+    async def _call_nvidia(self, model, system, prompt):
+        """NVIDIA NIM — OpenAI-совместимый эндпоинт, бесплатная квота кредитов."""
+        real = model
+        if model == "nvidia-free":
+            real = await asyncio.to_thread(resolve_nvidia_model)
+            if not real:
+                raise RuntimeError("NVIDIA: не удалось получить список моделей "
+                                   "(проверьте NVIDIA_API_KEY)")
+        client = openai.AsyncOpenAI(api_key=os.getenv("NVIDIA_API_KEY"), base_url=NVIDIA_BASE_URL)
+        resp = await client.chat.completions.create(model=real, max_tokens=4096,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
+        text = resp.choices[0].message.content
+        tokens = resp.usage.total_tokens if resp.usage else len(text.split()) * 2
+        # Платим кредитами NVIDIA, а не деньгами — в денежную стоимость не пишем.
+        return {"text": text, "tokens": tokens, "cost": 0.0, "model_used": f"nvidia:{real}"}
+
     async def _call_deepseek(self, model, system, prompt):
         client = openai.AsyncOpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
         resp = await client.chat.completions.create(model=model, max_tokens=4096,
@@ -204,6 +275,8 @@ class AIRouter:
                         result = await self._call_perplexity(m, system, prompt)
                     elif provider == "deepseek":
                         result = await self._call_deepseek(m, system, prompt)
+                    elif provider == "nvidia":
+                        result = await self._call_nvidia(m, system, prompt)
                     elif provider == "openai":
                         result = await self._call_openai(m, system, prompt)
                     else:

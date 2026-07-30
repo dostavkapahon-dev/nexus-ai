@@ -173,6 +173,19 @@ const PROVIDERS = [
     models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
   },
   {
+    id: 'nvidia', name: 'NVIDIA NIM', icon: '🟩', color: 'from-green-500 to-emerald-600',
+    description: 'Бесплатные открытые модели (Llama, Nemotron, Qwen, DeepSeek-R1) на GPU NVIDIA',
+    fields: [{ key: 'nvidia_api_key', label: 'API Key', placeholder: 'nvapi-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://build.nvidia.com/settings/api-keys', linkText: 'build.nvidia.com/settings/api-keys' },
+      { text: 'Войдите (нужен только email, карта не требуется) → Generate API Key' },
+      { text: 'Скопируйте ключ — он начинается с nvapi- и действует 6 месяцев' },
+      { text: 'Бесплатно: 1000 кредитов при регистрации, лимит 40 запросов/мин' },
+      { text: 'Дирижёр берёт NVIDIA первым исполнителем, пока квота не кончится' },
+    ],
+    models: ['nvidia-free (модель подбирается автоматически)'],
+  },
+  {
     id: 'deepseek', name: 'DeepSeek AI', icon: '🧠', color: 'from-indigo-500 to-blue-600',
     description: 'Дешёвый и мощный AI — используется в Economy режиме вместо GPT-4o',
     fields: [{ key: 'deepseek_api_key', label: 'API Key', placeholder: 'sk-...', secret: true }],

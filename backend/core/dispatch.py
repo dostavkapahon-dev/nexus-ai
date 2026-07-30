@@ -2,7 +2,8 @@
 Распределение подзадач между нейросетями (исполнителями).
 =========================================================
 Главный мозг — Claude (`marketing_director`). Он не пишет всё сам, а раздаёт
-подзадачи дешёвым исполнителям: Gemini, DeepSeek, OpenAI, Perplexity.
+подзадачи дешёвым исполнителям: NVIDIA NIM (бесплатно), Gemini, DeepSeek,
+OpenAI, Perplexity.
 
 Зачем: Claude хорошо декомпозирует и держит цель, но платить его ценой за
 каждый черновик поста незачем. Здесь описано, кто что умеет и сколько стоит,
@@ -18,6 +19,12 @@ from core.ai_router import ai_router, COST_PER_1K, PROVIDER_KEY_ENV, AI_ROUTING
 # Исполнители: под каким именем дирижёр их зовёт → чем они хороши.
 # `model` — что реально уйдёт в ai_router.
 EXECUTORS: dict[str, dict] = {
+    "nvidia": {
+        "model": "nvidia-free",
+        "provider": "nvidia",
+        "strengths": "открытые модели (Llama/Nemotron/Qwen/DeepSeek-R1) на GPU NVIDIA, "
+                     "бесплатные кредиты — брать первым, пока квота есть",
+    },
     "gemini": {
         "model": "gemini-2.0-flash",
         "provider": "google",
@@ -117,7 +124,10 @@ async def delegate(executor: str, task: str, system: str = "", context: str = ""
     if requested != executor:
         out["substituted_for"] = requested
     # ai_router мог уйти по фолбэку на другого провайдера — дирижёр должен видеть.
-    if out["model_used"] != spec["model"]:
+    # У NVIDIA псевдоним `nvidia-free` всегда разворачивается в конкретный id
+    # («nvidia:meta/llama-...»), и это не фолбэк, а нормальная работа.
+    same = out["model_used"] == spec["model"] or out["model_used"].startswith("nvidia:")
+    if not same:
         out["note"] = f"исполнитель заменён фолбэком: {spec['model']} → {out['model_used']}"
     return out
 

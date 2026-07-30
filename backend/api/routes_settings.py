@@ -30,6 +30,7 @@ class ConnectionsBody(BaseModel):
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
     vk_access_token: Optional[str] = None
     vk_group_id: Optional[str] = None
     threads_access_token: Optional[str] = None
@@ -104,6 +105,22 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
             results["anthropic_api_key"] = {"ok": True, "message": "Claude подключён ✓"}
         except Exception as e:
             results["anthropic_api_key"] = {"ok": False, "message": str(e)[:120]}
+
+    if key := resolve("nvidia_api_key"):
+        # Ключ nvapi- живёт 6 месяцев — проверяем живым запросом к каталогу.
+        try:
+            import httpx
+            from core.ai_router import NVIDIA_BASE_URL
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(f"{NVIDIA_BASE_URL}/models",
+                                headers={"Authorization": f"Bearer {key}"})
+            if r.status_code == 200:
+                n = len(r.json().get("data") or [])
+                results["nvidia_api_key"] = {"ok": True, "message": f"NVIDIA NIM подключён ✓ ({n} моделей)"}
+            else:
+                results["nvidia_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:80]}"}
+        except Exception as e:
+            results["nvidia_api_key"] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("openai_api_key"):
         try:

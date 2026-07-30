@@ -1,4 +1,4 @@
-"""Claude — главный мозг, подзадачи уходят Gemini/DeepSeek/OpenAI/Perplexity."""
+"""Claude — главный мозг, подзадачи уходят NVIDIA/Gemini/DeepSeek/OpenAI/Perplexity."""
 import pytest
 
 from core import dispatch
@@ -8,7 +8,7 @@ from core import marketing_director as md
 @pytest.fixture
 def no_keys(monkeypatch):
     for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-                "PERPLEXITY_API_KEY", "DEEPSEEK_API_KEY"):
+                "PERPLEXITY_API_KEY", "DEEPSEEK_API_KEY", "NVIDIA_API_KEY"):
         monkeypatch.delenv(env, raising=False)
 
 
@@ -130,8 +130,8 @@ def test_routing_table_shape(no_keys, monkeypatch):
     assert "claude" in t["director"]
     assert t["default_executor"] == "gemini"
     avail = {e["name"]: e["available"] for e in t["executors"]}
-    assert avail == {"gemini": True, "deepseek": False, "openai": False,
-                     "perplexity": False, "claude": True}
+    assert avail == {"nvidia": False, "gemini": True, "deepseek": False,
+                     "openai": False, "perplexity": False, "claude": True}
 
 
 # ── дирижёр действительно умеет звать delegate ────────────────────────────────
