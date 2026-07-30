@@ -2,8 +2,9 @@
 Распределение подзадач между нейросетями (исполнителями).
 =========================================================
 Главный мозг — Claude (`marketing_director`). Он не пишет всё сам, а раздаёт
-подзадачи дешёвым исполнителям: NVIDIA NIM (бесплатно), Gemini, DeepSeek,
-OpenAI, Perplexity.
+подзадачи дешёвым исполнителям: бесплатные провайдеры из FREE_PROVIDERS
+(NVIDIA, Groq, Cerebras, OpenRouter, Mistral, GitHub Models), затем Gemini,
+DeepSeek, Perplexity, OpenAI.
 
 Зачем: Claude хорошо декомпозирует и держит цель, но платить его ценой за
 каждый черновик поста незачем. Здесь описано, кто что умеет и сколько стоит,
@@ -14,17 +15,12 @@ OpenAI, Perplexity.
 """
 import os
 
-from core.ai_router import ai_router, COST_PER_1K, PROVIDER_KEY_ENV, AI_ROUTING
+from core.ai_router import (ai_router, COST_PER_1K, PROVIDER_KEY_ENV, AI_ROUTING,
+                            FREE_PROVIDERS)
 
 # Исполнители: под каким именем дирижёр их зовёт → чем они хороши.
 # `model` — что реально уйдёт в ai_router.
 EXECUTORS: dict[str, dict] = {
-    "nvidia": {
-        "model": "nvidia-free",
-        "provider": "nvidia",
-        "strengths": "открытые модели (Llama/Nemotron/Qwen/DeepSeek-R1) на GPU NVIDIA, "
-                     "бесплатные кредиты — брать первым, пока квота есть",
-    },
     "gemini": {
         "model": "gemini-2.0-flash",
         "provider": "google",
@@ -55,6 +51,20 @@ EXECUTORS: dict[str, dict] = {
                      "остальные не справятся",
     },
 }
+
+
+# Бесплатные провайдеры становятся исполнителями автоматически и идут первыми:
+# у них нулевая цена, значит дирижёр выберет их раньше платных.
+_FREE_EXECUTORS = {
+    name: {
+        "model": spec["alias"],
+        "provider": name,
+        "strengths": f"{spec['title']} — бесплатно ({spec['limits']}); "
+                     f"открытые модели, брать пока квота есть",
+    }
+    for name, spec in FREE_PROVIDERS.items()
+}
+EXECUTORS = {**_FREE_EXECUTORS, **EXECUTORS}
 
 
 def has_key(executor: str) -> bool:
@@ -126,7 +136,10 @@ async def delegate(executor: str, task: str, system: str = "", context: str = ""
     # ai_router мог уйти по фолбэку на другого провайдера — дирижёр должен видеть.
     # У NVIDIA псевдоним `nvidia-free` всегда разворачивается в конкретный id
     # («nvidia:meta/llama-...»), и это не фолбэк, а нормальная работа.
-    same = out["model_used"] == spec["model"] or out["model_used"].startswith("nvidia:")
+    # Псевдоним бесплатного провайдера всегда разворачивается в конкретный id
+    # («groq:llama-3.3-70b-versatile») — это не фолбэк, а нормальная работа.
+    same = (out["model_used"] == spec["model"]
+            or out["model_used"].startswith(f"{spec['provider']}:"))
     if not same:
         out["note"] = f"исполнитель заменён фолбэком: {spec['model']} → {out['model_used']}"
     return out

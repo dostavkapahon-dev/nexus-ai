@@ -7,8 +7,9 @@ from core import marketing_director as md
 
 @pytest.fixture
 def no_keys(monkeypatch):
-    for env in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
-                "PERPLEXITY_API_KEY", "DEEPSEEK_API_KEY", "NVIDIA_API_KEY"):
+    # Гасим ключи всех провайдеров, включая бесплатных из реестра.
+    from core.ai_router import PROVIDER_KEY_ENV
+    for env in PROVIDER_KEY_ENV.values():
         monkeypatch.delenv(env, raising=False)
 
 
@@ -130,8 +131,9 @@ def test_routing_table_shape(no_keys, monkeypatch):
     assert "claude" in t["director"]
     assert t["default_executor"] == "gemini"
     avail = {e["name"]: e["available"] for e in t["executors"]}
-    assert avail == {"nvidia": False, "gemini": True, "deepseek": False,
-                     "openai": False, "perplexity": False, "claude": True}
+    assert avail["gemini"] is True and avail["claude"] is True
+    assert not any(v for k, v in avail.items() if k not in ("gemini", "claude"))
+    assert set(avail) == set(dispatch.EXECUTORS)
 
 
 # ── дирижёр действительно умеет звать delegate ────────────────────────────────

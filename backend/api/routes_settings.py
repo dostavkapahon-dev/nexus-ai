@@ -31,6 +31,11 @@ class ConnectionsBody(BaseModel):
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
     nvidia_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    cerebras_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    mistral_api_key: Optional[str] = None
+    github_models_token: Optional[str] = None
     vk_access_token: Optional[str] = None
     vk_group_id: Optional[str] = None
     threads_access_token: Optional[str] = None
@@ -106,21 +111,27 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
         except Exception as e:
             results["anthropic_api_key"] = {"ok": False, "message": str(e)[:120]}
 
-    if key := resolve("nvidia_api_key"):
-        # Ключ nvapi- живёт 6 месяцев — проверяем живым запросом к каталогу.
+    # Бесплатные OpenAI-совместимые провайдеры проверяются одинаково — запросом
+    # к их каталогу моделей: ключ живой, если каталог отдался.
+    from core.ai_router import FREE_PROVIDERS
+    for _pname, _spec in FREE_PROVIDERS.items():
+        field = _spec["key_env"].lower()
+        if not (k := resolve(field)):
+            continue
         try:
             import httpx
-            from core.ai_router import NVIDIA_BASE_URL
+            url = _spec["base_url"] + _spec.get("models_path", "/models")
             async with httpx.AsyncClient(timeout=20) as c:
-                r = await c.get(f"{NVIDIA_BASE_URL}/models",
-                                headers={"Authorization": f"Bearer {key}"})
+                r = await c.get(url, headers={"Authorization": f"Bearer {k}"})
             if r.status_code == 200:
-                n = len(r.json().get("data") or [])
-                results["nvidia_api_key"] = {"ok": True, "message": f"NVIDIA NIM подключён ✓ ({n} моделей)"}
+                payload = r.json()
+                raw = payload.get("data") if isinstance(payload, dict) else payload
+                results[field] = {"ok": True,
+                                  "message": f"{_spec['title']} подключён ✓ ({len(raw or [])} моделей)"}
             else:
-                results["nvidia_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:80]}"}
+                results[field] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:80]}"}
         except Exception as e:
-            results["nvidia_api_key"] = {"ok": False, "message": str(e)[:120]}
+            results[field] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("openai_api_key"):
         try:
