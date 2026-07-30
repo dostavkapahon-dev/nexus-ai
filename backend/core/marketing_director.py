@@ -20,6 +20,7 @@ DIRECTOR_MODEL = "claude-sonnet-4-6"
 SYSTEM = """\
 Ты — директор по маркетингу NEXUS AI. Тебе ставят бизнес-цель, ты декомпозируешь
 её и выполняешь через доступные инструменты. Доступные исполнители:
+- delegate: отдать текстовую подзадачу другой нейросети (см. список ниже).
 - run_browser: автономный браузерный агент на ПК пользователя (живые сессии
   Instagram/OLX/VK/YouTube). Используй для действий, у которых нет API.
 - make_video: генерация короткого видео (аватар-озвучка или кинематографичный клип).
@@ -28,6 +29,11 @@ SYSTEM = """\
 
 Принципы:
 - Действуй конкретными шагами, по одному инструменту за раз.
+- Ты — управляющий, а не копирайтер. Любой текст (посты, сценарии, заголовки,
+  разбор данных) отдавай через delegate дешёвому исполнителю и проверяй результат.
+  Сам пиши только план, критику и итоговый отчёт.
+- Бери самого дешёвого исполнителя, который справится; дороже — только если
+  дешёвый уже вернул слабый результат.
 - Учитывай правила площадок: без спама и обхода защит.
 - Если не хватает данных (доступ, файл, бюджет) — заверши через done и чётко
   перечисли, что нужно от пользователя.
@@ -37,13 +43,31 @@ SYSTEM = """\
 
 def _full_system() -> str:
     """Бренд-мозг Pakhon Studio + инструкции директора по инструментам."""
+    from core.dispatch import executors_doc
+    base = SYSTEM + "\n\n--- ИСПОЛНИТЕЛИ ДЛЯ delegate (только эти доступны) ---\n" + executors_doc()
     try:
         from core.brand import system_prompt
-        return system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + SYSTEM
+        return system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + base
     except Exception:
-        return SYSTEM
+        return base
 
 TOOLS = [
+    {
+        "name": "delegate",
+        "description": ("Отдать текстовую подзадачу другой нейросети и получить её ответ. "
+                        "Основной рабочий инструмент: тексты, сценарии, анализ, идеи."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "executor": {"type": "string",
+                             "description": "Имя исполнителя из списка доступных в системном промпте."},
+                "task": {"type": "string", "description": "Что именно сделать — конкретно и полно."},
+                "system": {"type": "string", "description": "Роль исполнителя, если нужна особая."},
+                "context": {"type": "string", "description": "Данные, на которые опираться."},
+            },
+            "required": ["executor", "task"],
+        },
+    },
     {
         "name": "run_browser",
         "description": "Запустить браузерного агента на ПК для задачи на сайте.",
@@ -95,6 +119,10 @@ TOOLS = [
 
 
 async def _exec_tool(name: str, inp: dict) -> dict:
+    if name == "delegate":
+        from core.dispatch import delegate
+        return await delegate(executor=inp.get("executor", ""), task=inp.get("task", ""),
+                              system=inp.get("system", ""), context=inp.get("context", ""))
     if name == "run_browser":
         from core.browser_agent import run_agent
         return await run_agent(task=inp["task"], start_url=inp.get("start_url"), max_steps=20)
@@ -134,8 +162,13 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
             return {"status": "done", "summary": inp.get("summary", ""), "steps": steps}
 
         result = await _exec_tool(name, inp)
-        steps.append({"action": name, "input": inp, "thought": thought,
-                      "result_ok": result.get("ok", result.get("status") == "done")})
+        step = {"action": name, "input": inp, "thought": thought,
+                "result_ok": result.get("ok", result.get("status") == "done")}
+        if name == "delegate":
+            step.update({"executor": result.get("executor"),
+                         "model_used": result.get("model_used"),
+                         "cost": result.get("cost")})
+        steps.append(step)
         messages.append({
             "role": "user",
             "content": [{
@@ -152,6 +185,7 @@ GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.0-fla
 
 _GEMINI_DIRECTOR_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
+{"tool":"delegate","args":{"executor":"deepseek","task":"...","system":"...","context":"..."}}
 {"tool":"run_browser","args":{"task":"...","start_url":"..."}}
 {"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
 {"tool":"publish","args":{"platform":"instagram","text":"...","image_url":"..."}}
@@ -190,7 +224,12 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
 
         result = await _exec_tool(tool, args)
         ok = result.get("ok", result.get("status") == "done")
-        steps.append({"action": tool, "input": args, "thought": thought, "result_ok": ok})
+        step = {"action": tool, "input": args, "thought": thought, "result_ok": ok}
+        if tool == "delegate":
+            step.update({"executor": result.get("executor"),
+                         "model_used": result.get("model_used"),
+                         "cost": result.get("cost")})
+        steps.append(step)
         history += f"\n- {tool}: {'ok' if ok else 'ошибка'} :: {json.dumps(result, ensure_ascii=False)[:400]}"
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
 

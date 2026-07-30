@@ -14,6 +14,25 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      # Бесплатные провайдеры — любой из них включает исполнителя без оплаты.
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: GITHUB_MODELS_TOKEN
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
       - key: TELEGRAM_CHAT_ID

@@ -23,7 +23,8 @@ async def run_director_endpoint(body: DirectorRequest):
         return {"ok": False, "error": "Поле 'goal' обязательно."}
     try:
         result = await run_director(body.goal, body.context or "", int(body.max_steps or 12))
-        return {"ok": True, **result}
+        # status="error" — это провал, а не успех: раньше уходило ok=true.
+        return {"ok": result.get("status") != "error", **result}
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -49,6 +50,27 @@ async def generate_video_endpoint(body: VideoRequest):
         return result
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.get("/executors")
+async def list_executors():
+    """Кто главный мозг и между кем он распределяет подзадачи."""
+    from core.dispatch import routing_table
+    return routing_table()
+
+
+class DelegateBody(BaseModel):
+    executor: str
+    task: str
+    system: Optional[str] = ""
+    context: Optional[str] = ""
+
+
+@router.post("/delegate")
+async def delegate_endpoint(body: DelegateBody):
+    """Отдать подзадачу конкретной нейросети напрямую, минуя дирижёра."""
+    from core.dispatch import delegate
+    return await delegate(body.executor, body.task, body.system or "", body.context or "")
 
 
 @router.get("/video/models")
@@ -113,6 +135,8 @@ async def run_factory_endpoint(body: FactoryBody):
             dry_run=body.dry_run if body.dry_run is not None else True,
             want_video=body.want_video if body.want_video is not None else True,
         )
-        return {"ok": True, **result}
+        # ok приходит из отчёта конвейера: раньше здесь стояло True, и провал
+        # генерации выглядел как успех.
+        return {"ok": result.get("ok", True), **result}
     except Exception as e:
         return {"ok": False, "error": str(e)}

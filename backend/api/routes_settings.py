@@ -30,6 +30,12 @@ class ConnectionsBody(BaseModel):
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    cerebras_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    mistral_api_key: Optional[str] = None
+    github_models_token: Optional[str] = None
     vk_access_token: Optional[str] = None
     vk_group_id: Optional[str] = None
     threads_access_token: Optional[str] = None
@@ -104,6 +110,28 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
             results["anthropic_api_key"] = {"ok": True, "message": "Claude подключён ✓"}
         except Exception as e:
             results["anthropic_api_key"] = {"ok": False, "message": str(e)[:120]}
+
+    # Бесплатные OpenAI-совместимые провайдеры проверяются одинаково — запросом
+    # к их каталогу моделей: ключ живой, если каталог отдался.
+    from core.ai_router import FREE_PROVIDERS
+    for _pname, _spec in FREE_PROVIDERS.items():
+        field = _spec["key_env"].lower()
+        if not (k := resolve(field)):
+            continue
+        try:
+            import httpx
+            url = _spec["base_url"] + _spec.get("models_path", "/models")
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(url, headers={"Authorization": f"Bearer {k}"})
+            if r.status_code == 200:
+                payload = r.json()
+                raw = payload.get("data") if isinstance(payload, dict) else payload
+                results[field] = {"ok": True,
+                                  "message": f"{_spec['title']} подключён ✓ ({len(raw or [])} моделей)"}
+            else:
+                results[field] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:80]}"}
+        except Exception as e:
+            results[field] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("openai_api_key"):
         try:

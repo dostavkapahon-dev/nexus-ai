@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
 import { connections as connectionsApi } from '../lib/api'
 
@@ -171,6 +171,79 @@ const PROVIDERS = [
       { text: 'Используется агентами NicheAnalyst и ViralHunter в Premium режиме' },
     ],
     models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
+  },
+  {
+    id: 'nvidia', name: 'NVIDIA NIM', icon: '🟩', color: 'from-green-500 to-emerald-600',
+    description: 'Бесплатные открытые модели (Llama, Nemotron, Qwen, DeepSeek-R1) на GPU NVIDIA',
+    fields: [{ key: 'nvidia_api_key', label: 'API Key', placeholder: 'nvapi-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://build.nvidia.com/settings/api-keys', linkText: 'build.nvidia.com/settings/api-keys' },
+      { text: 'Войдите (нужен только email, карта не требуется) → Generate API Key' },
+      { text: 'Скопируйте ключ — он начинается с nvapi- и действует 6 месяцев' },
+      { text: 'Бесплатно: 1000 кредитов при регистрации, лимит 40 запросов/мин' },
+      { text: 'Дирижёр берёт NVIDIA первым исполнителем, пока квота не кончится' },
+    ],
+    models: ['nvidia-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'groq', name: 'Groq', icon: '⚡', color: 'from-orange-500 to-red-500',
+    description: 'Самая быстрая бесплатная выдача — Llama 3.3 70B на чипах LPU',
+    fields: [{ key: 'groq_api_key', label: 'API Key', placeholder: 'gsk_...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://console.groq.com/keys', linkText: 'console.groq.com/keys' },
+      { text: 'Войдите через Google/GitHub → Create API Key (карта не нужна)' },
+      { text: 'Бесплатно: 30 запросов/мин, 1000 в сутки' },
+      { text: 'Лучший выбор, когда важна скорость ответа' },
+    ],
+    models: ['groq-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'cerebras', name: 'Cerebras', icon: '🧩', color: 'from-amber-500 to-orange-600',
+    description: 'Около 1 млн токенов в сутки бесплатно — для пакетной генерации',
+    fields: [{ key: 'cerebras_api_key', label: 'API Key', placeholder: 'csk-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://cloud.cerebras.ai', linkText: 'cloud.cerebras.ai' },
+      { text: 'Зарегистрируйтесь → API Keys → Create Key' },
+      { text: 'Бесплатно: ~1 млн токенов в сутки' },
+      { text: 'Берите, когда нужно много текста за раз (месячный контент-план)' },
+    ],
+    models: ['cerebras-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'openrouter', name: 'OpenRouter', icon: '🔀', color: 'from-sky-500 to-indigo-600',
+    description: 'Около 30 бесплатных моделей разных вендоров через один API',
+    fields: [{ key: 'openrouter_api_key', label: 'API Key', placeholder: 'sk-or-v1-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://openrouter.ai/keys', linkText: 'openrouter.ai/keys' },
+      { text: 'Войдите → Create Key' },
+      { text: 'Бесплатно: 20 запросов/мин, 50 в сутки на моделях с меткой :free' },
+      { text: 'Система берёт ТОЛЬКО модели с суффиксом :free — платные не трогает' },
+    ],
+    models: ['openrouter-free (только модели :free)'],
+  },
+  {
+    id: 'mistral', name: 'Mistral', icon: '🌬️', color: 'from-yellow-500 to-orange-500',
+    description: 'Бесплатный тариф на все модели Mistral, включая крупные',
+    fields: [{ key: 'mistral_api_key', label: 'API Key', placeholder: '...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://console.mistral.ai/api-keys', linkText: 'console.mistral.ai/api-keys' },
+      { text: 'Зарегистрируйтесь → Create new key' },
+      { text: 'Бесплатно: все модели, но всего ~2 запроса/мин' },
+      { text: 'Медленный лимит — держите как резерв, не как основной' },
+    ],
+    models: ['mistral-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'github', name: 'GitHub Models', icon: '🐙', color: 'from-slate-600 to-gray-800',
+    description: '100+ моделей (GPT-4o, Llama, Phi) по обычному токену GitHub',
+    fields: [{ key: 'github_models_token', label: 'Personal Access Token', placeholder: 'ghp_...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://github.com/settings/tokens', linkText: 'github.com/settings/tokens' },
+      { text: 'Generate new token (classic) → отметьте права models:read' },
+      { text: 'Скопируйте токен (начинается с ghp_)' },
+      { text: 'Бесплатно в рамках суточных лимитов GitHub' },
+    ],
+    models: ['github-free (модель подбирается автоматически)'],
   },
   {
     id: 'deepseek', name: 'DeepSeek AI', icon: '🧠', color: 'from-indigo-500 to-blue-600',
