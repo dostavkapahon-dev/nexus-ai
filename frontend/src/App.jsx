@@ -1,6 +1,6 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
+import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
 import Control from './pages/Control'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
@@ -8,6 +8,7 @@ import Queue from './pages/Queue'
 import PromptStudio from './pages/PromptStudio'
 import Connections from './pages/Connections'
 import BotSetup from './pages/BotSetup'
+import CommandCenter from './pages/CommandCenter'
 import Analytics from './pages/Analytics'
 import Director from './pages/Director'
 import Login from './pages/Login'
@@ -15,6 +16,7 @@ import { auth } from './lib/api'
 
 const NAV = [
   { to: '/',            icon: Rocket,          label: 'Центр управления' },
+  { to: '/hq',          icon: Activity,        label: 'Командный центр' },
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
@@ -85,6 +87,7 @@ function Layout() {
           <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />
           <Route path="/bot"         element={<BotSetup />} />
+          <Route path="/hq"          element={<CommandCenter />} />
         </Routes>
       </main>
     </div>

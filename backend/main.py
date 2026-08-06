@@ -39,11 +39,16 @@ class ConnectionManager:
                 pass
 
     async def broadcast(self, niche_id: str, data: dict):
-        for ws in list(self.connections.get(niche_id, [])):
-            try:
-                await ws.send_text(json.dumps(data))
-            except Exception:
-                pass
+        # Дублируем в комнату "global": там сидит Командный центр и видит поток
+        # событий по всем нишам сразу.
+        rooms = {niche_id, "global"}
+        payload = json.dumps({**data, "niche_id": niche_id})
+        for room in rooms:
+            for ws in list(self.connections.get(room, [])):
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    pass
 
 manager = ConnectionManager()
 
