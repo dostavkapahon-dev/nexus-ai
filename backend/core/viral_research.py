@@ -140,6 +140,15 @@ async def research(urls: list[str], niche: str = "") -> dict:
     except Exception as ex:
         recipe = {"why_viral": [], "recipe": f"(не удалось разобрать: {str(ex)[:100]})"}
 
+    # Разбор чужих роликов — лучший источник уроков: сохраняем в память агента,
+    # чтобы находки применялись и в следующих задачах, а не жили один раз.
+    try:
+        from core.skills_store import learn_from
+        await learn_from(json.dumps(recipe, ensure_ascii=False)[:4000],
+                         source="viral_research")
+    except Exception:
+        pass
+
     recipe["_refs"] = [r["meta"] for r in refs]
     await _save_recipe(recipe)
     return recipe

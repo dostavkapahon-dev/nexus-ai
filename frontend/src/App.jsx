@@ -9,6 +9,7 @@ import PromptStudio from './pages/PromptStudio'
 import Connections from './pages/Connections'
 import BotSetup from './pages/BotSetup'
 import CommandCenter from './pages/CommandCenter'
+import AgentSetup from './pages/AgentSetup'
 import Analytics from './pages/Analytics'
 import Director from './pages/Director'
 import Login from './pages/Login'
@@ -17,6 +18,7 @@ import { auth } from './lib/api'
 const NAV = [
   { to: '/',            icon: Rocket,          label: 'Центр управления' },
   { to: '/hq',          icon: Activity,        label: 'Командный центр' },
+  { to: '/agent',       icon: Cpu,             label: 'Настройка агента' },
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
@@ -88,6 +90,7 @@ function Layout() {
           <Route path="/connections" element={<Connections />} />
           <Route path="/bot"         element={<BotSetup />} />
           <Route path="/hq"          element={<CommandCenter />} />
+          <Route path="/agent"       element={<AgentSetup />} />
         </Routes>
       </main>
     </div>
