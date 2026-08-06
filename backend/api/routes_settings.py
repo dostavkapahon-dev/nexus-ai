@@ -375,6 +375,72 @@ async def ai_providers(db: AsyncSession = Depends(get_db)):
                        "trend_analyst", "funnel_agent", "reporter"]}
 
 
+class SkillBody(BaseModel):
+    kind: Optional[str] = "rule"
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.get("/api/agent/skills")
+async def agent_skills():
+    """Память агента: что уже сработало и чего он избегает."""
+    from core.skills_store import list_skills, stats, KINDS
+    return {"skills": list_skills(), "stats": stats(), "kinds": list(KINDS)}
+
+
+@router.post("/api/agent/skills")
+async def agent_skill_add(body: SkillBody):
+    from core.skills_store import add_skill
+    if not (body.title or "").strip():
+        return {"ok": False, "error": "нужен заголовок"}
+    return {"ok": True, "skill": add_skill(body.kind or "rule", body.title, body.body or "")}
+
+
+@router.delete("/api/agent/skills/{skill_id}")
+async def agent_skill_delete(skill_id: str):
+    from core.skills_store import delete_skill
+    return {"ok": delete_skill(skill_id)}
+
+
+class AgentConfigBody(BaseModel):
+    brand_voice: Optional[str] = None
+
+
+@router.get("/api/agent/config")
+async def agent_config():
+    """Специфика агента: голос бренда + текущее состояние возможностей."""
+    from core.brand import get_brand_voice, BRAND, PLATFORM_SPECS
+    from core.skills_store import stats
+    try:
+        from api.routes_desktop import desktop_connected
+        pc = desktop_connected()
+    except Exception:
+        pc = False
+    return {
+        "brand_voice": get_brand_voice(),
+        "brand": {"name": BRAND.get("name"), "colors": BRAND.get("colors")},
+        "platforms": list(PLATFORM_SPECS.keys()),
+        "skills": stats(),
+        "capabilities": {
+            "pc_control": pc,
+            "web_search": True,
+            "vision": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+                           or os.getenv("ANTHROPIC_API_KEY")),
+            "social": bool(os.getenv("AYRSHARE_API_KEY")),
+            "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+            "montage": True,
+        },
+    }
+
+
+@router.post("/api/agent/config")
+async def agent_config_save(body: AgentConfigBody):
+    from core.brand import set_brand_voice
+    if body.brand_voice is not None:
+        set_brand_voice(body.brand_voice)
+    return {"ok": True}
+
+
 @router.get("/api/bot/status")
 async def bot_status(db: AsyncSession = Depends(get_db)):
     """Статус Telegram-бота: имя, задан ли админ-чат и группа постов."""

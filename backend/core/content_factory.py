@@ -144,6 +144,16 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     except Exception as e:
         report["steps"].append({"step": "self_check", "ok": False, "error": str(e)[:160]})
 
+    # 0в. Память агента: что уже работало и что проваливалось. Дописываем
+    #     в тему — модель не изобретает заново и не повторяет ошибок.
+    try:
+        from core.skills_store import context_for
+        memory = context_for()
+        if memory:
+            topic = f"{topic or ''}\n\n[ПАМЯТЬ АГЕНТА]\n{memory}".strip()
+    except Exception:
+        pass
+
     # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
     report["plan"] = plan

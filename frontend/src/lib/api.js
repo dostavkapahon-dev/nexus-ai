@@ -75,6 +75,14 @@ export const ai = {
   providers: () => api.get('/ai/providers'),
 }
 
+export const agent = {
+  config: () => api.get('/agent/config'),
+  saveConfig: (data) => api.post('/agent/config', data),
+  skills: () => api.get('/agent/skills'),
+  addSkill: (data) => api.post('/agent/skills', data),
+  deleteSkill: (id) => api.delete(`/agent/skills/${id}`),
+}
+
 export const bot = {
   status: () => api.get('/bot/status'),
   testPost: (chat_id) => api.post('/bot/test-post', { chat_id }),
