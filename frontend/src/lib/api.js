@@ -71,6 +71,10 @@ export const infrastructure = {
   check: () => api.post('/infrastructure/check'),
 }
 
+export const ai = {
+  providers: () => api.get('/ai/providers'),
+}
+
 export const bot = {
   status: () => api.get('/bot/status'),
   testPost: (chat_id) => api.post('/bot/test-post', { chat_id }),

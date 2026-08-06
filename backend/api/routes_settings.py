@@ -1,4 +1,5 @@
 import os
+import asyncio
 import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -262,6 +263,116 @@ async def social_intelligence(body: SocialAnalyticsBody):
         return await get_account_intelligence(body.platforms)
     except Exception as e:
         return {"error": str(e)[:200]}
+
+
+def _probe_openai_compatible(base_url: str, key: str, models_path: str = "/models") -> dict:
+    """Дёргает каталог моделей у OpenAI-совместимого провайдера."""
+    import httpx
+    try:
+        r = httpx.get(base_url.rstrip("/") + models_path,
+                      headers={"Authorization": f"Bearer {key}"}, timeout=20)
+        if r.status_code == 200:
+            return {"ok": True}
+        body = r.text[:150]
+        low = body.lower()
+        if "quota" in low or r.status_code == 429:
+            return {"ok": False, "error": "квота исчерпана"}
+        return {"ok": False, "error": f"HTTP {r.status_code}: {body[:100]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:120]}
+
+
+@router.get("/api/ai/providers")
+async def ai_providers(db: AsyncSession = Depends(get_db)):
+    """Живой статус всех ИИ-провайдеров: у кого есть ключ и кто реально отвечает.
+
+    Показывает и платных, и бесплатных (Groq, Cerebras, NVIDIA и др.) —
+    со ссылками на регистрацию и описанием лимитов у тех, где ключа нет.
+    """
+    # Подтягиваем ключи из БД: сохранённые через дашборд должны учитываться сразу.
+    result = await db.execute(select(Connection))
+    for c in result.scalars():
+        if c.key_value and "****" not in (c.key_value or ""):
+            os.environ.setdefault(c.key_name.upper(), c.key_value)
+
+    from core.ai_router import (FREE_PROVIDERS, resolve_free_model,
+                                resolve_gemini_model)
+    out = []
+
+    # ── Платные / основные ───────────────────────────────────────────────
+    gem_key = os.getenv("GEMINI_API_KEY", "")
+    gem = {"name": "Google Gemini", "key_env": "GEMINI_API_KEY", "free": False,
+           "has_key": bool(gem_key), "ok": False, "model": None,
+           "limits": "бесплатный тариф с суточным лимитом",
+           "signup": "https://aistudio.google.com/apikey", "error": None}
+    if gem_key:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get("https://generativelanguage.googleapis.com/v1beta/models",
+                                params={"key": gem_key})
+            if r.status_code == 200:
+                gem["ok"] = True
+                gem["model"] = resolve_gemini_model()
+            else:
+                gem["error"] = r.json().get("error", {}).get("message", "ошибка")[:120]
+        except Exception as e:
+            gem["error"] = str(e)[:120]
+    out.append(gem)
+
+    oa_key = os.getenv("OPENAI_API_KEY", "")
+    oa = {"name": "OpenAI", "key_env": "OPENAI_API_KEY", "free": False,
+          "has_key": bool(oa_key), "ok": False, "model": "gpt-4o-mini",
+          "limits": "платный, по балансу", "signup": "https://platform.openai.com/api-keys",
+          "error": None}
+    if oa_key:
+        probe = await asyncio.to_thread(_probe_openai_compatible,
+                                        "https://api.openai.com/v1", oa_key)
+        oa["ok"] = probe["ok"]
+        oa["error"] = probe.get("error")
+    out.append(oa)
+
+    for title, env, url, signup, limits in (
+        ("Anthropic Claude", "ANTHROPIC_API_KEY", None,
+         "https://console.anthropic.com/settings/keys", "платный, по балансу"),
+        ("DeepSeek", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
+         "https://platform.deepseek.com", "очень дёшево, центы за сотни запросов"),
+        ("Perplexity", "PERPLEXITY_API_KEY", None,
+         "https://www.perplexity.ai/settings/api", "платный — поиск трендов в реальном времени"),
+    ):
+        key = os.getenv(env, "")
+        item = {"name": title, "key_env": env, "free": False, "has_key": bool(key),
+                "ok": False, "model": None, "limits": limits, "signup": signup, "error": None}
+        if key and url:
+            probe = await asyncio.to_thread(_probe_openai_compatible, url, key)
+            item["ok"] = probe["ok"]
+            item["error"] = probe.get("error")
+        elif key:
+            item["ok"] = True  # ключ есть, отдельная проверка не нужна
+        out.append(item)
+
+    # ── Бесплатные (реестр из ai_router) ─────────────────────────────────
+    for name, spec in FREE_PROVIDERS.items():
+        key = os.getenv(spec["key_env"], "")
+        item = {"name": spec["title"], "key_env": spec["key_env"], "free": True,
+                "has_key": bool(key), "ok": False, "model": None,
+                "limits": spec.get("limits", ""), "signup": spec.get("signup", ""),
+                "error": None}
+        if key:
+            probe = await asyncio.to_thread(
+                _probe_openai_compatible, spec["base_url"], key,
+                spec.get("models_path", "/models"))
+            item["ok"] = probe["ok"]
+            item["error"] = probe.get("error")
+            if item["ok"]:
+                item["model"] = await asyncio.to_thread(resolve_free_model, name)
+        out.append(item)
+
+    working = [p["name"] for p in out if p["ok"]]
+    return {"providers": out, "working": working,
+            "ready": bool(working),
+            "agents": ["niche_analyst", "viral_hunter", "strategist", "copywriter",
+                       "reviewer", "voice_adapter", "visual_creator", "adapter",
+                       "trend_analyst", "funnel_agent", "reporter"]}
 
 
 @router.get("/api/bot/status")
