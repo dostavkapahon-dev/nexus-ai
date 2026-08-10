@@ -3,7 +3,7 @@ import {
   Rocket, Wand2, Loader, Save, CheckCircle, XCircle, Monitor, MonitorOff,
   Clapperboard, Megaphone, Star, Film, Brain, Video, Send, RefreshCw
 } from 'lucide-react'
-import { connections as connApi, automation, desktop } from '../lib/api'
+import { connections as connApi, automation, desktop, control } from '../lib/api'
 
 // Сервисы, которыми управляем прямо здесь
 const SERVICES = [
@@ -107,6 +107,9 @@ export default function Control() {
         </div>
       </div>
 
+      {/* ПУЛЬТ — единый мозг (Claude), связан с Telegram */}
+      <CommandCenter />
+
       <div className="grid lg:grid-cols-2 gap-4">
         {/* ФАБРИКА */}
         <div className="card p-5 lg:col-span-2">
@@ -194,6 +197,59 @@ export default function Control() {
             {voiceSaved ? <CheckCircle className="w-3 h-3" /> : <Save className="w-3 h-3" />} {voiceSaved ? 'Сохранено' : 'Сохранить голос'}
           </button>
         </div>
+      </div>
+    </div>
+  )
+}
+
+function CommandCenter() {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [feed, setFeed] = useState([])
+
+  const loadFeed = () => control.feed(40).then(r => setFeed(r.data?.feed || [])).catch(() => {})
+  useEffect(() => { loadFeed(); const t = setInterval(loadFeed, 4000); return () => clearInterval(t) }, [])
+
+  const send = async () => {
+    const t = text.trim()
+    if (!t || busy) return
+    setBusy(true); setText('')
+    try { await control.command(t) } catch {}
+    await loadFeed(); setBusy(false)
+  }
+  const onKey = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
+
+  const badge = (src) => src === 'telegram'
+    ? <span title="из Telegram">✈️</span>
+    : src === 'dashboard' ? <span title="с дашборда">🖥</span> : <span>⚙️</span>
+
+  return (
+    <div className="card p-5 mb-4 border border-violet-500/25">
+      <div className="flex items-center gap-2 mb-3">
+        <Brain className="w-5 h-5 text-violet-400" />
+        <span className="font-semibold">Пульт управления</span>
+        <span className="text-[11px] text-[#5a5a7a]">— один мозг (Claude), связан с Telegram</span>
+      </div>
+
+      <div className="bg-[#0d0d1a] border border-[#1c1c30] rounded-lg p-3 mb-3 h-56 overflow-y-auto flex flex-col gap-2 text-xs">
+        {feed.length === 0 && <div className="text-[#5a5a7a] m-auto">Напиши команду — например «проанализируй аккаунт» или «сделай рилс про доставку»</div>}
+        {feed.map((m, i) => (
+          <div key={i} className={`flex gap-2 ${m.role === 'user' ? 'text-[#c0c0e0]' : 'text-[#9a9ac0]'}`}>
+            <div className="shrink-0">{m.role === 'user' ? badge(m.source) : '🤖'}</div>
+            <div className={`rounded-lg px-2.5 py-1.5 whitespace-pre-wrap ${m.role === 'user' ? 'bg-violet-600/15' : 'bg-[#07070f] border border-[#1c1c30]'}`}>{m.text}</div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-end gap-2">
+        <textarea rows={1} value={text} onChange={e => setText(e.target.value)} onKeyDown={onKey}
+          placeholder="Команда мозгу (Enter — отправить)…"
+          className="flex-1 bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-3 py-2 text-sm text-[#e8e8f5] placeholder-[#5a5a7a] focus:border-violet-500 outline-none resize-none" />
+        <button onClick={send} disabled={busy}
+          className="btn-primary flex items-center gap-2 disabled:opacity-50">
+          {busy ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+          {busy ? 'Думаю…' : 'Отправить'}
+        </button>
       </div>
     </div>
   )

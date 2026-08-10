@@ -87,6 +87,12 @@ async def setup_bot_commands():
 
 async def _handle_command(chat_id: str, text: str):
     """Неубиваемая обёртка: любая ошибка команды уходит в чат, а не в тишину."""
+    # Пишем в общую ленту — чтобы действия из Telegram были видны в дашборде.
+    try:
+        from core.command_center import log_event
+        await log_event("telegram", "user", text)
+    except Exception:
+        pass
     try:
         await _dispatch_command(chat_id, text)
     except Exception as e:
@@ -843,6 +849,12 @@ async def _handle_plain_text(chat_id: str, text: str):
             return
         reply = await intent.chat_reply(text)
         await send_message(chat_id, reply)
+        try:
+            from core.command_center import log_event
+            await log_event("telegram", "user", text)
+            await log_event("telegram", "agent", reply)
+        except Exception:
+            pass
         return
     await send_message(chat_id, "🔄 Применяю правки, секунду...")
     res = await moderation.apply_fix(text)

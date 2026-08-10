@@ -98,6 +98,11 @@ export const desktop = {
   runAgent: (body) => api.post('/desktop/agent/run', body),
 }
 
+export const control = {
+  command: (text) => api.post('/control/command', { text }),
+  feed: (limit = 40) => api.get('/control/feed', { params: { limit } }),
+}
+
 export const automation = {
   director: (body) => api.post('/automation/director', body),
   video: (body) => api.post('/automation/video', body),
