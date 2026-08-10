@@ -58,9 +58,15 @@ def _brightdata_key() -> str:
 
 
 async def is_configured() -> bool:
-    """Есть ли чем анализировать бесплатно: хотя бы один ник или ключ Bright Data."""
+    """Есть ли чем анализировать: Instagram Graph API, Bright Data или заданный ник."""
     if _brightdata_key():
         return True
+    try:
+        from core import instagram_reader
+        if instagram_reader.is_configured():
+            return True
+    except Exception:
+        pass
     for p in _HANDLE_KEYS:
         if await _handle(p):
             return True
@@ -159,7 +165,20 @@ async def brightdata_fetch(url: str) -> str | None:
 
 
 async def _fetch_instagram(handle: str) -> dict:
-    """Instagram: пробуем Bright Data, при неудаче — честная деградация."""
+    """Instagram: сначала официальный Graph API (свой аккаунт с инсайтами или чужой
+    через Business Discovery), затем Bright Data, затем честная деградация."""
+    # 1) Graph API — автоматическое чтение постов/Reels и метрик (бесплатно).
+    try:
+        from core import instagram_reader
+        if instagram_reader.is_configured():
+            return await instagram_reader.analyze(handle)
+    except Exception as e:
+        # Не роняем анализ — пробуем следующий источник.
+        _ig_err = str(e)[:150]
+    else:
+        _ig_err = None
+
+    # 2) Bright Data (обход логина для публичных профилей).
     url = _channel_url("instagram", handle)
     html = await brightdata_fetch(url)
     if not html:
@@ -191,13 +210,22 @@ async def get_account_intelligence(platforms: list[str] | None = None) -> dict:
 
     for p in platforms:
         handle = await _handle(p)
+        # Instagram через Graph API работает и без ника — читает свой аккаунт.
+        if p == "instagram":
+            try:
+                from core import instagram_reader
+                ig_ready = instagram_reader.is_configured()
+            except Exception:
+                ig_ready = False
+            if not handle and not ig_ready and not _brightdata_key():
+                out["accounts"][p] = {"ok": False, "error": "нет ни ника, ни токена Instagram"}
+                continue
+            out["accounts"][p] = await _fetch_instagram(handle)
+            continue
         if not handle:
             out["accounts"][p] = {"ok": False, "error": f"ник для {p} не задан"}
             continue
-        if p == "instagram":
-            out["accounts"][p] = await _fetch_instagram(handle)
-        else:
-            out["accounts"][p] = await _fetch_channel(p, handle)
+        out["accounts"][p] = await _fetch_channel(p, handle)
 
     return out
 
