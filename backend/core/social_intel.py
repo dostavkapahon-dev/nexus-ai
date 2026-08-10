@@ -110,7 +110,22 @@ def _engagement(m: dict) -> int:
 
 
 async def _fetch_channel(platform: str, handle: str, n: int = 12) -> dict:
-    """Публичные метрики канала + топ последних роликов (бесплатно, yt-dlp)."""
+    """Публичные метрики канала + топ последних роликов.
+
+    YouTube — сначала официальный Data API (надёжно), затем yt-dlp.
+    TikTok — yt-dlp.
+    """
+    # YouTube: предпочитаем Data API, если задан ключ.
+    if platform == "youtube":
+        try:
+            from core import youtube_reader
+            if youtube_reader.is_configured():
+                res = await youtube_reader.analyze(handle, n)
+                if res.get("ok"):
+                    return res
+        except Exception:
+            pass  # падаем в yt-dlp ниже
+
     url = _channel_url(platform, handle)
     if not url:
         return {"ok": False, "error": "no channel url"}

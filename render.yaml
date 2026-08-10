@@ -51,6 +51,8 @@ services:
         sync: false
       - key: TIKTOK_ACCESS_TOKEN
         sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
       - key: YOUTUBE_OAUTH_JSON
         sync: false
       # Анализ аккаунтов (бесплатно: yt-dlp; Instagram — опц. Bright Data)

@@ -20,6 +20,9 @@ DIRECTOR_MODEL = "claude-sonnet-4-6"
 SYSTEM = """\
 Ты — директор по маркетингу NEXUS AI. Тебе ставят бизнес-цель, ты декомпозируешь
 её и выполняешь через доступные инструменты. Доступные исполнители:
+- analyze: получить реальные данные аккаунта (Instagram/TikTok/YouTube) или разбор чужого
+  ролика по ссылке. ВСЕГДА вызывай analyze ПЕРЕД созданием контента — решения по теме, хуку
+  и формату должны идти от реальных цифр аккаунта и того, что уже заходило, а не вслепую.
 - delegate: отдать текстовую подзадачу другой нейросети (см. список ниже).
 - run_browser: автономный браузерный агент на ПК пользователя (живые сессии
   Instagram/OLX/VK/YouTube). Используй для действий, у которых нет API.
@@ -81,6 +84,23 @@ TOOLS = [
         },
     },
     {
+        "name": "analyze",
+        "description": ("Получить реальные данные аккаунта или разбор чужого ролика. "
+                        "Вызывай ПЕРЕД созданием контента, чтобы решения шли от фактов, "
+                        "а не вслепую."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "enum": ["instagram", "tiktok", "youtube", "url"],
+                           "description": "Площадка для досье аккаунта, либо 'url' для разбора ролика по ссылке."},
+                "handle": {"type": "string",
+                           "description": "Ник аккаунта (опц., иначе берётся свой из настроек) "
+                                          "или ССЫЛКА на ролик, если target='url'."},
+            },
+            "required": ["target"],
+        },
+    },
+    {
         "name": "make_video",
         "description": "Сгенерировать короткое видео (Reels/Shorts/TikTok).",
         "input_schema": {
@@ -126,6 +146,28 @@ async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "run_browser":
         from core.browser_agent import run_agent
         return await run_agent(task=inp["task"], start_url=inp.get("start_url"), max_steps=20)
+    if name == "analyze":
+        target = (inp.get("target") or "").strip().lower()
+        handle = (inp.get("handle") or "").strip()
+        if target == "url" or handle.startswith("http"):
+            from core.viral_research import analyze_reference
+            return await analyze_reference(handle or inp.get("target", ""))
+        # Явный ник конкурента — разбираем именно его; иначе свой из настроек.
+        if handle:
+            try:
+                if target == "instagram":
+                    from core.instagram_reader import analyze as ig
+                    return await ig(handle)
+                if target == "youtube":
+                    from core.youtube_reader import analyze as yt
+                    return await yt(handle)
+                if target == "tiktok":
+                    from core.social_intel import _fetch_channel
+                    return await _fetch_channel("tiktok", handle.lstrip("@"))
+            except Exception as e:
+                return {"ok": False, "error": str(e)[:200]}
+        from core.social_intel import get_account_intelligence
+        return await get_account_intelligence([target] if target else None)
     if name == "make_video":
         from core.media_generator import generate_clip
         return await generate_clip(prompt=inp["prompt"], script=inp.get("script", ""),
@@ -185,6 +227,7 @@ GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.0-fla
 
 _GEMINI_DIRECTOR_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
+{"tool":"analyze","args":{"target":"instagram|tiktok|youtube|url","handle":"ник или ссылка (опц.)"}}
 {"tool":"delegate","args":{"executor":"deepseek","task":"...","system":"...","context":"..."}}
 {"tool":"run_browser","args":{"task":"...","start_url":"..."}}
 {"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
