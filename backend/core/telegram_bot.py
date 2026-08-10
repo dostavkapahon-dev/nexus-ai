@@ -173,12 +173,13 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "🔍 <b>Шаг 1/4</b> — собираю полную картину аккаунта, топ-постов и трендов...")
         analysis = await ap.deep_analysis()
         acc = analysis.get("account") or {}
-        top = acc.get("top_posts") or []
+        accounts = acc.get("accounts") or {}
+        top_total = sum(len((d.get("top_posts") or [])) for d in accounts.values() if isinstance(d, dict))
         summary = [f"📊 Ниша: {analysis.get('niche') or '—'}",
-                   f"📈 Постов в истории: {acc.get('posts_count', '—')}",
-                   f"🔥 Топ-постов найдено: {len(top) if isinstance(top, list) else 0}"]
+                   f"📈 Площадок проанализировано: {len(accounts)}",
+                   f"🔥 Топ-роликов найдено: {top_total}"]
         if analysis.get("account_error"):
-            summary.append(f"⚠️ Ayrshare: {analysis['account_error'][:80]}")
+            summary.append(f"⚠️ Анализ: {analysis['account_error'][:80]}")
         await send_message(chat_id, "\n".join(summary))
 
         await send_message(chat_id, "🧠 <b>Шаг 2/4</b> — чего мне не хватает для полной картины...")
@@ -366,7 +367,9 @@ async def _dispatch_command(chat_id: str, text: str):
             f"{yn(os.getenv('TELEGRAM_BOT_TOKEN'))} Telegram-бот токен",
             f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
             f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",
-            f"{yn(os.getenv('AYRSHARE_API_KEY'))} Ayrshare (соцсети)",
+            f"{yn(os.getenv('INSTAGRAM_ACCESS_TOKEN'))} Instagram API",
+            f"{yn(os.getenv('TIKTOK_ACCESS_TOKEN'))} TikTok API",
+            f"{yn(os.getenv('IG_HANDLE') or os.getenv('TIKTOK_HANDLE') or os.getenv('YOUTUBE_HANDLE'))} Ники для анализа",
         ]
         await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю ключи ИИ вживую...")
 

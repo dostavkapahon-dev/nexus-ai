@@ -26,8 +26,11 @@ class ConnectionsBody(BaseModel):
     telegram_post_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
-    ayrshare_api_key: Optional[str] = None
     tiktok_access_token: Optional[str] = None
+    brightdata_api_key: Optional[str] = None
+    ig_handle: Optional[str] = None
+    tiktok_handle: Optional[str] = None
+    youtube_handle: Optional[str] = None
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
@@ -178,30 +181,29 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
         except Exception as e:
             results["instagram_access_token"] = {"ok": False, "message": str(e)[:120]}
 
-    if key := resolve("ayrshare_api_key"):
+    if key := resolve("brightdata_api_key"):
         try:
-            async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.get(
-                    "https://api.ayrshare.com/api/user",
-                    headers={"Authorization": f"Bearer {key}"},
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(
+                    "https://api.brightdata.com/request",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"zone": os.getenv("BRIGHTDATA_ZONE", "web_unlocker1"),
+                          "url": "https://geo.brdtest.com/welcome.txt", "format": "raw"},
                 )
-                d = r.json()
-                if r.status_code == 200 and not d.get("status") == "error":
-                    active = d.get("activeSocialAccounts") or d.get("displayNames") or []
-                    names = ", ".join(active) if isinstance(active, list) and active and isinstance(active[0], str) else ""
-                    results["ayrshare_api_key"] = {"ok": True, "message": f"Ayrshare подключён ✓ {names}".strip()}
+                if r.status_code == 200:
+                    results["brightdata_api_key"] = {"ok": True, "message": "Bright Data подключён ✓"}
                 else:
-                    results["ayrshare_api_key"] = {"ok": False, "message": str(d.get("message") or d)[:120]}
+                    results["brightdata_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:100]}"}
         except Exception as e:
-            results["ayrshare_api_key"] = {"ok": False, "message": str(e)[:120]}
+            results["brightdata_api_key"] = {"ok": False, "message": str(e)[:120]}
 
     return results
 
 @router.get("/api/social/accounts")
 async def social_accounts():
-    """Какие соцсети подключены к Ayrshare (сервис-посредник)."""
-    from publishers.ayrshare_pub import is_configured, get_user
-    if not is_configured():
+    """Какие аккаунты доступны для бесплатного анализа (по заданным никам)."""
+    from core.social_intel import is_configured, get_user
+    if not await is_configured():
         return {"configured": False, "accounts": []}
     try:
         d = await get_user()
@@ -218,10 +220,10 @@ class SocialAnalyticsBody(BaseModel):
 
 @router.post("/api/social/analytics/profile")
 async def social_profile_analytics(body: SocialAnalyticsBody):
-    """Аналитика профиля/шапки: подписчики, охваты, вовлечённость по площадкам."""
-    from publishers.ayrshare_pub import is_configured, get_profile_analytics
-    if not is_configured():
-        return {"error": "Ayrshare не подключён"}
+    """Аналитика профиля/шапки: подписчики + топ роликов (бесплатно, yt-dlp/Bright Data)."""
+    from core.social_intel import is_configured, get_profile_analytics
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE) или BRIGHTDATA_API_KEY"}
     try:
         return await get_profile_analytics(body.platforms)
     except Exception as e:
@@ -230,10 +232,8 @@ async def social_profile_analytics(body: SocialAnalyticsBody):
 
 @router.post("/api/social/analytics/post")
 async def social_post_analytics(body: SocialAnalyticsBody):
-    """Аналитика поста/ролика: лайки, комментарии, просмотры, охват."""
-    from publishers.ayrshare_pub import is_configured, get_post_analytics
-    if not is_configured():
-        return {"error": "Ayrshare не подключён"}
+    """Аналитика ролика по ссылке (post_id = URL): просмотры, лайки, длительность."""
+    from core.social_intel import get_post_analytics
     try:
         return await get_post_analytics(body.post_id, body.platforms)
     except Exception as e:
@@ -242,10 +242,10 @@ async def social_post_analytics(body: SocialAnalyticsBody):
 
 @router.post("/api/social/history")
 async def social_history(body: SocialAnalyticsBody):
-    """История опубликованных постов/роликов через Ayrshare."""
-    from publishers.ayrshare_pub import is_configured, get_recent_posts
-    if not is_configured():
-        return {"error": "Ayrshare не подключён"}
+    """Последние ролики аккаунтов (бесплатно, по заданным никам)."""
+    from core.social_intel import is_configured, get_recent_posts
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE)"}
     try:
         return await get_recent_posts(body.platforms, body.last_records or 20)
     except Exception as e:
@@ -254,11 +254,11 @@ async def social_history(body: SocialAnalyticsBody):
 
 @router.post("/api/social/intelligence")
 async def social_intelligence(body: SocialAnalyticsBody):
-    """Досье аккаунта: профиль + топ роликов по вовлечённости — чтобы бот делал
-    Reels на основе того, ЧТО за аккаунт и ЧТО реально зашло, а не вслепую."""
-    from publishers.ayrshare_pub import is_configured, get_account_intelligence
-    if not is_configured():
-        return {"error": "Ayrshare не подключён"}
+    """Досье аккаунта: профиль + топ роликов по вовлечённости — бесплатно (yt-dlp +
+    опц. Bright Data), чтобы бот делал Reels на основе реальных данных, а не вслепую."""
+    from core.social_intel import is_configured, get_account_intelligence
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE) или BRIGHTDATA_API_KEY"}
     try:
         return await get_account_intelligence(body.platforms)
     except Exception as e:
@@ -426,7 +426,10 @@ async def agent_config():
             "web_search": True,
             "vision": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
                            or os.getenv("ANTHROPIC_API_KEY")),
-            "social": bool(os.getenv("AYRSHARE_API_KEY")),
+            "social": bool(os.getenv("INSTAGRAM_ACCESS_TOKEN") or os.getenv("TIKTOK_ACCESS_TOKEN")
+                           or os.getenv("VK_ACCESS_TOKEN") or os.getenv("THREADS_ACCESS_TOKEN")),
+            "analysis": bool(os.getenv("IG_HANDLE") or os.getenv("TIKTOK_HANDLE")
+                             or os.getenv("YOUTUBE_HANDLE") or os.getenv("BRIGHTDATA_API_KEY")),
             "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
             "montage": True,
         },

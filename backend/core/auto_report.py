@@ -3,7 +3,7 @@
 
 Логика (раз в сутки, чтобы не спамить при перезапусках Render):
   • нет Telegram-бота → выходим тихо;
-  • нет ключа Ayrshare → один раз в день шлём напоминание добавить ключ;
+  • нет никнеймов для анализа → раз в день шлём напоминание их добавить;
   • всё настроено → запускаем разбор аккаунта (Роль 1) и шлём отчёт админу.
 """
 import os
@@ -51,14 +51,15 @@ async def auto_analyze_on_start(delay: float = 25.0):
         if last == today:
             return  # сегодня уже отправляли
 
-        from publishers.ayrshare_pub import is_configured
-        if not is_configured():
+        from core.social_intel import is_configured
+        if not await is_configured():
             await send_message(
                 admin,
-                "👋 <b>NEXUS AI запущен.</b>\n\nЧтобы я сам анализировал твой Instagram, "
-                "добавь ключ <code>AYRSHARE_API_KEY</code> в Render → Environment "
-                "(или в Настройках сайта). После этого пришлю разбор автоматически.\n\n"
-                "Проверить вручную: /strategy",
+                "👋 <b>NEXUS AI запущен.</b>\n\nЧтобы я сам анализировал твои аккаунты, "
+                "укажи ники в Настройках сайта: <code>IG_HANDLE</code>, "
+                "<code>TIKTOK_HANDLE</code>, <code>YOUTUBE_HANDLE</code> (для Instagram "
+                "можно добавить <code>BRIGHTDATA_API_KEY</code>). После этого пришлю "
+                "разбор автоматически.\n\nПроверить вручную: /strategy",
             )
             await _marker_set(db, today)
             return

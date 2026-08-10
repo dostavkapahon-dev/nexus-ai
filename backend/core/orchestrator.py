@@ -70,14 +70,15 @@ class NexusCore:
                 niche_profile = await analyst.analyze(db, niche_id, niche.name, niche.city or "", niche.goal, niche.tone_of_voice)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "niche_analyst"})
 
-                # Досье аккаунта из Ayrshare (шапка + топ роликов) — чтобы бот
-                # планировал контент на реальных данных, а не вслепую.
+                # Досье аккаунта (бесплатно, без сторонних сервисов: yt-dlp +
+                # опц. Bright Data) — чтобы бот планировал контент на реальных
+                # данных, а не вслепую.
                 account_intel = None
                 try:
-                    from publishers.ayrshare_pub import is_configured as ayr_ready, get_account_intelligence
-                    if ayr_ready():
+                    from core.social_intel import is_configured as intel_ready, get_account_intelligence
+                    if await intel_ready():
                         ig_platforms = [p for p in (niche.platforms or []) if p in
-                                        ("instagram", "tiktok", "youtube", "facebook", "twitter", "linkedin")]
+                                        ("instagram", "tiktok", "youtube")]
                         account_intel = await get_account_intelligence(ig_platforms or ["instagram"])
                         await broadcast(niche_id, {"event": "account_intel", "data": bool(account_intel)})
                 except Exception:
@@ -268,35 +269,63 @@ class NexusCore:
             return {"ok": True, "report": report}
 
     async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
-        """Публикация одной площадки.
+        """Публикация одной площадки — бесплатно, без сторонних посредников.
 
-        Схема простая:
-          • Telegram — напрямую своим ботом (быстро и бесплатно);
-          • всё остальное — через сервис-посредник Ayrshare одним ключом
-            (Instagram, TikTok, Threads, Facebook, X, YouTube, LinkedIn, ...);
-          • если Ayrshare не подключён или площадку не умеет (напр. VK) —
-            запасной путь через браузерного агента.
+        Схема: у каждой площадки свой ОФИЦИАЛЬНЫЙ API (свой токен), а если токена
+        нет — запасной путь через браузерного агента на ПК пользователя.
+          • Telegram   — свой бот;
+          • Instagram  — Graph API (INSTAGRAM_ACCESS_TOKEN);
+          • TikTok     — Content Posting API (TIKTOK_ACCESS_TOKEN);
+          • YouTube    — Data API v3 (YOUTUBE_OAUTH_JSON);
+          • VK         — VK API (VK_ACCESS_TOKEN);
+          • Threads    — Threads API (THREADS_ACCESS_TOKEN);
+          • иначе      — браузерный агент.
         """
         from publishers.browser_publish import publish_via_browser
-        from publishers.ayrshare_pub import is_configured as ayr_ready, supports as ayr_supports, ayr_name
 
-        # Единственная прямая интеграция — Telegram (свой бот).
-        if platform == "telegram":
-            # Посты идут в отдельную группу/канал; если она не задана — в админ-чат.
-            tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")
-            if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
-                from publishers.telegram_pub import publish_telegram
-                r = await publish_telegram(tg_chat, text, image_url or None)
-                return {"ok": True, "via": "telegram", **r}
-            return {"ok": False, "error": "Telegram не настроен"}
+        try:
+            if platform == "telegram":
+                tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")
+                if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
+                    from publishers.telegram_pub import publish_telegram
+                    r = await publish_telegram(tg_chat, text, image_url or None)
+                    return {"ok": True, "via": "telegram", **r}
+                return {"ok": False, "error": "Telegram не настроен"}
 
-        # Все остальные площадки — через Ayrshare.
-        if ayr_ready() and ayr_supports(platform):
-            from publishers.ayrshare_pub import publish_ayrshare
-            r = await publish_ayrshare(text, [ayr_name(platform)], image_url=image_url or None)
-            return {"ok": True, "via": "ayrshare", **r}
+            if platform == "instagram" and os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
+                from publishers.instagram_pub import publish_instagram
+                r = await publish_instagram(text, image_url or None)
+                return {"ok": True, "via": "instagram_api", **r}
 
-        # Запасной путь — браузерный агент (Ayrshare не подключён / не поддерживает).
+            if platform == "tiktok" and os.getenv("TIKTOK_ACCESS_TOKEN") and image_url:
+                from publishers.tiktok_pub import publish_tiktok_photo
+                r = await publish_tiktok_photo(text, image_url)
+                return {"ok": True, "via": "tiktok_api", **r}
+
+            if platform == "youtube" and os.getenv("YOUTUBE_OAUTH_JSON"):
+                from publishers.youtube_pub import publish_youtube_short
+                r = await publish_youtube_short(text[:100], text, video_url=image_url or None)
+                if r.get("ok"):
+                    return {"ok": True, "via": "youtube_api", **r}
+                # YouTube без OAuth-видео — падаем в браузерный fallback ниже.
+
+            if platform == "vk" and os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
+                from publishers.vk_pub import publish_vk
+                r = await publish_vk(text, image_url or None)
+                return {"ok": True, "via": "vk_api", **r}
+
+            if platform == "threads" and os.getenv("THREADS_ACCESS_TOKEN"):
+                from publishers.threads_pub import publish_threads
+                r = await publish_threads(text, image_url or None)
+                return {"ok": True, "via": "threads_api", **r}
+        except Exception as e:
+            # Официальный API упал — не роняем весь план, пробуем браузер.
+            browser = await publish_via_browser(platform, text, image_url)
+            if browser.get("ok"):
+                return browser
+            return {"ok": False, "error": f"{platform} API: {str(e)[:150]}", "fallback": browser.get("error")}
+
+        # Токена нет — запасной путь через браузерного агента.
         return await publish_via_browser(platform, text, image_url)
 
 nexus_core = NexusCore()

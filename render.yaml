@@ -41,3 +41,21 @@ services:
         sync: false
       - key: HEYGEN_API_KEY
         sync: false
+      # Публикация (официальные API площадок; браузер-агент — fallback)
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      - key: YOUTUBE_OAUTH_JSON
+        sync: false
+      # Анализ аккаунтов (бесплатно: yt-dlp; Instagram — опц. Bright Data)
+      - key: IG_HANDLE
+        sync: false
+      - key: TIKTOK_HANDLE
+        sync: false
+      - key: YOUTUBE_HANDLE
+        sync: false
+      - key: BRIGHTDATA_API_KEY
+        sync: false

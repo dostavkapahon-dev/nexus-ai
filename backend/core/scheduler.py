@@ -105,7 +105,7 @@ async def run_daily_publish():
                 platforms = niche.platforms or ["telegram"]
 
                 # Единый диспетчер публикации (тот же, что в оркестраторе):
-                # Ayrshare → официальный API → браузер.
+                # официальный API площадки → браузерный агент.
                 from core.orchestrator import nexus_core
                 for platform in platforms:
                     try:

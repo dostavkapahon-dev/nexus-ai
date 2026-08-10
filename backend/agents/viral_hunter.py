@@ -8,7 +8,7 @@ class ViralHunter(BaseAgent):
         if account_intel:
             account_data = json.dumps(account_intel, ensure_ascii=False)[:6000]
         else:
-            account_data = "нет данных аккаунта (Ayrshare не подключён) — используй общие тренды ниши"
+            account_data = "нет данных аккаунта (ники не заданы) — используй общие тренды ниши"
         text = await self.call_ai(db, niche_id, {
             "niche": niche,
             "platforms": ", ".join(platforms),

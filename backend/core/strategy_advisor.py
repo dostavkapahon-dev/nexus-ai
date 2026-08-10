@@ -1,8 +1,8 @@
 """
 Роль 1 — SMM-стратег: анализ «своё vs чужое успешное» → 2-3 варианта стратегии.
 
-Дёшево: один LLM-вызов на дешёвой модели, данные аккаунта берём из Ayrshare
-(бесплатно), тренды — из уже собранного контекста. Результат — короткий
+Дёшево: один LLM-вызов на дешёвой модели, данные аккаунта берём бесплатно
+(yt-dlp + опц. Bright Data), тренды — из уже собранного контекста. Результат — короткий
 структурированный отчёт + варианты, которые пользователь выбирает кнопкой
 в Telegram. Выбор сохраняется в таблицу Connection (без миграций схемы).
 """
@@ -60,11 +60,11 @@ async def build_options(db) -> dict:
     prof_r = await db.execute(select(UserProfile).limit(1))
     prof = prof_r.scalar_one_or_none()
 
-    # Данные своего аккаунта (бесплатно, через Ayrshare) — если подключён.
-    account = "нет данных аккаунта (Ayrshare не подключён)"
+    # Данные своего аккаунта (бесплатно: yt-dlp + опц. Bright Data) — если задан ник.
+    account = "нет данных аккаунта (укажи ники IG/TikTok/YouTube в настройках)"
     try:
-        from publishers.ayrshare_pub import is_configured, get_account_intelligence
-        if is_configured():
+        from core.social_intel import is_configured, get_account_intelligence
+        if await is_configured():
             platforms = (niche.platforms if niche else None) or ["instagram"]
             intel = await get_account_intelligence([p for p in platforms if p != "telegram"] or ["instagram"])
             account = json.dumps(intel, ensure_ascii=False)[:5000]

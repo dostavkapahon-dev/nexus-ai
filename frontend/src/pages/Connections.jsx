@@ -130,22 +130,25 @@ const PROVIDERS = [
     models: [],
   },
   {
-    id: 'ayrshare', name: 'Instagram (Ayrshare)', icon: '📷', color: 'from-fuchsia-500 to-pink-600',
-    description: 'Простое подключение Instagram через сервис-посредник — без своего Meta-приложения и ревью',
+    id: 'analysis', name: 'Анализ аккаунтов (бесплатно)', icon: '📊', color: 'from-fuchsia-500 to-pink-600',
+    description: 'Ники ваших (или конкурентных) аккаунтов — бот бесплатно тянет метрики и топ роликов через yt-dlp. Instagram — опционально через Bright Data.',
     fields: [
-      { key: 'ayrshare_api_key', label: 'Ayrshare API Key', placeholder: 'XXXX-XXXX...', secret: true },
+      { key: 'ig_handle', label: 'Instagram ник', placeholder: 'pakhon.studio', secret: false },
+      { key: 'tiktok_handle', label: 'TikTok ник', placeholder: 'pakhon.studio', secret: false },
+      { key: 'youtube_handle', label: 'YouTube @handle', placeholder: 'pakhonstudio', secret: false },
+      { key: 'brightdata_api_key', label: 'Bright Data API Key (опц., для Instagram)', placeholder: 'bd_...', secret: true },
     ],
     steps: [
-      { text: 'Зарегистрируйтесь (бесплатно) на', link: 'https://www.ayrshare.com', linkText: 'Ayrshare' },
-      { text: 'В дашборде Ayrshare нажмите Link у Instagram и войдите в аккаунт (OAuth держит Ayrshare)' },
-      { text: 'Откройте', link: 'https://app.ayrshare.com/api', linkText: 'раздел API Key' },
-      { text: 'Скопируйте API Key и вставьте сюда — публикация в Instagram пойдёт через Ayrshare автоматически' },
+      { text: 'Укажите ники аккаунтов, которые нужно анализировать (свои или конкурентов) — без @' },
+      { text: 'YouTube и TikTok анализируются бесплатно сразу, без ключей' },
+      { text: 'Для Instagram (требует обхода логина) заведите ключ на', link: 'https://brightdata.com', linkText: 'Bright Data' },
+      { text: 'Bright Data → Web Unlocker → скопируйте API Key и вставьте сюда' },
     ],
     models: [],
   },
   {
     id: 'instagram', name: 'Instagram Business', icon: '📸', color: 'from-pink-500 to-purple-500',
-    description: 'Прямой способ через Graph API (нужно своё Meta-приложение). Ayrshare выше — проще',
+    description: 'Прямая бесплатная публикация в Instagram через официальный Graph API (нужно своё Meta-приложение)',
     fields: [
       { key: 'instagram_access_token', label: 'Page Access Token', placeholder: 'EAAo3ELgu...', secret: true },
       { key: 'instagram_account_id', label: 'Instagram Account ID', placeholder: '17841400...', secret: false },

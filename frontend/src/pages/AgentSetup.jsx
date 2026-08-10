@@ -18,7 +18,7 @@ const CAP_META = {
   pc_control: { icon: Monitor, label: 'Управление ПК', hint: 'запусти start_agent.bat' },
   web_search: { icon: Globe, label: 'Поиск в интернете', hint: '' },
   vision: { icon: Eye, label: 'Зрение (фото/видео)', hint: 'нужен ключ ИИ' },
-  social: { icon: Share2, label: 'Соцсети', hint: 'нужен AYRSHARE_API_KEY' },
+  social: { icon: Share2, label: 'Соцсети', hint: 'нужен токен площадки (IG/TikTok/VK)' },
   telegram: { icon: Send, label: 'Telegram', hint: 'нужен токен бота' },
   montage: { icon: Film, label: 'Монтаж', hint: '' },
 }

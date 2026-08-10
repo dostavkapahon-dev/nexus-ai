@@ -2,7 +2,7 @@
 Автопилот: полный цикл от анализа аккаунта до готового ролика.
 
 Этапы:
-  1. deep_analysis  — досье аккаунта (Ayrshare) + тренды + рецепт вируса
+  1. deep_analysis  — досье аккаунта (yt-dlp/Bright Data) + тренды + рецепт вируса
   2. interview      — агент сам решает, чего не хватает, и задаёт вопросы
   3. strategies     — 3 варианта стратегии на основе всего собранного
   4. week_plan      — план на неделю: reels / посты / карусели / сторис / threads
@@ -77,10 +77,10 @@ async def deep_analysis() -> dict:
     out["platforms"] = (niche.platforms if niche else None) or ["instagram"]
     out["product"] = (prof.product_description if prof else "") or ""
 
-    # Досье аккаунта (бесплатно, Ayrshare)
+    # Досье аккаунта (бесплатно: yt-dlp + опц. Bright Data)
     try:
-        from publishers.ayrshare_pub import is_configured, get_account_intelligence
-        if is_configured():
+        from core.social_intel import is_configured, get_account_intelligence
+        if await is_configured():
             pf = [p for p in out["platforms"] if p != "telegram"] or ["instagram"]
             out["account"] = await get_account_intelligence(pf)
     except Exception as e:
