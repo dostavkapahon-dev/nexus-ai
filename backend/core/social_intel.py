@@ -57,8 +57,24 @@ def _brightdata_key() -> str:
     return os.getenv("BRIGHTDATA_API_KEY", "").strip()
 
 
+def _analyze_mode() -> str:
+    """Режим анализа: auto (сервисы→браузер) | browser (без API) | api (только сервисы)."""
+    return os.getenv("NEXUS_ANALYZE_MODE", "auto").strip().lower()
+
+
+def _browser_enabled() -> bool:
+    try:
+        from core import browser_reader
+        return browser_reader.enabled()
+    except Exception:
+        return False
+
+
 async def is_configured() -> bool:
-    """Есть ли чем анализировать: Instagram Graph API, Bright Data или заданный ник."""
+    """Есть ли чем анализировать: браузер (без API), Instagram Graph API, Bright Data или ник."""
+    # Браузер (сервер/удалённый CDP) читает публичные страницы без ключей.
+    if _browser_enabled():
+        return True
     if _brightdata_key():
         return True
     try:
@@ -112,11 +128,18 @@ def _engagement(m: dict) -> int:
 async def _fetch_channel(platform: str, handle: str, n: int = 12) -> dict:
     """Публичные метрики канала + топ последних роликов.
 
-    YouTube — сначала официальный Data API (надёжно), затем yt-dlp.
-    TikTok — yt-dlp.
+    Режим NEXUS_ANALYZE_MODE: browser — сразу через браузер (без API);
+    api — только сервисы (Data API / yt-dlp); auto — сервисы, затем браузер-фолбэк.
     """
+    mode = _analyze_mode()
+
+    # browser: читаем публичную страницу браузером без ключей.
+    if mode == "browser" and _browser_enabled():
+        from core import browser_reader
+        return await browser_reader.analyze_profile(platform, handle)
+
     # YouTube: предпочитаем Data API, если задан ключ.
-    if platform == "youtube":
+    if platform == "youtube" and mode != "browser":
         try:
             from core import youtube_reader
             if youtube_reader.is_configured():
@@ -132,6 +155,12 @@ async def _fetch_channel(platform: str, handle: str, n: int = 12) -> dict:
     try:
         info = await asyncio.to_thread(_extract_channel, url, n)
     except Exception as e:
+        # auto: сервисы не смогли — пробуем браузер без API.
+        if mode == "auto" and _browser_enabled():
+            from core import browser_reader
+            b = await browser_reader.analyze_profile(platform, handle)
+            if b.get("ok"):
+                return b
         return {"ok": False, "error": str(e)[:150], "handle": handle, "platform": platform}
 
     entries = info.get("entries") or []
@@ -180,26 +209,34 @@ async def brightdata_fetch(url: str) -> str | None:
 
 
 async def _fetch_instagram(handle: str) -> dict:
-    """Instagram: сначала официальный Graph API (свой аккаунт с инсайтами или чужой
-    через Business Discovery), затем Bright Data, затем честная деградация."""
+    """Instagram по режиму NEXUS_ANALYZE_MODE: browser (без API) | api | auto.
+    В auto: Graph API → Bright Data → браузер → деградация."""
+    mode = _analyze_mode()
+
+    # browser: читаем публичный профиль браузером без ключей.
+    if mode == "browser" and _browser_enabled():
+        from core import browser_reader
+        return await browser_reader.analyze_profile("instagram", handle)
+
     # 1) Graph API — автоматическое чтение постов/Reels и метрик (бесплатно).
-    try:
-        from core import instagram_reader
-        if instagram_reader.is_configured():
-            return await instagram_reader.analyze(handle)
-    except Exception as e:
-        # Не роняем анализ — пробуем следующий источник.
-        _ig_err = str(e)[:150]
-    else:
-        _ig_err = None
+    if mode != "browser":
+        try:
+            from core import instagram_reader
+            if instagram_reader.is_configured():
+                return await instagram_reader.analyze(handle)
+        except Exception:
+            pass  # пробуем следующий источник
 
     # 2) Bright Data (обход логина для публичных профилей).
     url = _channel_url("instagram", handle)
     html = await brightdata_fetch(url)
     if not html:
+        # 3) Браузер без API (auto) — последний бесплатный шанс.
+        if mode in ("auto", "browser") and _browser_enabled() and handle:
+            from core import browser_reader
+            return await browser_reader.analyze_profile("instagram", handle)
         return {"ok": False, "platform": "instagram", "handle": handle,
-                "error": "Instagram требует Bright Data (BRIGHTDATA_API_KEY) — "
-                         "yt-dlp его не тянет без логина."}
+                "error": "нужен токен Instagram, Bright Data или серверный браузер"}
     # Из HTML вытаскиваем описание профиля (og:description содержит
     # «N Followers, M Following, K Posts»).
     followers = None

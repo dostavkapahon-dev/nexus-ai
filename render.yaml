@@ -69,6 +69,9 @@ services:
         value: auto
       - key: NEXUS_SERVER_BROWSER
         value: "1"
+      # Анализ без API: auto (сервисы→браузер) | browser | api
+      - key: NEXUS_ANALYZE_MODE
+        value: auto
       # Эндпоинт облачного браузера (Bright Data Scraping Browser: wss://...@...:9222)
       - key: NEXUS_BROWSER_CDP
         sync: false

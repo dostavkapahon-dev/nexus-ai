@@ -76,6 +76,18 @@ async def youtube_search(query: str, n: int = 8) -> list[dict]:
 async def analyze_reference(url: str, with_vision: bool = True) -> dict:
     """Метрики + визуальный разбор одного референса (скачиваем и смотрим кадры)."""
     meta = await fetch_meta(url)
+    # Без API: если yt-dlp не смог (Instagram/логин), добираем метрики браузером.
+    if not meta.get("ok"):
+        try:
+            from core import browser_reader
+            if browser_reader.enabled():
+                b = await browser_reader.analyze_post(url)
+                if b.get("ok"):
+                    meta = {"ok": True, "title": b.get("title"), "views": b.get("views"),
+                            "likes": b.get("likes"), "comments": b.get("comments"),
+                            "uploader": b.get("author"), "url": url, "source": "browser"}
+        except Exception:
+            pass
     out = {"meta": meta}
     if with_vision and meta.get("ok"):
         try:
