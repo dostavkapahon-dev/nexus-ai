@@ -1,29 +1,56 @@
 """
-Серверный браузер — «руки» прямо на сервере, без ПК пользователя.
+Серверный браузер — «руки» онлайн, без ПК пользователя.
 
 Зачем: публикация без официальных API площадок раньше требовала запущенного
-desktop_agent.py на компьютере пользователя. Этот модуль поднимает headless
-Chromium ПРЯМО на сервере и выполняет тот же протокол команд, что и desktop-агент
-(navigate / screenshot / click_xy / type_text / key / scroll / wait / back /
-page_text). Браузерный vision-агент управляет им точно так же — публикация идёт
-через обычный веб-интерфейс площадок, без API-токенов.
+desktop_agent.py на компьютере пользователя. Этот модуль даёт браузер на стороне
+сервера и выполняет тот же протокол команд, что и desktop-агент (navigate /
+screenshot / click_xy / type_text / key / scroll / wait / back / page_text).
+Vision-агент управляет им так же — публикация идёт через обычный веб-интерфейс
+площадок, без API-токенов.
 
-Сессии (вход в Instagram/TikTok/YouTube) сохраняются в постоянном профиле
-NEXUS_BROWSER_PROFILE, поэтому логиниться нужно один раз. Дополнительно можно
-подложить готовые cookies через NEXUS_BROWSER_STORAGE_STATE (путь к storage_state
-JSON от Playwright) — удобно, чтобы перенести вход с локального браузера.
+Два режима (выбираются автоматически):
+  • УДАЛЁННЫЙ (рекомендуется для слабого хостинга типа Render 512 МБ): если задан
+    NEXUS_BROWSER_CDP (или BRIGHTDATA_BROWSER_URL) — Playwright подключается к
+    облачному браузеру по CDP (напр. Bright Data Scraping Browser). Chromium на
+    самом сервере НЕ запускается — инстанс остаётся лёгким, всё работает онлайн.
+  • ЛОКАЛЬНЫЙ (для VPS с запасом памяти): поднимает headless Chromium прямо на
+    сервере в постоянном профиле NEXUS_BROWSER_PROFILE.
+
+Сессии/логины: в локальном режиме хранятся в профиле; в любом режиме можно
+подложить cookies через NEXUS_BROWSER_STORAGE_STATE (storage_state JSON Playwright).
 
 Работает как фолбэк в send_to_desktop: если ПК-агент не подключён, команды
 исполняет этот серверный браузер.
 """
 import os
+import json
 import base64
 import asyncio
 
 _playwright = None
+_browser = None          # выставлен только в удалённом (CDP) режиме
 _context = None
 _page = None
 _lock = asyncio.Lock()
+
+
+def _cdp_endpoint() -> str:
+    return (os.getenv("NEXUS_BROWSER_CDP") or os.getenv("BRIGHTDATA_BROWSER_URL") or "").strip()
+
+
+def mode() -> str:
+    return "remote" if _cdp_endpoint() else "local"
+
+
+def _storage_state():
+    """Возвращает dict storage_state из NEXUS_BROWSER_STORAGE_STATE (путь или JSON) или None."""
+    state = os.getenv("NEXUS_BROWSER_STORAGE_STATE", "").strip()
+    if not state:
+        return None
+    try:
+        return json.loads(open(state).read()) if os.path.isfile(state) else json.loads(state)
+    except Exception:
+        return None
 
 
 def enabled() -> bool:
@@ -49,35 +76,48 @@ _LAUNCH_ARGS = [
 
 
 async def ensure_browser():
-    """Лениво поднимает persistent-context Chromium. Повторно использует его."""
-    global _playwright, _context, _page
+    """Лениво даёт страницу браузера. Удалённый (CDP) режим — если задан эндпоинт,
+    иначе локальный persistent-context Chromium. Повторно использует соединение."""
+    global _playwright, _browser, _context, _page
     if _context is not None and _page is not None:
         return _page
 
     from playwright.async_api import async_playwright
     _playwright = await async_playwright().start()
-    os.makedirs(_profile_dir(), exist_ok=True)
 
+    cdp = _cdp_endpoint()
+    if cdp:
+        # УДАЛЁННЫЙ облачный браузер (напр. Bright Data Scraping Browser).
+        # Ничего тяжёлого на сервере не запускается — только сетевое подключение.
+        _browser = await _playwright.chromium.connect_over_cdp(cdp)
+        state = _storage_state()
+        if _browser.contexts:
+            _context = _browser.contexts[0]
+        else:
+            _context = await _browser.new_context(**({"storage_state": state} if state else {}))
+        if state and state.get("cookies"):
+            try:
+                await _context.add_cookies(state["cookies"])
+            except Exception:
+                pass
+        _page = _context.pages[0] if _context.pages else await _context.new_page()
+        return _page
+
+    # ЛОКАЛЬНЫЙ Chromium (для VPS с запасом памяти).
+    os.makedirs(_profile_dir(), exist_ok=True)
     headless = os.getenv("NEXUS_BROWSER_HEADLESS", "1").strip() not in ("0", "false", "no")
     opts = {"headless": headless, "viewport": {"width": 1280, "height": 800}, "args": _LAUNCH_ARGS}
-
     exe = os.getenv("BROWSER_PATH")
     if exe:
         opts["executable_path"] = exe
-
     _context = await _playwright.chromium.launch_persistent_context(_profile_dir(), **opts)
 
-    # Необязательный импорт cookies/сессий, перенесённых с локального браузера.
-    state = os.getenv("NEXUS_BROWSER_STORAGE_STATE", "").strip()
-    if state:
+    state = _storage_state()
+    if state and state.get("cookies"):
         try:
-            import json
-            data = json.loads(open(state).read()) if os.path.isfile(state) else json.loads(state)
-            if data.get("cookies"):
-                await _context.add_cookies(data["cookies"])
+            await _context.add_cookies(state["cookies"])
         except Exception:
             pass
-
     _page = _context.pages[0] if _context.pages else await _context.new_page()
     return _page
 
@@ -161,12 +201,14 @@ async def is_available() -> bool:
 
 
 async def shutdown():
-    global _playwright, _context, _page
+    global _playwright, _browser, _context, _page
     try:
-        if _context:
+        if _browser:            # удалённый режим: закрываем соединение, не сам браузер
+            await _browser.close()
+        elif _context:          # локальный persistent-context
             await _context.close()
         if _playwright:
             await _playwright.stop()
     except Exception:
         pass
-    _playwright = _context = _page = None
+    _playwright = _browser = _context = _page = None

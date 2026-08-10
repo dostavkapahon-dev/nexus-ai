@@ -5,8 +5,10 @@ services:
     rootDir: backend
     # Фронт уже собран и закоммичен (frontend/dist) — npm не нужен.
     # Сборка только Python: лёгкая и не падает.
-    # Ставим и Chromium для серверного браузера (публикация без API, без ПК).
-    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
+    # Лёгкая сборка: локальный Chromium НЕ ставим — браузер удалённый (CDP),
+    # чтобы не грузить инстанс 512 МБ. Playwright из requirements нужен только
+    # для сетевого подключения к облачному браузеру.
+    buildCommand: pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ADMIN_PASSWORD
@@ -60,10 +62,14 @@ services:
         sync: false
       - key: BRIGHTDATA_API_KEY
         sync: false
-      # Публикация без API — через браузер на сервере
+      # Публикация без API — через УДАЛЁННЫЙ браузер (онлайн, без ПК, не грузит Render)
       - key: NEXUS_PUBLISH_MODE
         value: auto
       - key: NEXUS_SERVER_BROWSER
         value: "1"
-      - key: NEXUS_BROWSER_HEADLESS
-        value: "1"
+      # Эндпоинт облачного браузера (Bright Data Scraping Browser: wss://...@...:9222)
+      - key: NEXUS_BROWSER_CDP
+        sync: false
+      # Опц.: cookies для входа в аккаунты (storage_state JSON или путь)
+      - key: NEXUS_BROWSER_STORAGE_STATE
+        sync: false

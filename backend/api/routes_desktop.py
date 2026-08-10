@@ -37,6 +37,7 @@ async def desktop_status():
     return {
         "connected": _desktop_ws is not None,
         "server_browser": server_browser.enabled(),
+        "browser_mode": server_browser.mode(),   # remote (облачный) | local (на сервере)
         # Публикация без API возможна, если есть хоть какие-то «руки».
         "browser_publish_ready": _desktop_ws is not None or server_browser.enabled(),
     }
