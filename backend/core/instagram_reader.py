@@ -115,9 +115,18 @@ async def analyze_own(with_insights: bool = True, top: int = 10) -> dict:
 
 # ─────────────────────────── чужой аккаунт ───────────────────────────
 
+import re
+
+_USERNAME_RE = re.compile(r"[^A-Za-z0-9._]")
+
+
 async def analyze_competitor(username: str, top: int = 10) -> dict:
     """Публичные данные чужого Business/Creator аккаунта (Business Discovery)."""
-    username = username.lstrip("@")
+    # Username идёт в тело field-выражения Graph API — оставляем только валидные
+    # для IG-ника символы, чтобы нельзя было сломать/подменить запрос.
+    username = _USERNAME_RE.sub("", username.lstrip("@"))[:30]
+    if not username:
+        return {"ok": False, "platform": "instagram", "error": "пустой ник"}
     bd = (f"business_discovery.username({username})"
           "{username,followers_count,media_count,"
           "media.limit(25){caption,like_count,comments_count,media_type,timestamp,permalink}}")

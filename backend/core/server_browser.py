@@ -26,6 +26,48 @@ import os
 import json
 import base64
 import asyncio
+import ipaddress
+import socket
+from urllib.parse import urlparse
+
+# Хосты, которые нельзя открывать серверным браузером (защита от SSRF: облачные
+# метаданные, локалхост). Доступ к внутренней сети через браузер закрыт.
+_BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal",
+                      "metadata.goog", "instance-data"}
+
+
+def _host_is_private(host: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(host)
+        return (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+    except ValueError:
+        pass
+    # Не IP-литерал: пробуем резолвить и проверить все адреса.
+    try:
+        for info in socket.getaddrinfo(host, None):
+            ip = ipaddress.ip_address(info[4][0])
+            if (ip.is_private or ip.is_loopback or ip.is_link_local
+                    or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+                return True
+    except Exception:
+        return False  # не резолвится — не блокируем (best-effort)
+    return False
+
+
+def url_allowed(url: str) -> bool:
+    """Разрешён ли URL для навигации: только http(s) и не внутренняя сеть."""
+    try:
+        u = urlparse((url or "").strip())
+    except Exception:
+        return False
+    if u.scheme not in ("http", "https"):
+        return False
+    host = (u.hostname or "").lower()
+    if not host or host in _BLOCKED_HOSTNAMES:
+        return False
+    return not _host_is_private(host)
+
 
 _playwright = None
 _browser = None          # выставлен только в удалённом (CDP) режиме
@@ -145,7 +187,11 @@ async def execute(cmd: dict) -> dict:
                         "title": await page.title(), "width": size["width"], "height": size["height"]}
 
             if action == "navigate":
-                await page.goto(cmd.get("url", ""), timeout=45000)
+                target = cmd.get("url", "")
+                if not url_allowed(target):
+                    return {"req_id": req_id, "ok": False,
+                            "error": "URL заблокирован: разрешены только http(s) на внешние адреса"}
+                await page.goto(target, timeout=45000)
                 await asyncio.sleep(2)
                 return {"req_id": req_id, "ok": True, "url": page.url, "title": await page.title()}
 

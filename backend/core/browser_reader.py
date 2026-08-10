@@ -9,9 +9,13 @@
 для неё браузер должен быть залогинен теми же cookies (NEXUS_BROWSER_STORAGE_STATE),
 что и для публикации. Без логина возвращаются публичные данные.
 """
+import re
 import json
 
 from core import server_browser
+
+# Ник для URL: только безопасные символы, чтобы нельзя было подменить путь/хост.
+_HANDLE_RE = re.compile(r"[^A-Za-z0-9._-]")
 
 
 def enabled() -> bool:
@@ -19,7 +23,7 @@ def enabled() -> bool:
 
 
 def _profile_url(platform: str, handle: str) -> str | None:
-    h = (handle or "").lstrip("@").strip()
+    h = _HANDLE_RE.sub("", (handle or "").lstrip("@").strip())
     if not h:
         return None
     if platform == "instagram":
@@ -97,6 +101,8 @@ async def analyze_post(url: str) -> dict:
     """Метрики одного ролика/поста по ссылке через браузер (без API)."""
     if not enabled():
         return {"ok": False, "url": url, "error": "браузер выключен"}
+    if not server_browser.url_allowed(url):
+        return {"ok": False, "url": url, "error": "недопустимый URL (только внешние http(s))"}
     page = await _open_text(url)
     if not page.get("ok"):
         return {"ok": False, "url": url, "error": page.get("error")}
