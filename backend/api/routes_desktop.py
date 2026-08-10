@@ -33,7 +33,13 @@ async def desktop_agent_ws(ws: WebSocket):
 
 @router.get("/api/desktop/status")
 async def desktop_status():
-    return {"connected": _desktop_ws is not None}
+    from core import server_browser
+    return {
+        "connected": _desktop_ws is not None,
+        "server_browser": server_browser.enabled(),
+        # Публикация без API возможна, если есть хоть какие-то «руки».
+        "browser_publish_ready": _desktop_ws is not None or server_browser.enabled(),
+    }
 
 def desktop_connected() -> bool:
     return _desktop_ws is not None
@@ -47,7 +53,11 @@ async def send_to_desktop(body: dict, timeout: float = 30.0) -> dict:
     autonomous browser agent loop.
     """
     if not _desktop_ws:
-        raise RuntimeError("Desktop agent not connected. Run desktop_agent.py on your PC.")
+        # ПК-агент не подключён — исполняем команду серверным браузером (без ПК, без API).
+        from core import server_browser
+        if server_browser.enabled():
+            return await server_browser.execute(body)
+        raise RuntimeError("Desktop agent not connected and server browser disabled.")
     import uuid
     req_id = str(uuid.uuid4())
     body["req_id"] = req_id
@@ -84,7 +94,9 @@ async def run_browser_agent(body: dict):
     if not task:
         return {"ok": False, "error": "Field 'task' is required."}
     if not desktop_connected():
-        return {"ok": False, "error": "Desktop agent not connected. Run desktop_agent.py on your PC."}
+        from core import server_browser
+        if not server_browser.enabled():
+            return {"ok": False, "error": "Нет ни ПК-агента, ни серверного браузера."}
     try:
         result = await run_agent(
             task=task,

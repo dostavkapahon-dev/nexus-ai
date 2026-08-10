@@ -283,6 +283,15 @@ class NexusCore:
         """
         from publishers.browser_publish import publish_via_browser
 
+        # Режим публикации: "browser" — всё через браузер без API (по умолчанию,
+        # т.к. не требует токенов площадок); "api" — только официальные API;
+        # "auto" — API если есть токен, иначе браузер.
+        mode = os.getenv("NEXUS_PUBLISH_MODE", "auto").strip().lower()
+
+        # Telegram публикуем своим ботом всегда (это не «API площадки», а свой канал).
+        if mode == "browser" and platform != "telegram":
+            return await publish_via_browser(platform, text, image_url)
+
         try:
             if platform == "telegram":
                 tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")

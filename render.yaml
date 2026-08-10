@@ -5,7 +5,8 @@ services:
     rootDir: backend
     # Фронт уже собран и закоммичен (frontend/dist) — npm не нужен.
     # Сборка только Python: лёгкая и не падает.
-    buildCommand: pip install -r requirements.txt
+    # Ставим и Chromium для серверного браузера (публикация без API, без ПК).
+    buildCommand: pip install -r requirements.txt && python -m playwright install --with-deps chromium
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ADMIN_PASSWORD
@@ -59,3 +60,10 @@ services:
         sync: false
       - key: BRIGHTDATA_API_KEY
         sync: false
+      # Публикация без API — через браузер на сервере
+      - key: NEXUS_PUBLISH_MODE
+        value: auto
+      - key: NEXUS_SERVER_BROWSER
+        value: "1"
+      - key: NEXUS_BROWSER_HEADLESS
+        value: "1"

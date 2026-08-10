@@ -413,7 +413,8 @@ async def agent_config():
     from core.skills_store import stats
     try:
         from api.routes_desktop import desktop_connected
-        pc = desktop_connected()
+        from core import server_browser
+        pc = desktop_connected() or server_browser.enabled()
     except Exception:
         pc = False
     return {
@@ -426,8 +427,9 @@ async def agent_config():
             "web_search": True,
             "vision": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
                            or os.getenv("ANTHROPIC_API_KEY")),
+            # Публиковать можно и без API — через браузер (ПК-агент или серверный).
             "social": bool(os.getenv("INSTAGRAM_ACCESS_TOKEN") or os.getenv("TIKTOK_ACCESS_TOKEN")
-                           or os.getenv("VK_ACCESS_TOKEN") or os.getenv("THREADS_ACCESS_TOKEN")),
+                           or os.getenv("VK_ACCESS_TOKEN") or os.getenv("THREADS_ACCESS_TOKEN")) or pc,
             "analysis": bool(os.getenv("IG_HANDLE") or os.getenv("TIKTOK_HANDLE")
                              or os.getenv("YOUTUBE_HANDLE") or os.getenv("BRIGHTDATA_API_KEY")),
             "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
