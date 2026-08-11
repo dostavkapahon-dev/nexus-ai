@@ -72,6 +72,10 @@ async def route(text: str) -> str:
     quick = quick_route(text)
     if quick:
         return quick
+    # Без ключей уточнять намерение нечем — не жжём время на заведомый сбой.
+    from core.ai_router import ai_available
+    if not ai_available():
+        return "/chat"
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
         model = ECONOMY_MODELS.get("adapter", "gemini-2.0-flash")
@@ -91,8 +95,29 @@ CHAT_SYSTEM = (
 )
 
 
+NO_AI_REPLY = (
+    "🤖 Ни один ИИ-провайдер не подключён, поэтому свободные команды словами "
+    "сейчас недоступны.\n\n"
+    "<b>Что работает без ИИ прямо сейчас:</b>\n"
+    "/queue — очередь публикаций и повторы\n"
+    "/tasks — задачи и их статусы\n"
+    "/errors — что сломалось за сутки\n"
+    "/cost — расходы и бюджет\n"
+    "/diag — что подключено\n"
+    "/rivals — метрики конкурентов\n\n"
+)
+
+
 async def chat_reply(text: str) -> str:
-    """Свободный ответ, когда это просто вопрос/разговор."""
+    """Свободный ответ, когда это просто вопрос/разговор.
+
+    Без единого ключа отвечаем понятным текстом со списком рабочих команд:
+    «All AI providers failed» ничего не говорит о том, что делать дальше.
+    """
+    from core.ai_router import ai_available, FREE_SIGNUP_HINT
+    if not ai_available():
+        return NO_AI_REPLY + FREE_SIGNUP_HINT
+
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
         model = ECONOMY_MODELS.get("copywriter", "gemini-2.0-flash")

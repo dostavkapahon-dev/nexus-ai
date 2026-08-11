@@ -140,8 +140,15 @@ async def overview() -> dict:
     else:
         verdict = "ok"
 
+    from core.ai_router import available_providers
+    providers = available_providers()
+
     return {
         "verdict": verdict,
+        # Управляющий слой работает и без ИИ, поэтому это не «сломано», а режим:
+        # видно сразу, доступна ли генерация или только прямые команды.
+        "ai": {"available": bool(providers), "providers": providers,
+               "mode": "full" if providers else "control_only"},
         "agents": ag,
         "social": await social(),
         "scheduler": scheduler_jobs(),

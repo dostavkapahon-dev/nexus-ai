@@ -101,6 +101,17 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
             reply = await intent.chat_reply(text)
             steps = []
         else:
+            # Дирижёру нужна модель. Без ключей заводить задачу, которая гарантированно
+            # упадёт, — значит мусорить в журнале и врать пользователю про «ошибку
+            # выполнения»: проблема не в выполнении, а в том, что выполнять нечем.
+            from core.ai_router import ai_available, FREE_SIGNUP_HINT
+            if not ai_available():
+                from core.intent import NO_AI_REPLY
+                reply = NO_AI_REPLY + FREE_SIGNUP_HINT
+                await log_event(source, "agent", reply)
+                return {"ok": False, "reply": reply, "cmd": cmd, "steps": [],
+                        "reason": "no_ai_provider"}
+
             # Всё остальное ведёт мозг-дирижёр (Claude → инструменты) под задачей,
             # чтобы запуск было видно в /api/tasks и он не пропал при сбое.
             from core.marketing_director import run_director

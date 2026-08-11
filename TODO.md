@@ -95,6 +95,14 @@
 - [x] `/api/system/health`, `/agents`, `/scheduler`; страница «Здоровье» в дашборде
 - [x] 9 тестов (`tests/test_health.py`), всего 253 passed
 
+## РЕЖИМ БЕЗ ВНЕШНИХ ИИ ✅ ВЫПОЛНЕНО
+- [x] `ai_available()` / `available_providers()` — система знает, есть ли чем работать
+- [x] Бот отвечает списком рабочих команд вместо «All AI providers failed»
+- [x] Не заводится задача, которая гарантированно упадёт
+- [x] Разделены «нет ключа» и «провайдеры отказали»
+- [x] Режим виден в `/diag` и на странице «Здоровье»
+- [x] 8 тестов (`tests/test_no_ai_mode.py`), всего 261 passed
+
 ## ТЕСТЫ
 - [ ] Тесты на `publishers/*` и `orchestrator._publish_one`
 - [ ] Тесты на `social_intel` / `instagram_reader` / `youtube_reader` / `browser_reader`

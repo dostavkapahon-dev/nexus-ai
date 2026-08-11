@@ -64,6 +64,16 @@ export default function Health() {
             </span>
           </div>
 
+          {data.ai && !data.ai.available && (
+            <div className="border border-cyan-500/25 bg-cyan-500/8 rounded-xl px-4 py-3 mb-4">
+              <div className="text-sm text-cyan-300 font-medium">Режим «только управление»</div>
+              <div className="text-[11px] text-[#9a9ac0] mt-1">
+                Ни один ИИ-провайдер не подключён. Публикация, очередь, задачи, метрики
+                и отчёты работают. Генерация текста и видео — недоступна, пока нет ключа.
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-5">
             <Stat label="Задач за сутки" value={data.tasks?.total ?? 0} />
             <Stat label="Из них упало" value={data.tasks?.failed ?? 0}

@@ -106,7 +106,10 @@ async def _handle_command(chat_id: str, text: str):
         import traceback
         traceback.print_exc()
         msg = str(e)
-        if "All AI providers failed" in msg or "authentication" in msg.lower():
+        ai_failed = ("Все ИИ-провайдеры отказали" in msg
+                     or "Нет ни одного ключа ИИ" in msg
+                     or "All AI providers failed" in msg)   # старый текст — на всякий случай
+        if ai_failed or "authentication" in msg.lower():
             keys = {"ANTHROPIC": os.getenv("ANTHROPIC_API_KEY"),
                     "OPENAI": os.getenv("OPENAI_API_KEY"),
                     "GEMINI": os.getenv("GEMINI_API_KEY"),
@@ -586,8 +589,18 @@ async def _dispatch_command(chat_id: str, text: str):
             "DeepSeek": os.getenv("DEEPSEEK_API_KEY"),
         }
         any_ai = any(ai_keys.values())
+        # Режим работы важнее списка галочек: без ИИ система не «сломана»,
+        # она работает как пульт — публикация, очередь и отчёты на месте.
+        from core.ai_router import available_providers
+        providers = available_providers()
+        mode = (f"✅ Режим: полный (ИИ: {', '.join(providers)})" if providers
+                else "⚙️ Режим: только управление — ИИ не подключён.\n"
+                     "Работают: /queue /tasks /errors /cost /rivals, публикация и отчёты.\n"
+                     "Генерация текста и видео недоступна.")
         lines = [
             "🩺 <b>Диагностика</b>",
+            mode,
+            "",
             f"{yn(os.getenv('TELEGRAM_BOT_TOKEN'))} Telegram-бот токен",
             f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
             f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",

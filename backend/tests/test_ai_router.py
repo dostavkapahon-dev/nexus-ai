@@ -84,10 +84,13 @@ async def test_transient_error_is_retried(router, monkeypatch, no_backoff):
 
 async def test_all_providers_failed_message_lists_each_error(router, monkeypatch, no_backoff):
     _stub_calls(monkeypatch, {})  # всё падает "not stubbed"
+    # Ключ есть — значит это именно отказ провайдеров, а не «нечем работать»:
+    # у этих двух бед разные причины и разные тексты.
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
     with pytest.raises(RuntimeError) as e:
         await router.call("gpt-4o", "sys", "hi")
     msg = str(e.value)
-    assert "All AI providers failed" in msg
+    assert "Все ИИ-провайдеры отказали" in msg
     assert "gpt-4o →" in msg  # видно ошибку каждого провайдера
 
 

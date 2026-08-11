@@ -219,6 +219,32 @@ def _has_key(model: str) -> bool:
     provider = AI_ROUTING.get(model, "openai")
     return bool(os.getenv(PROVIDER_KEY_ENV.get(provider, ""), ""))
 
+
+def available_providers() -> list[str]:
+    """Провайдеры, у которых есть ключ. Пустой список — моделей нет вообще."""
+    return sorted({p for p, env in PROVIDER_KEY_ENV.items() if env and os.getenv(env, "")})
+
+
+def ai_available() -> bool:
+    """Есть ли хоть одна модель, которую можно вызвать.
+
+    Управляющий слой (команды, публикация, аналитика) работает и без ИИ, поэтому
+    честнее заранее сказать «моделей нет», чем гнать вызов и падать с
+    «All AI providers failed» — по такому тексту непонятно, что делать.
+    """
+    return bool(available_providers())
+
+
+# Куда идти за бесплатным ключом — показываем прямо в ответе, а не в документации,
+# которую в этот момент никто не открывает.
+FREE_SIGNUP_HINT = (
+    "Нужен хотя бы один ключ ИИ — подойдёт бесплатный:\n"
+    "• Groq — console.groq.com/keys (1000 запросов/сутки)\n"
+    "• Gemini — aistudio.google.com\n"
+    "• Cerebras — cloud.cerebras.ai\n"
+    "Добавьте ключ в Подключениях или в Render → Environment."
+)
+
 PREMIUM_MODELS = {
     "niche_analyst": "sonar-pro",
     "viral_hunter": "sonar-reasoning-pro",
@@ -434,7 +460,11 @@ class AIRouter:
                         break
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
+        # Отсутствие ключей и сбой провайдеров — разные беды, и чинятся по-разному.
+        # Общий текст «All AI providers failed» не подсказывал, что именно делать.
+        if not available_providers():
+            raise RuntimeError("Нет ни одного ключа ИИ. " + FREE_SIGNUP_HINT)
         detail = " | ".join(f"{m} → {err}" for m, err in errors.items()) or str(last_error)
-        raise RuntimeError(f"All AI providers failed. {detail}")
+        raise RuntimeError(f"Все ИИ-провайдеры отказали. {detail}")
 
 ai_router = AIRouter()
