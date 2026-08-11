@@ -56,6 +56,15 @@ services:
         sync: false
       - key: TIKTOK_ACCESS_TOKEN
         sync: false
+      # OAuth Meta: подключение Instagram и продление токена
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: THREADS_ACCESS_TOKEN
+        sync: false
+      - key: THREADS_USER_ID
+        sync: false
       - key: YOUTUBE_API_KEY
         sync: false
       - key: YOUTUBE_OAUTH_JSON

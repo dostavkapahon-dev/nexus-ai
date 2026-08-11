@@ -176,6 +176,39 @@ async def run_weekly_analytics():
     await send_message(chat_id, "📊 <b>Еженедельный отчёт Pakhon Studio</b>\n\n" + report)
 
 
+async def run_token_maintenance():
+    """Следит за токенами площадок: продлевает Instagram и предупреждает о протухании.
+
+    Раньше токен Instagram умирал через 60 дней МОЛЧА, и об этом узнавали только
+    когда падала публикация.
+    """
+    from connectors import health_all, get_connector
+    from core.telegram_bot import send_message
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    problems = []
+    for st in await health_all():
+        platform = st.get("platform", "")
+        if not st.get("configured"):
+            continue
+        days = st.get("days_left")
+        # Меньше двух недель — пробуем продлить заранее, не дожидаясь падения.
+        if days is not None and days < 14:
+            res = await get_connector(platform).refresh_token()
+            if res.get("refreshed"):
+                problems.append(f"🔄 {platform}: токен продлён "
+                                f"(осталось было {days} дн.)")
+            else:
+                problems.append(f"⚠️ {platform}: токен истекает через {days} дн., "
+                                f"продлить не удалось — {res.get('error', '')[:80]}")
+        elif not st.get("ok"):
+            problems.append(f"❌ {platform}: {str(st.get('error'))[:100]}")
+
+    if problems and chat_id and os.getenv("TELEGRAM_BOT_TOKEN"):
+        await send_message(chat_id, "🔑 <b>Токены площадок</b>\n\n" + "\n".join(problems))
+    return {"checked": True, "problems": problems}
+
+
 def _tracked(kind: str, goal: str, fn):
     """Оборачивает джоб в задачу: у ночного запуска тоже есть id, статус и текст ошибки."""
     async def job():
@@ -210,6 +243,9 @@ def start_scheduler():
     _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
                        CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
+    # 08:00 — проверка и продление токенов площадок (до утренних публикаций)
+    _scheduler.add_job(_tracked("tokens", "Проверка токенов площадок", run_token_maintenance),
+                       CronTrigger(hour=8, minute=0), id="tokens", replace_existing=True)
     _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),
                        CronTrigger(day_of_week="sun", hour=20, minute=0),
                        id="weekly", replace_existing=True)

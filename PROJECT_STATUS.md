@@ -32,7 +32,7 @@ API-ключи выживают только потому, что продубл
 |---|---|---|---|
 | 01 | Core / Orchestrator | 🟢 | **BLOCK 01 выполнен:** система задач (id, статусы, retry, шаги, восстановление после рестарта), alembic, Postgres-совместимость |
 | 02 | AI Provider Layer | 🟢 | **BLOCK 02 выполнен:** единая касса расходов (все вызовы), бюджет с алертами, реальный `ai_mode`, точные токены Gemini |
-| 03 | Social Connectors | 🟡 | Нет интерфейса `SocialConnector`, нет OAuth/refresh/webhooks/rate-limit |
+| 03 | Social Connectors | 🟢 | **BLOCK 03 выполнен:** `SocialConnector` + 6 коннекторов, OAuth Instagram, продление токенов, rate-limit, health |
 | 04 | Social Analytics | 🟡 | Чтение есть, но результаты **нигде не сохраняются** |
 | 05 | Market / Competitor Research | 🟡 | `viral_research` + duckduckgo + `/hunt`; результат только в `viral_recipe` |
 | 06 | Content Strategy | 🟢 | `strategy_advisor` + `autopilot` (3 варианта, план на 7 дней) |
@@ -57,7 +57,7 @@ API-ключи выживают только потому, что продубл
 | 🟡 | Секреты plaintext в БД и в `os.environ` всего процесса | `api/routes_settings.py:80-94` |
 | 🟡 | Гонки при read-modify-write KV `Connection` без блокировки | `core/command_center.py`, `core/moderation.py` |
 | ✅ | ~~Нет системы задач~~ → реализована, см. `TASK_SYSTEM.md` | `core/task_manager.py` |
-| ⚪ | Нет OAuth и long-lived токенов для соцсетей | — |
+| ✅ | ~~Нет OAuth и long-lived токенов~~ → OAuth Meta + авто-продление в 08:00 | `connectors/`, `api/routes_social.py` |
 
 ## Что работает надёжно
 - AI Provider Layer с фолбэком между 11 провайдерами (BLOCK 02).

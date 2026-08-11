@@ -38,13 +38,17 @@
 - [x] 8 тестов (`tests/test_cost.py`), всего 153 passed
 - [ ] Жёсткий стоп платных моделей при превышении — осознанно отложено
 
-## BLOCK 03 — SOCIAL CONNECTORS
-- [ ] Базовый класс `SocialConnector` (publish / read_profile / read_posts / health / refresh)
-- [ ] `InstagramConnector`, `ThreadsConnector`, `TelegramConnector`, `TikTokConnector`, `YouTubeConnector`
-- [ ] OAuth-флоу вместо ручного ввода токенов
-- [ ] Long-lived token + авто-продление (Instagram — критично, 60 дней)
-- [ ] Rate-limit и backoff
-- [ ] `health()` — валидность токена, срок, permissions
+## BLOCK 03 — SOCIAL CONNECTORS ✅ ВЫПОЛНЕН
+- [x] Базовый класс `SocialConnector` + `RateLimiter` (`connectors/base.py`)
+- [x] 6 коннекторов: Instagram, Threads (+чтение, которого не было), Telegram, TikTok, YouTube, VK
+- [x] OAuth Meta: `/api/social/oauth/start` + публичный `/callback`, авто-поиск IG Business аккаунта
+- [x] Long-lived токен (60 дней) + джоб `tokens` в 08:00 продлевает всё, чему осталось <14 дней
+- [x] Rate-limit по площадкам (Meta 20/мин, TikTok 10/мин)
+- [x] `health()` с датой истечения, правами и `can_publish`; страница «Площадки» в дашборде
+- [x] `_publish_one` переведён на коннекторы вместо лестницы if-ов
+- [x] 15 тестов (`tests/test_connectors.py`), всего 168 passed
+- [ ] Webhooks (комментарии/упоминания) — нужен публичный HTTPS и верификация
+- [ ] Видео-постинг TikTok
 
 ## BLOCK 04 — СОХРАНЕНИЕ АНАЛИТИКИ
 - [ ] Расширить `Publication`: просмотры, лайки, комментарии, сохранения, ER, ссылка на пост

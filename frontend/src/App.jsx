@@ -1,6 +1,6 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks, DollarSign } from 'lucide-react'
+import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks, DollarSign, Share2 } from 'lucide-react'
 import Control from './pages/Control'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
@@ -13,6 +13,7 @@ import AgentSetup from './pages/AgentSetup'
 import Analytics from './pages/Analytics'
 import Tasks from './pages/Tasks'
 import Cost from './pages/Cost'
+import Social from './pages/Social'
 import Director from './pages/Director'
 import Login from './pages/Login'
 import { auth } from './lib/api'
@@ -26,6 +27,7 @@ const NAV = [
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
   { to: '/cost',        icon: DollarSign,      label: 'Расходы' },
+  { to: '/social',      icon: Share2,          label: 'Площадки' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
   { to: '/bot',         icon: Bot,             label: 'Telegram-бот' },
   { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
@@ -92,6 +94,7 @@ function Layout() {
           <Route path="/queue"       element={<Queue />} />
           <Route path="/tasks"       element={<Tasks />} />
           <Route path="/cost"        element={<Cost />} />
+          <Route path="/social"      element={<Social />} />
           <Route path="/analytics"   element={<Analytics />} />
           <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />

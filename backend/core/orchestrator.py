@@ -269,72 +269,52 @@ class NexusCore:
             return {"ok": True, "report": report}
 
     async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
-        """Публикация одной площадки — бесплатно, без сторонних посредников.
+        """Публикация одной площадки через её коннектор.
 
-        Схема: у каждой площадки свой ОФИЦИАЛЬНЫЙ API (свой токен), а если токена
-        нет — запасной путь через браузерного агента на ПК пользователя.
-          • Telegram   — свой бот;
-          • Instagram  — Graph API (INSTAGRAM_ACCESS_TOKEN);
-          • TikTok     — Content Posting API (TIKTOK_ACCESS_TOKEN);
-          • YouTube    — Data API v3 (YOUTUBE_OAUTH_JSON);
-          • VK         — VK API (VK_ACCESS_TOKEN);
-          • Threads    — Threads API (THREADS_ACCESS_TOKEN);
-          • иначе      — браузерный агент.
+        Раньше здесь была лестница if-ов по каждой площадке. Теперь все площадки
+        реализуют один контракт (`connectors/base.py::SocialConnector`), поэтому
+        маршрутизация одинаковая: коннектор → при отказе браузерный путь.
+
+        Режим NEXUS_PUBLISH_MODE: browser — всё через браузер без API;
+        api — только официальные API; auto — API если настроен, иначе браузер.
         """
         from publishers.browser_publish import publish_via_browser
+        from connectors import get_connector
 
-        # Режим публикации: "browser" — всё через браузер без API (по умолчанию,
-        # т.к. не требует токенов площадок); "api" — только официальные API;
-        # "auto" — API если есть токен, иначе браузер.
         mode = os.getenv("NEXUS_PUBLISH_MODE", "auto").strip().lower()
 
-        # Telegram публикуем своим ботом всегда (это не «API площадки», а свой канал).
+        # Telegram — свой бот, а не «API площадки»: его не подменяем браузером.
         if mode == "browser" and platform != "telegram":
             return await publish_via_browser(platform, text, image_url)
 
-        try:
-            if platform == "telegram":
-                tg_chat = os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")
-                if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
-                    from publishers.telegram_pub import publish_telegram
-                    r = await publish_telegram(tg_chat, text, image_url or None)
-                    return {"ok": True, "via": "telegram", **r}
-                return {"ok": False, "error": "Telegram не настроен"}
+        connector = get_connector(platform)
+        if connector and connector.configured():
+            try:
+                res = await connector.publish(text, image_url=image_url or "")
+            except Exception as e:
+                res = {"ok": False, "error": str(e)[:300]}
 
-            if platform == "instagram" and os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
-                from publishers.instagram_pub import publish_instagram
-                r = await publish_instagram(text, image_url or None)
-                return {"ok": True, "via": "instagram_api", **r}
-
-            if platform == "tiktok" and os.getenv("TIKTOK_ACCESS_TOKEN") and image_url:
-                from publishers.tiktok_pub import publish_tiktok_photo
-                r = await publish_tiktok_photo(text, image_url)
-                return {"ok": True, "via": "tiktok_api", **r}
-
-            if platform == "youtube" and os.getenv("YOUTUBE_OAUTH_JSON"):
-                from publishers.youtube_pub import publish_youtube_short
-                r = await publish_youtube_short(text[:100], text, video_url=image_url or None)
-                if r.get("ok"):
-                    return {"ok": True, "via": "youtube_api", **r}
-                # YouTube без OAuth-видео — падаем в браузерный fallback ниже.
-
-            if platform == "vk" and os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
-                from publishers.vk_pub import publish_vk
-                r = await publish_vk(text, image_url or None)
-                return {"ok": True, "via": "vk_api", **r}
-
-            if platform == "threads" and os.getenv("THREADS_ACCESS_TOKEN"):
-                from publishers.threads_pub import publish_threads
-                r = await publish_threads(text, image_url or None)
-                return {"ok": True, "via": "threads_api", **r}
-        except Exception as e:
-            # Официальный API упал — не роняем весь план, пробуем браузер.
+            if res.get("ok"):
+                return res
+            # Ограничение платформы или сбой API — уходим в браузер, но
+            # сохраняем исходную причину, чтобы она не потерялась в отчёте.
+            if mode == "api":
+                return res
             browser = await publish_via_browser(platform, text, image_url)
             if browser.get("ok"):
-                return browser
-            return {"ok": False, "error": f"{platform} API: {str(e)[:150]}", "fallback": browser.get("error")}
+                return {**browser, "api_note": res.get("reason") or res.get("error")}
+            return {"ok": False, "platform": platform,
+                    "error": res.get("reason") or res.get("error") or "публикация не удалась",
+                    "blocked_by_api": res.get("blocked_by_api", False),
+                    "fallback_error": browser.get("error")}
 
-        # Токена нет — запасной путь через браузерного агента.
+        if mode == "api":
+            missing = connector.missing_env() if connector else []
+            return {"ok": False, "platform": platform,
+                    "error": "площадка не настроена" + (f": не заданы {', '.join(missing)}" if missing else "")}
+
+        # Токенов нет — публикуем через браузер (без API).
         return await publish_via_browser(platform, text, image_url)
+
 
 nexus_core = NexusCore()

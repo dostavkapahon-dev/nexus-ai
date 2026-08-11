@@ -90,6 +90,12 @@ export const bot = {
 
 export const social = {
   accounts: () => api.get('/social/accounts'),
+  health: () => api.get('/social/health'),
+  healthOne: (platform) => api.get(`/social/health/${platform}`),
+  refresh: (platform) => api.post(`/social/refresh/${platform}`),
+  posts: (platform, limit = 10) => api.post(`/social/${platform}/posts`, { limit }),
+  profile: (platform) => api.get(`/social/${platform}/profile`),
+  oauthStart: () => api.get('/social/oauth/start'),
 }
 
 export const desktop = {

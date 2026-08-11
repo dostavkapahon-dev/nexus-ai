@@ -25,6 +25,7 @@ from api.routes_automation import router as automation_router
 from api.routes_control import router as control_router
 from api.routes_tasks import router as tasks_router
 from api.routes_cost import router as cost_router
+from api.routes_social import router as social_router, public_router as social_public_router
 
 class ConnectionManager:
     def __init__(self):
@@ -116,6 +117,9 @@ app.include_router(automation_router, dependencies=[Depends(require_auth)])
 app.include_router(control_router,    dependencies=[Depends(require_auth)])
 app.include_router(tasks_router,      dependencies=[Depends(require_auth)])
 app.include_router(cost_router,       dependencies=[Depends(require_auth)])
+app.include_router(social_router,     dependencies=[Depends(require_auth)])
+# OAuth-callback вызывает Meta в браузере пользователя — без нашей авторизации.
+app.include_router(social_public_router)
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
 
