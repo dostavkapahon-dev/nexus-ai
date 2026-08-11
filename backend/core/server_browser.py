@@ -84,15 +84,84 @@ def mode() -> str:
     return "remote" if _cdp_endpoint() else "local"
 
 
+# Playwright принимает только эти значения sameSite; расширения браузера пишут
+# свои («no_restriction», «unspecified»), и на них context.add_cookies падает.
+_SAMESITE = {"strict": "Strict", "lax": "Lax", "none": "None",
+             "no_restriction": "None", "unspecified": "Lax"}
+
+
+def normalize_cookies(raw) -> list[dict]:
+    """Приводит cookies к формату Playwright.
+
+    Пользователь достаёт cookies расширением (Cookie-Editor, EditThisCookie), а те
+    экспортируют свой формат: `expirationDate` вместо `expires`, `sameSite:
+    "no_restriction"`, плюс поля `hostOnly`/`session`/`storeId`, которых Playwright
+    не знает и из-за которых `add_cookies` падает целиком. Разбирать эти ошибки
+    руками пользователь не должен — нормализуем здесь.
+    """
+    out = []
+    for c in (raw or []):
+        if not isinstance(c, dict):
+            continue
+        name, value = c.get("name"), c.get("value")
+        if not name or value is None:
+            continue
+        cookie = {"name": str(name), "value": str(value),
+                  "path": c.get("path") or "/",
+                  "httpOnly": bool(c.get("httpOnly", False)),
+                  "secure": bool(c.get("secure", False))}
+
+        domain = (c.get("domain") or "").strip()
+        if domain:
+            cookie["domain"] = domain
+        elif c.get("url"):
+            cookie["url"] = c["url"]
+        else:
+            continue   # без домена cookie бесполезен
+
+        expires = c.get("expires", c.get("expirationDate"))
+        if expires not in (None, "", -1):
+            try:
+                cookie["expires"] = int(float(expires))
+            except (TypeError, ValueError):
+                pass
+
+        cookie["sameSite"] = _SAMESITE.get(str(c.get("sameSite", "")).lower(), "Lax")
+        out.append(cookie)
+    return out
+
+
 def _storage_state():
-    """Возвращает dict storage_state из NEXUS_BROWSER_STORAGE_STATE (путь или JSON) или None."""
+    """Возвращает storage_state для Playwright из NEXUS_BROWSER_STORAGE_STATE.
+
+    Принимает три вида значения: путь к файлу, JSON storage_state (`{"cookies": …}`)
+    и просто массив cookies из расширения — последний вариант и есть то, что
+    реально получается у пользователя за две минуты.
+    """
     state = os.getenv("NEXUS_BROWSER_STORAGE_STATE", "").strip()
     if not state:
         return None
     try:
-        return json.loads(open(state).read()) if os.path.isfile(state) else json.loads(state)
+        data = json.loads(open(state).read()) if os.path.isfile(state) else json.loads(state)
     except Exception:
         return None
+
+    if isinstance(data, list):
+        data = {"cookies": data}
+    if not isinstance(data, dict):
+        return None
+
+    cookies = normalize_cookies(data.get("cookies"))
+    if not cookies:
+        return None
+    return {"cookies": cookies, "origins": data.get("origins") or []}
+
+
+def session_domains() -> list[str]:
+    """Домены, для которых есть cookies — по ним видно, куда мы залогинены."""
+    state = _storage_state() or {}
+    return sorted({(c.get("domain") or "").lstrip(".")
+                   for c in state.get("cookies", []) if c.get("domain")})
 
 
 def enabled() -> bool:
@@ -233,6 +302,65 @@ async def execute(cmd: dict) -> dict:
 
         except Exception as e:
             return {"req_id": req_id, "ok": False, "error": str(e)}
+
+
+def explain_error(err) -> str:
+    """Переводит технический сбой браузера в понятное действие.
+
+    «Executable doesn't exist at /opt/pw-browsers/...» ничего не говорит человеку
+    о том, что делать. А делать надо одно: доустановить Chromium при сборке.
+    """
+    text = str(err or "")
+    low = text.lower()
+    if "executable doesn't exist" in low or "playwright install" in low:
+        return ("Chromium не установлен на сервере. В Render → Settings → Build Command "
+                "добавьте строкой: python -m playwright install chromium — и пересоберите. "
+                "Либо задайте NEXUS_BROWSER_CDP (облачный браузер).")
+    if "out of memory" in low or "killed" in low:
+        return ("Браузеру не хватило памяти (Render free — 512 МБ). Используйте облачный "
+                "браузер через NEXUS_BROWSER_CDP или тариф с большей памятью.")
+    if "timeout" in low:
+        return "Страница не открылась вовремя — площадка медленно отвечает, попробуйте ещё раз."
+    return text[:200]
+
+
+# По этим признакам на странице видно, что нас разлогинило.
+_LOGIN_MARKERS = ("log in", "войти", "sign up", "зарегистрироваться",
+                  "phone number, username", "телефон, имя пользователя")
+
+
+async def check_session(platform: str = "instagram") -> dict:
+    """Проверяет, жива ли браузерная сессия площадки.
+
+    Cookies протухают молча, и без этой проверки публикация выглядит как
+    «агент что-то делал и не смог» — вместо понятного «сессия истекла,
+    обновите cookies». Проверяем по факту: открываем страницу и смотрим,
+    не показывают ли нам форму входа.
+    """
+    urls = {"instagram": "https://www.instagram.com/",
+            "tiktok": "https://www.tiktok.com/",
+            "youtube": "https://studio.youtube.com/",
+            "vk": "https://vk.com/feed"}
+    url = urls.get(platform)
+    if not url:
+        return {"ok": False, "platform": platform, "error": "нет проверки для этой площадки"}
+
+    if not enabled():
+        return {"ok": False, "platform": platform,
+                "error": "серверный браузер выключен (NEXUS_SERVER_BROWSER=0)"}
+    if not _storage_state():
+        return {"ok": False, "platform": platform, "logged_in": False,
+                "error": "cookies не заданы — вставьте их в Ключи API → Браузерная сессия"}
+
+    nav = await execute({"action": "navigate", "url": url})
+    if not nav.get("ok"):
+        return {"ok": False, "platform": platform, "error": explain_error(nav.get("error"))}
+
+    text = (await execute({"action": "page_text"})).get("text", "").lower()
+    logged_in = not any(m in text for m in _LOGIN_MARKERS)
+    return {"ok": True, "platform": platform, "logged_in": logged_in,
+            "mode": mode(), "url": nav.get("url"),
+            "hint": None if logged_in else "сессия истекла — обновите cookies"}
 
 
 async def is_available() -> bool:

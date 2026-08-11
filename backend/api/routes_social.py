@@ -83,6 +83,27 @@ def _redirect_uri() -> str:
     return f"{base}/api/social/oauth/callback" if base else ""
 
 
+@router.get("/browser/session")
+async def browser_session(platform: str = "instagram"):
+    """Жива ли браузерная сессия площадки — путь публикации без API-ключей.
+
+    Cookies протухают молча; без этой проверки отказ выглядит как «агент не смог»,
+    а не как «сессия истекла, обновите cookies».
+    """
+    from core import server_browser
+    return await server_browser.check_session(platform)
+
+
+@router.get("/browser/status")
+async def browser_status():
+    """Готовность браузерного пути: режим, наличие cookies, для каких доменов."""
+    from core import server_browser
+    domains = server_browser.session_domains()
+    return {"enabled": server_browser.enabled(), "mode": server_browser.mode(),
+            "has_cookies": bool(domains), "domains": domains,
+            "publish_mode": os.getenv("NEXUS_PUBLISH_MODE", "auto")}
+
+
 @router.get("/oauth/start")
 async def oauth_start():
     """Ссылка на подключение Instagram через Facebook.

@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **274 passed** (после BLOCK 12, режима без ИИ и проверки готовности к запуску;
+Прогон: `cd backend && python -m pytest -q` → **289 passed** (после BLOCK 12, режима без ИИ и браузерного пути публикации;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -20,6 +20,7 @@
 | Здоровье системы | 12 | `tests/test_health.py` | 9 | 🟢 PASS |
 | Работа без внешних ИИ | 02 | `tests/test_no_ai_mode.py` | 8 | 🟢 PASS |
 | Строка подключения к БД | 01 | `tests/test_db_url.py` | 11 | 🟢 PASS |
+| Браузерная сессия без API | 10 | `tests/test_browser_session.py` | 15 | 🟢 PASS |
 
 Живая проверка на поднятом сервере (2026-08-11), не только тестами:
 - Приложение стартует, `/api/health` отвечает → 🟢 PASS.

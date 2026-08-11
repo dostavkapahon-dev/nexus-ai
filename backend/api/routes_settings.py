@@ -32,6 +32,11 @@ class ConnectionsBody(BaseModel):
     facebook_app_id: Optional[str] = None
     facebook_app_secret: Optional[str] = None
     nexus_public_url: Optional[str] = None
+    # Cookies площадок для публикации через браузер без API-ключей. Принимается
+    # как экспорт расширения (массив), так и storage_state Playwright.
+    nexus_browser_storage_state: Optional[str] = None
+    nexus_publish_mode: Optional[str] = None
+    nexus_browser_cdp: Optional[str] = None
     tiktok_access_token: Optional[str] = None
     brightdata_api_key: Optional[str] = None
     ig_handle: Optional[str] = None

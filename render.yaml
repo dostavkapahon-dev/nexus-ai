@@ -8,7 +8,14 @@ services:
     # Лёгкая сборка: локальный Chromium НЕ ставим — браузер удалённый (CDP),
     # чтобы не грузить инстанс 512 МБ. Playwright из requirements нужен только
     # для сетевого подключения к облачному браузеру.
-    buildCommand: pip install -r requirements.txt
+    # Chromium ставим, иначе браузерный путь публикации (без API-ключей) не работает
+    # вообще: Playwright падает с «Executable doesn't exist». Ставим только сам
+    # браузер, без --with-deps: системные пакеты на Render уже есть, а --with-deps
+    # требует root и ломает сборку. Если браузерный путь не нужен и важна скорость
+    # сборки — уберите вторую строку, остальное продолжит работать.
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m playwright install chromium
     # Перед стартом накатываем миграции: схема БД всегда актуальна.
     startCommand: alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
@@ -89,6 +96,7 @@ services:
       # Эндпоинт облачного браузера (Bright Data Scraping Browser: wss://...@...:9222)
       - key: NEXUS_BROWSER_CDP
         sync: false
-      # Опц.: cookies для входа в аккаунты (storage_state JSON или путь)
+      # Cookies для входа в аккаунты. Обычно задаются НЕ здесь, а в дашборде:
+      # Ключи API → Браузерная сессия (принимается экспорт расширения как есть).
       - key: NEXUS_BROWSER_STORAGE_STATE
         sync: false

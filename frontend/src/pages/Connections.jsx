@@ -147,6 +147,26 @@ const PROVIDERS = [
     models: [],
   },
   {
+    id: 'browser_session', name: 'Браузерная сессия (без ключей API)', icon: '🍪',
+    color: 'from-amber-500 to-orange-500',
+    description: 'Публикация через обычный веб-интерфейс площадки, когда приложение Meta ' +
+                 'создать не получается. Работает на сервере — компьютер держать включённым не нужно.',
+    fields: [
+      { key: 'nexus_browser_storage_state', label: 'Cookies площадки (вставьте как есть)', placeholder: '[{"domain":".instagram.com","name":"sessionid",...}]', secret: true },
+      { key: 'nexus_publish_mode', label: 'Режим публикации: auto / browser / api', placeholder: 'browser', secret: false },
+    ],
+    steps: [
+      { text: 'Войдите в Instagram в обычном браузере на своём компьютере' },
+      { text: 'Поставьте расширение', link: 'https://cookie-editor.com', linkText: 'Cookie-Editor' },
+      { text: 'На вкладке с Instagram: расширение → Export → Export as JSON (скопируется в буфер)' },
+      { text: 'Вставьте скопированное в поле выше и сохраните — формат приводится автоматически' },
+      { text: 'Режим публикации поставьте browser, если ключей Meta нет совсем' },
+      { text: 'Проверка: страница «Площадки» → «Проверить сессию». Cookies живут неделями, ' +
+              'при истечении система скажет об этом прямо, а не «не смог опубликовать»' },
+    ],
+    models: [],
+  },
+  {
     id: 'instagram', name: 'Instagram Business', icon: '📸', color: 'from-pink-500 to-purple-500',
     description: 'Прямая бесплатная публикация в Instagram через официальный Graph API (нужно своё Meta-приложение)',
     fields: [

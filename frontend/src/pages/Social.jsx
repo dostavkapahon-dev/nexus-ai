@@ -12,10 +12,13 @@ export default function Social() {
   const [loading, setLoading] = useState(false)
   const [busy, setBusy] = useState('')
   const [oauth, setOauth] = useState(null)
+  const [browser, setBrowser] = useState(null)
+  const [session, setSession] = useState(null)
 
   const load = async () => {
     setLoading(true)
     try { setData((await social.health()).data) } catch {}
+    try { setBrowser((await social.browserStatus()).data) } catch {}
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -37,6 +40,13 @@ export default function Social() {
       if (r.data?.ok && r.data.url) window.location.href = r.data.url
       else setOauth(r.data?.error || 'Не удалось получить ссылку')
     } catch (e) { setOauth(e.message) }
+  }
+
+  const checkSession = async () => {
+    setBusy('session'); setSession(null)
+    try { setSession((await social.browserSession('instagram')).data) }
+    catch (e) { setSession({ ok: false, error: e.message }) }
+    setBusy('')
   }
 
   const items = data?.platforms || []
@@ -78,6 +88,33 @@ export default function Social() {
           <button onClick={connectInstagram} className="btn-primary text-sm">Подключить</button>
         </div>
         {oauth && <div className="mt-2 text-xs text-amber-400">{oauth}</div>}
+      </div>
+
+      {/* Путь без ключей Meta: публикация через веб-интерфейс на сервере. */}
+      <div className="card p-4 mb-4 border border-amber-500/25">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <div className="text-sm font-medium text-[#e8e8f5] flex items-center gap-2">
+              🍪 Публикация без ключей API (браузер на сервере)
+            </div>
+            <div className="text-[11px] text-[#5a5a7a] mt-1">
+              {browser?.has_cookies
+                ? `Cookies загружены: ${browser.domains.join(', ')} · режим ${browser.mode} · публикация ${browser.publish_mode}`
+                : 'Cookies не заданы. Ключи API → «Браузерная сессия» — вставьте экспорт из расширения.'}
+            </div>
+          </div>
+          <button onClick={checkSession} disabled={busy === 'session'}
+            className="text-sm px-3 py-1.5 rounded-lg bg-[#0d0d1a] border border-[#1c1c30] text-[#c0c0e0]">
+            {busy === 'session' ? 'Проверяю…' : 'Проверить сессию'}
+          </button>
+        </div>
+        {session && (
+          <div className={`mt-2 text-xs ${session.logged_in ? 'text-green-400' : 'text-amber-400'}`}>
+            {session.logged_in
+              ? 'Сессия жива — публиковать можно без токенов Meta.'
+              : `Не залогинены: ${session.hint || session.error || 'проверьте cookies'}`}
+          </div>
+        )}
       </div>
 
       <div className="space-y-2">
