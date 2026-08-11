@@ -111,6 +111,13 @@ export const tasks = {
   cancel: (id) => api.post(`/tasks/${id}/cancel`),
 }
 
+export const performance = {
+  overview: (days = 30) => api.get('/performance', { params: { days } }),
+  top: (days = 30, limit = 10, worst = false) => api.get('/performance/top', { params: { days, limit, worst } }),
+  collect: () => api.post('/performance/collect'),
+  learn: (days = 30) => api.post('/performance/learn', null, { params: { days } }),
+}
+
 export const cost = {
   get: (hours = 24) => api.get('/cost', { params: { hours } }),
   setBudget: (budget_usd_day) => api.post('/cost/budget', { budget_usd_day }),

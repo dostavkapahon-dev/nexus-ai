@@ -48,13 +48,34 @@ class GeneratedContent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Publication(Base):
+    """Факт публикации + её реальные метрики.
+
+    Раньше хранился только факт («опубликовано»), поэтому сравнить «до/после» и
+    учиться на результатах было невозможно. Теперь метрики собираются джобом и
+    ложатся сюда — на них опирается память агента и стратегия.
+    """
     __tablename__ = 'publications'
     id = Column(String, primary_key=True, default=gen_id)
-    plan_id = Column(String)
+    plan_id = Column(String, index=True)
+    niche_id = Column(String, index=True)
     platform = Column(String)
-    published_at = Column(DateTime, default=datetime.utcnow)
+    published_at = Column(DateTime, default=datetime.utcnow, index=True)
     status = Column(String, default='published')
     external_id = Column(String)
+    post_url = Column(String)
+    # Реальные метрики площадки
+    views = Column(Integer, default=0)
+    likes = Column(Integer, default=0)
+    comments = Column(Integer, default=0)
+    saves = Column(Integer, default=0)
+    shares = Column(Integer, default=0)
+    reach = Column(Integer, default=0)
+    engagement_rate = Column(Float, default=0.0)     # (лайки+комменты+сохр.)/охват, %
+    metrics_updated_at = Column(DateTime)
+    # Что именно опубликовали — чтобы связать результат с приёмом
+    topic = Column(String)
+    hook = Column(Text)
+    content_format = Column(String)
 
 class AgentLog(Base):
     __tablename__ = 'agent_logs'

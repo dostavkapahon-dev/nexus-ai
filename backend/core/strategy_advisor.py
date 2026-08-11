@@ -71,6 +71,21 @@ async def build_options(db) -> dict:
     except Exception:
         pass
 
+    # Реальные результаты собственных публикаций — самый honest источник для стратегии.
+    try:
+        from core.post_analytics import performance, top_posts
+        perf = await performance(30)
+        if perf.get("posts"):
+            best = await top_posts(30, limit=5)
+            account += ("\n\nФАКТИЧЕСКИЕ РЕЗУЛЬТАТЫ ЗА 30 ДНЕЙ: "
+                        f"{perf['posts']} публикаций, {perf['views']} просмотров, "
+                        f"средний ER {perf['avg_engagement_rate']}%.")
+            if best:
+                account += "\nЛучшее: " + "; ".join(
+                    f"«{p['topic'] or '—'}» (ER {p['engagement_rate']}%)" for p in best[:3])
+    except Exception:
+        pass
+
     prompt = TEMPLATE.format(
         niche=(niche.name if niche else "—"),
         product=(prof.product_description if prof else "—") or "—",

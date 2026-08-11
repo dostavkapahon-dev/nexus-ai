@@ -111,7 +111,12 @@ async def run_daily_publish():
                     try:
                         res = await nexus_core._publish_one(platform, text, image_url or "")
                         status = "published" if res.get("ok") else "failed"
-                        db.add(Publication(plan_id=plan.id, platform=platform, status=status))
+                        db.add(Publication(
+                            plan_id=plan.id, niche_id=plan.niche_id, platform=platform,
+                            status=status, external_id=str(res.get("post_id") or ""),
+                            post_url=str(res.get("post_url") or ""),
+                            topic=(plan.topic or "")[:300], hook=plan.hook or "",
+                            content_format=plan.format or ""))
                         if not res.get("ok") and chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(res.get('error'))[:80]}")
                     except Exception as e:
@@ -174,6 +179,29 @@ async def run_weekly_analytics():
         except Exception as e:
             report = f"⚠️ Ошибка еженедельной аналитики: {str(e)[:120]}"
     await send_message(chat_id, "📊 <b>Еженедельный отчёт Pakhon Studio</b>\n\n" + report)
+
+
+async def run_metrics_collection():
+    """Собирает метрики опубликованного и учит на них агента.
+
+    Без этого шага система публикует «вслепую»: нет обратной связи о том,
+    что реально сработало.
+    """
+    from core.post_analytics import collect_metrics, learn_from_results
+    res = await collect_metrics()
+    learned = await learn_from_results()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
+        from core.telegram_bot import send_message
+        from core.post_analytics import performance
+        perf = await performance(7)
+        await send_message(chat_id,
+            f"📊 <b>Метрики обновлены</b>\n"
+            f"Обновлено публикаций: {res['updated']}\n"
+            f"За 7 дней: {perf['posts']} постов, {perf['views']} просмотров, "
+            f"средний ER {perf['avg_engagement_rate']}%\n"
+            + (f"Уроков извлечено: {learned.get('learned', 0)}" if learned.get("ok") else ""))
+    return {**res, "learned": learned}
 
 
 async def run_token_maintenance():
@@ -243,6 +271,9 @@ def start_scheduler():
     _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
                        CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
+    # 23:00 — сбор реальных метрик опубликованного и обучение на результатах
+    _scheduler.add_job(_tracked("metrics", "Сбор метрик публикаций", run_metrics_collection),
+                       CronTrigger(hour=23, minute=0), id="metrics", replace_existing=True)
     # 08:00 — проверка и продление токенов площадок (до утренних публикаций)
     _scheduler.add_job(_tracked("tokens", "Проверка токенов площадок", run_token_maintenance),
                        CronTrigger(hour=8, minute=0), id="tokens", replace_existing=True)

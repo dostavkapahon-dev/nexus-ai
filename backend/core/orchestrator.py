@@ -261,7 +261,14 @@ class NexusCore:
                     res = {"ok": False, "error": str(e)}
                 report[platform] = res
                 status = "published" if res.get("ok") else "failed"
-                db.add(Publication(plan_id=plan_id, platform=platform, status=status))
+                # Сохраняем не только факт, но и ЧТО опубликовали: тему, хук и формат.
+                # Без этого позже невозможно связать результат с приёмом.
+                db.add(Publication(
+                    plan_id=plan_id, niche_id=plan.niche_id, platform=platform, status=status,
+                    external_id=str(res.get("post_id") or ""),
+                    post_url=str(res.get("post_url") or ""),
+                    topic=(plan.topic or "")[:300], hook=plan.hook or "",
+                    content_format=plan.format or ""))
                 await broadcast(plan.niche_id, {"event": "publish_result", "platform": platform, "result": res})
 
             plan.status = "published" if any(r.get("ok") for r in report.values()) else "generated"

@@ -50,10 +50,14 @@
 - [ ] Webhooks (комментарии/упоминания) — нужен публичный HTTPS и верификация
 - [ ] Видео-постинг TikTok
 
-## BLOCK 04 — СОХРАНЕНИЕ АНАЛИТИКИ
-- [ ] Расширить `Publication`: просмотры, лайки, комментарии, сохранения, ER, ссылка на пост
-- [ ] Периодический сбор метрик опубликованного (джоб)
-- [ ] Обучение памяти агента на реальных результатах (`skills_store.learn_from`)
+## BLOCK 04 — SOCIAL ANALYTICS ✅ ВЫПОЛНЕН
+- [x] `Publication` расширена метриками (просмотры, лайки, комменты, сохранения, репосты,
+      охват, ER, ссылка) + тема/хук/формат — чтобы связать результат с приёмом (миграция)
+- [x] `core/post_analytics.py`: collect_metrics / performance / top_posts / learn_from_results
+- [x] Джоб `metrics` в 23:00 — сбор метрик + обучение + сводка в Telegram
+- [x] Реальные результаты подмешиваются в `strategy_advisor` — стратегия строится на фактах
+- [x] API `/api/performance/*` + страница «Результаты» в дашборде
+- [x] 10 тестов (`tests/test_post_analytics.py`), всего 178 passed
 
 ## BLOCK 12 — HEALTH DASHBOARD
 - [ ] API-агрегат по агентам (ONLINE/last run/success rate/cost) из `AgentLog`
