@@ -132,14 +132,18 @@ async def run_factory_endpoint(body: FactoryBody):
     dry_run=True (по умолчанию) — всё генерируем, но не публикуем.
     """
     from core.content_factory import run_factory
-    try:
-        result = await run_factory(
-            topic=body.topic, platforms=body.platforms,
-            dry_run=body.dry_run if body.dry_run is not None else True,
-            want_video=body.want_video if body.want_video is not None else True,
-        )
-        # ok приходит из отчёта конвейера: раньше здесь стояло True, и провал
-        # генерации выглядел как успех.
-        return {"ok": result.get("ok", True), **result}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+    from core.task_manager import create, run
+    # Запуск из дашборда получает такой же id и журнал шагов, как ночной джоб:
+    # иначе по упавшему ручному запуску не остаётся вообще никаких следов.
+    task_id = await create("factory", body.topic or "Фабрика контента", source="dashboard")
+    res = await run(task_id, lambda: run_factory(
+        topic=body.topic, platforms=body.platforms,
+        dry_run=body.dry_run if body.dry_run is not None else True,
+        want_video=body.want_video if body.want_video is not None else True,
+    ))
+    if not res["ok"]:
+        return {"ok": False, "task_id": task_id, "error": res["error"]}
+    result = res["result"]
+    # ok приходит из отчёта конвейера: раньше здесь стояло True, и провал
+    # генерации выглядел как успех.
+    return {"ok": result.get("ok", True), "task_id": task_id, **result}

@@ -165,7 +165,8 @@ async def run_daily_factory():
     from core.content_factory import run_factory
     auto = os.getenv("AUTO_PUBLISH", "0") == "1"
     try:
-        await run_factory(topic=None, dry_run=not auto)
+        # Отчёт возвращаем наверх: по нему задача узнаёт, что упёрлась в согласование.
+        return await run_factory(topic=None, dry_run=not auto)
     except Exception as e:
         chat = os.getenv("TELEGRAM_CHAT_ID", "")
         if chat:

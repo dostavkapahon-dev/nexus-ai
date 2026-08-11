@@ -112,6 +112,30 @@ async def _analyze(topic: str | None) -> dict:
                 "tiktok": {"caption": raw[:150]}, "telegram": {"post": raw[:500]}}
 
 
+async def _flush_steps(report: dict) -> None:
+    """Переносит новые шаги конвейера в журнал текущей задачи.
+
+    Раньше `report["steps"]` жил только в ответе и пропадал вместе с ним: по упавшей
+    фабрике нельзя было понять, на каком шаге она сломалась. Переписывать 12 мест
+    вызова рискованно, поэтому журналируем пачкой — шаги, добавленные с прошлого раза.
+    Никогда не роняет конвейер: журнал не должен ломать основную работу.
+    """
+    try:
+        from core.cost_tracker import current_task_id
+        task_id = current_task_id.get()
+        if not task_id:
+            return
+        from core.task_manager import add_step
+        sent = int(report.get("_journaled") or 0)
+        steps = report.get("steps") or []
+        for s in steps[sent:]:
+            await add_step(task_id, agent="factory", action=s.get("step", "step"),
+                           ok=bool(s.get("ok")), error=str(s.get("error") or "")[:300])
+        report["_journaled"] = len(steps)
+    except Exception:
+        pass
+
+
 async def run_factory(topic: str | None = None, platforms: list | None = None,
                       dry_run: bool = True, want_video: bool = True,
                       content_type: str = "auto") -> dict:
@@ -181,6 +205,8 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     report["steps"].append({"step": "strategy", "ok": True,
                             "choice": strategy["strategy"], "est_cost": strategy["est_cost"]})
 
+    await _flush_steps(report)   # анализ/бриф/стратегия — до дорогой генерации
+
     from core.media_generator import generate_image, generate_clip
 
     # 3a. Обложка
@@ -205,6 +231,8 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     # Нет раскадровки → нет кадров: это не «успешный» шаг, а следствие сбоя брифа.
     report["steps"].append({"step": "storyboard_frames", "ok": bool(frames),
                             "count": len(frames)})
+
+    await _flush_steps(report)   # обложка и кадры
 
     # 3c. Видео по выбранной стратегии
     if want_video:
@@ -260,6 +288,8 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         plan["hook_text"] = wow["new_hook"]
     report["steps"].append({"step": "wow_review", "ok": True, "score": wow.get("score")})
 
+    await _flush_steps(report)   # видео, монтаж, вау-ревью
+
     # 5. Публикация — через согласование в Telegram (сначала превью, потом аппрув).
     if not dry_run:
         vid_url = vid.get("url") if isinstance(vid, dict) else None
@@ -270,8 +300,13 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             pid = await send_for_approval(caption, media_url=media, platforms=platforms, kind="factory")
             report["published"] = {"status": "awaiting_approval", "pid": pid,
                                    "note": "ролик отправлен в Telegram на согласование"}
+            # Точка согласования — это не «шаг провалился», а ожидание человека.
+            report["steps"].append({"step": "approval_requested", "ok": True, "pid": pid})
+            report["awaiting_approval"] = True
         except Exception as e:
             report["published"] = {"status": "error", "error": str(e)[:160]}
+            report["steps"].append({"step": "approval_requested", "ok": False,
+                                    "error": str(e)[:160]})
     else:
         report["published"] = {pf: {"ok": None, "note": "dry-run"} for pf in platforms}
 
@@ -284,6 +319,9 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         report["hint"] = ("Не прошли шаги: " + ", ".join(failed) +
                           ". Обычно причина — нет ключа ИИ: добавьте GEMINI_API_KEY "
                           "(бесплатно) или ANTHROPIC_API_KEY в Подключениях.")
+
+    await _flush_steps(report)   # публикация/согласование — последний кусок журнала
+    report.pop("_journaled", None)   # служебный счётчик наружу не отдаём
 
     # 6. Отчёт в Telegram
     await _send_report(report, platforms)

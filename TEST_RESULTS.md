@@ -1,6 +1,7 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **137 passed** (аудит от 2026-08-11).
+Прогон: `cd backend && python -m pytest -q` → **228 passed** (после BLOCK 09;
+на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
 

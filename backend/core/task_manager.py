@@ -129,7 +129,11 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
         try:
             result = await coro_factory()
             finished = datetime.utcnow()
-            await _patch(task_id, status=COMPLETED, finished_at=finished,
+            # Работа, упёршаяся в согласование человеком, ещё не завершена: помечать
+            # её COMPLETED — значит врать, что контент опубликован.
+            final = (WAITING if isinstance(result, dict) and result.get("awaiting_approval")
+                     else COMPLETED)
+            await _patch(task_id, status=final, finished_at=finished,
                          duration_sec=round((finished - started).total_seconds(), 2),
                          result=_safe_result(result), error=None)
             current_task_id.reset(token)
