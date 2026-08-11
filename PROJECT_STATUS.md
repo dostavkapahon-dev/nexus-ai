@@ -37,7 +37,7 @@ API-ключи выживают только потому, что продубл
 | 05 | Market / Competitor Research | 🟢 | **BLOCK 05 выполнен:** история исследований в БД, отслеживание конкурентов с динамикой, сводка рынка для агентов |
 | 06 | Content Strategy | 🟢 | **BLOCK 06 выполнен:** версии стратегий в БД, привязка публикаций, сравнение по фактическому ER |
 | 07 | Content Generation | 🟢 | Copywriter / adapter / creative_director, ротация хуков |
-| 08 | Image / Video Generation | 🟢 | Pollinations (беспл.), Imagen / DALL·E / Stability, HeyGen / HiggsField / Runway |
+| 08 | Image / Video Generation | 🟢 | **BLOCK 08 выполнен:** генерации в общей кассе, разбивка текст/медиа, причины отказа провайдеров сохраняются |
 | 09 | Content Pipeline | 🟢 | `run_factory` со сквозным отчётом по шагам |
 | 10 | Publishing Engine | 🟡 | Публикация + браузер-фолбэк; нет retry, очереди, персистентных статусов |
 | 11 | Telegram Control Center | 🟢 | ~30 команд, inline-кнопки, голос/медиа, модерация approve/fix/reject |

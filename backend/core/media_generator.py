@@ -1,12 +1,43 @@
 """
 Unified media generation: images and video.
 Providers: DALL-E 3, Stability AI, Pollinations (free), Runway ML, ElevenLabs (audio).
+
+Генерация медиа — самая дорогая часть системы (видео стоит в разы больше текста),
+но раньше она проходила мимо учёта: в кассу попадали только текстовые вызовы.
+Теперь каждая генерация записывается с ценой и причиной отказа.
 """
 import os
+import time
 import httpx
 import asyncio
 import base64
 from urllib.parse import quote
+
+# Ориентировочная цена одной генерации, $. Точные тарифы у провайдеров плавают,
+# поэтому это оценка для контроля бюджета, а не бухгалтерия.
+MEDIA_COST = {
+    "pollinations": 0.0,      # бесплатно и без лимитов
+    "imagen": 0.03,
+    "dalle3": 0.04,
+    "stability": 0.01,
+    "heygen": 0.30,           # видео с аватаром — самое дорогое
+    "higgsfield": 0.20,
+    "runway": 0.25,
+    "elevenlabs": 0.02,
+}
+
+
+async def _track_media(provider: str, kind: str, ok: bool,
+                       duration: float = 0.0, error: str = ""):
+    """Записывает генерацию в общую кассу — ту же, что считает текстовые вызовы."""
+    try:
+        from core.cost_tracker import record
+        await record(model=f"{provider}:{kind}", tokens=0,
+                     cost=MEDIA_COST.get(provider, 0.0) if ok else 0.0,
+                     status="success" if ok else "error",
+                     duration=duration, error=error, agent="media")
+    except Exception:
+        pass
 
 async def generate_image(prompt: str, provider: str = "auto", platform: str = "telegram") -> str:
     """Returns image URL. Provider: auto/imagen/dalle3/stability/pollinations.
@@ -15,23 +46,32 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
     """
     size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
 
+    # Порядок: платные по наличию ключа → бесплатный Pollinations как гарантия.
+    chain = []
     if provider == "imagen" or (provider == "auto" and os.getenv("GEMINI_API_KEY")):
-        url = await _gemini_imagen(prompt, size)
-        if url:
-            return url
-
+        chain.append(("imagen", lambda: _gemini_imagen(prompt, size)))
     if provider == "dalle3" or (provider == "auto" and os.getenv("OPENAI_API_KEY")):
-        url = await _dalle3(prompt, size)
-        if url:
-            return url
-
+        chain.append(("dalle3", lambda: _dalle3(prompt, size)))
     if provider == "stability" or (provider == "auto" and os.getenv("STABILITY_API_KEY")):
-        url = await _stability(prompt, size)
-        if url:
-            return url
+        chain.append(("stability", lambda: _stability(prompt, size)))
 
-    # Always works, free fallback
-    return _pollinations(prompt, size)
+    for name, call in chain:
+        t0 = time.time()
+        try:
+            url = await call()
+        except Exception as e:
+            await _track_media(name, "image", False, time.time() - t0, str(e)[:200])
+            continue
+        if url:
+            await _track_media(name, "image", True, time.time() - t0)
+            return url
+        # Провайдер вернул пусто — платить не за что, но знать об этом полезно.
+        await _track_media(name, "image", False, time.time() - t0, "пустой ответ провайдера")
+
+    # Бесплатный путь работает всегда — картинка будет в любом случае.
+    url = _pollinations(prompt, size)
+    await _track_media("pollinations", "image", True)
+    return url
 
 async def _gemini_imagen(prompt: str, size: str) -> str | None:
     """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""
@@ -182,28 +222,58 @@ async def generate_clip(prompt: str, script: str = "", image_url: str = None,
         [provider] if provider != "auto"
         else ["heygen", "higgsfield", "runway"]
     )
+    # Раньше причина отказа каждого провайдера терялась, и наверх уходило общее
+    # «нет провайдера» — чинить по такому сообщению было невозможно.
+    attempts = {}
     for p in order:
-        if p == "heygen" and os.getenv("HEYGEN_API_KEY"):
-            from core.heygen import create_avatar_video, poll_avatar_video
-            started = await create_avatar_video(script or prompt, ratio=ratio)
-            if started.get("ok"):
-                done = await poll_avatar_video(started["video_id"])
-                if done.get("ok"):
-                    return {"ok": True, "url": done["url"], "provider": "heygen"}
-        elif p == "higgsfield" and os.getenv("HIGGSFIELD_API_KEY"):
-            from core.higgsfield import create_video, poll_video as hf_poll
-            started = await create_video(prompt, image_url=image_url, ratio=ratio, model=model)
-            if started.get("ok"):
-                done = await hf_poll(started["job_id"])
-                if done.get("ok"):
-                    return {"ok": True, "url": done["url"], "provider": "higgsfield"}
-        elif p == "runway" and os.getenv("RUNWAY_API_KEY"):
-            task_id = await generate_video(prompt, image_url)
-            if task_id:
-                for _ in range(30):
-                    await asyncio.sleep(10)
-                    url = await poll_video(task_id)
-                    if url:
-                        return {"ok": True, "url": url, "provider": "runway"}
+        t0 = time.time()
+        try:
+            if p == "heygen" and os.getenv("HEYGEN_API_KEY"):
+                from core.heygen import create_avatar_video, poll_avatar_video
+                started = await create_avatar_video(script or prompt, ratio=ratio)
+                if not started.get("ok"):
+                    attempts[p] = str(started.get("error", "не удалось запустить"))[:200]
+                else:
+                    done = await poll_avatar_video(started["video_id"])
+                    if done.get("ok"):
+                        await _track_media(p, "video", True, time.time() - t0)
+                        return {"ok": True, "url": done["url"], "provider": "heygen"}
+                    attempts[p] = str(done.get("error", "видео не готово"))[:200]
+            elif p == "higgsfield" and os.getenv("HIGGSFIELD_API_KEY"):
+                from core.higgsfield import create_video, poll_video as hf_poll
+                started = await create_video(prompt, image_url=image_url, ratio=ratio, model=model)
+                if not started.get("ok"):
+                    attempts[p] = str(started.get("error", "не удалось запустить"))[:200]
+                else:
+                    done = await hf_poll(started["job_id"])
+                    if done.get("ok"):
+                        await _track_media(p, "video", True, time.time() - t0)
+                        return {"ok": True, "url": done["url"], "provider": "higgsfield"}
+                    attempts[p] = str(done.get("error", "видео не готово"))[:200]
+            elif p == "runway" and os.getenv("RUNWAY_API_KEY"):
+                task_id = await generate_video(prompt, image_url)
+                if not task_id:
+                    attempts[p] = "не удалось создать задачу"
+                else:
+                    for _ in range(30):
+                        await asyncio.sleep(10)
+                        url = await poll_video(task_id)
+                        if url:
+                            await _track_media(p, "video", True, time.time() - t0)
+                            return {"ok": True, "url": url, "provider": "runway"}
+                    attempts[p] = "истекло время ожидания рендера"
+            else:
+                attempts[p] = "нет ключа провайдера"
+                continue
+        except Exception as e:
+            attempts[p] = f"{type(e).__name__}: {str(e)[:150]}"
+        await _track_media(p, "video", False, time.time() - t0, attempts.get(p, ""))
+    # Показываем, что именно случилось у каждого провайдера: без этого
+    # сообщение «нет провайдера» одинаково для отсутствия ключа и для сбоя рендера.
+    if attempts and any(v != "нет ключа провайдера" for v in attempts.values()):
+        detail = "; ".join(f"{p}: {err}" for p, err in attempts.items())
+        return {"ok": False, "error": f"Видео не сгенерировано. {detail}",
+                "provider": None, "attempts": attempts}
     return {"ok": False, "error": "Нет доступного видео-провайдера (HeyGen/HiggsField/Runway). "
-                                   "Добавьте ключ в Подключениях.", "provider": None}
+                                   "Добавьте ключ в Подключениях.",
+            "provider": None, "attempts": attempts}

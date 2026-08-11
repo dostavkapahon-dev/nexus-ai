@@ -11,12 +11,13 @@ router = APIRouter(prefix="/api/cost", tags=["cost"])
 @router.get("")
 async def cost_overview(hours: int = 24):
     """Сводка: расход за период, бюджет, разбивка по моделям и агентам."""
-    from core.cost_tracker import budget_status, spend, by_model, by_agent
+    from core.cost_tracker import budget_status, spend, by_model, by_agent, by_kind
     return {
         "budget": await budget_status(),
         "period": await spend(hours),
         "by_model": await by_model(hours),
         "by_agent": await by_agent(hours),
+        "by_kind": await by_kind(hours),
     }
 
 

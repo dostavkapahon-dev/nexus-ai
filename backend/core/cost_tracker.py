@@ -130,6 +130,30 @@ async def by_agent(hours: int = 24, limit: int = 10) -> list[dict]:
             for a, c, n in rows]
 
 
+async def by_kind(hours: int = 24) -> dict:
+    """Разделяет расход на текст и медиа: видео стоит в разы больше текста,
+    и смешивать их в одной цифре — значит не понимать, куда уходит бюджет."""
+    since = datetime.utcnow() - timedelta(hours=hours)
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(
+            select(AgentLog.agent_name,
+                   func.coalesce(func.sum(AgentLog.cost_usd), 0.0),
+                   func.count(AgentLog.id))
+            .where(AgentLog.created_at >= since)
+            .group_by(AgentLog.agent_name))
+        rows = r.all()
+
+    media_cost, media_calls = 0.0, 0
+    text_cost, text_calls = 0.0, 0
+    for agent, cost, n in rows:
+        if agent == "media":
+            media_cost += float(cost or 0); media_calls += int(n or 0)
+        else:
+            text_cost += float(cost or 0); text_calls += int(n or 0)
+    return {"media": {"cost_usd": round(media_cost, 6), "calls": media_calls},
+            "text": {"cost_usd": round(text_cost, 6), "calls": text_calls}}
+
+
 _alerted_at = {"day": "", "level": 0}
 
 
