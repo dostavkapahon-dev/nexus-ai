@@ -111,6 +111,14 @@ export const tasks = {
   cancel: (id) => api.post(`/tasks/${id}/cancel`),
 }
 
+export const strategy = {
+  list: (niche_id = '') => api.get('/strategy', { params: { niche_id } }),
+  current: (niche_id = '') => api.get('/strategy/current', { params: { niche_id } }),
+  effectiveness: (niche_id = '') => api.get('/strategy/effectiveness', { params: { niche_id } }),
+  activate: (id) => api.post(`/strategy/${id}/activate`),
+  manual: (data) => api.post('/strategy/manual', data),
+}
+
 export const research = {
   history: (kind = '', limit = 20) => api.get('/research', { params: { kind, limit } }),
   stats: () => api.get('/research/stats'),

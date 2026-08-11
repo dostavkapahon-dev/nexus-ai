@@ -252,6 +252,15 @@ class NexusCore:
             versions = content.platform_versions or {}
             platforms = niche.platforms or ["telegram"]
 
+            # Под какой стратегией выходят посты — чтобы потом сравнить результат.
+            strategy_id = ""
+            try:
+                from core.strategy_store import current as current_strategy
+                cur = await current_strategy(plan.niche_id)
+                strategy_id = cur["id"] if cur else ""
+            except Exception:
+                pass
+
             report = {}
             for platform in platforms:
                 text = versions.get(platform) or base_text
@@ -268,7 +277,7 @@ class NexusCore:
                     external_id=str(res.get("post_id") or ""),
                     post_url=str(res.get("post_url") or ""),
                     topic=(plan.topic or "")[:300], hook=plan.hook or "",
-                    content_format=plan.format or ""))
+                    content_format=plan.format or "", strategy_id=strategy_id))
                 await broadcast(plan.niche_id, {"event": "publish_result", "platform": platform, "result": res})
 
             plan.status = "published" if any(r.get("ok") for r in report.values()) else "generated"

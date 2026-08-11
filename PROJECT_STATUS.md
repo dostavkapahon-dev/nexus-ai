@@ -35,7 +35,7 @@ API-ключи выживают только потому, что продубл
 | 03 | Social Connectors | 🟢 | **BLOCK 03 выполнен:** `SocialConnector` + 6 коннекторов, OAuth Instagram, продление токенов, rate-limit, health |
 | 04 | Social Analytics | 🟢 | **BLOCK 04 выполнен:** метрики публикаций в БД, джоб сбора в 23:00, обучение памяти агента на реальных результатах |
 | 05 | Market / Competitor Research | 🟢 | **BLOCK 05 выполнен:** история исследований в БД, отслеживание конкурентов с динамикой, сводка рынка для агентов |
-| 06 | Content Strategy | 🟢 | `strategy_advisor` + `autopilot` (3 варианта, план на 7 дней) |
+| 06 | Content Strategy | 🟢 | **BLOCK 06 выполнен:** версии стратегий в БД, привязка публикаций, сравнение по фактическому ER |
 | 07 | Content Generation | 🟢 | Copywriter / adapter / creative_director, ротация хуков |
 | 08 | Image / Video Generation | 🟢 | Pollinations (беспл.), Imagen / DALL·E / Stability, HeyGen / HiggsField / Runway |
 | 09 | Content Pipeline | 🟢 | `run_factory` со сквозным отчётом по шагам |

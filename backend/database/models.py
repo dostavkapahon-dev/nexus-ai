@@ -76,6 +76,8 @@ class Publication(Base):
     topic = Column(String)
     hook = Column(Text)
     content_format = Column(String)
+    # Под какой стратегией вышел пост — без этого нельзя сравнить их результативность
+    strategy_id = Column(String, index=True)
 
 class AgentLog(Base):
     __tablename__ = 'agent_logs'
@@ -193,3 +195,26 @@ class Competitor(Base):
     top_posts = Column(JSON)                      # что у них зашло
     checked_at = Column(DateTime, default=datetime.utcnow, index=True)
     active = Column(Boolean, default=True)        # следим ли за ним сейчас
+
+
+class Strategy(Base):
+    """Версия контент-стратегии с привязкой к нише и периодом действия.
+
+    Раньше стратегия лежала в KV-ключах `last_strategy_options` / `chosen_strategy`:
+    при выборе новой прошлая терялась, и нельзя было сравнить, какая работала лучше.
+    Теперь у стратегий есть версии, период действия и измеримый результат.
+    """
+    __tablename__ = 'strategies'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche_id = Column(String, index=True)
+    version = Column(Integer, default=1)
+    title = Column(String)
+    angle = Column(Text)                 # угол подачи
+    why = Column(Text)                   # почему сработает
+    plan = Column(Text)                  # план на неделю
+    pillars = Column(JSON)               # рубрики/контент-пиллары
+    status = Column(String, default='draft', index=True)   # draft | active | archived
+    source = Column(String, default='auto')                # auto | manual
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    activated_at = Column(DateTime)
+    archived_at = Column(DateTime)

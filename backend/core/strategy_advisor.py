@@ -111,6 +111,14 @@ async def build_options(db) -> dict:
 
     data.setdefault("options", [])
     await _save_conn(db, CONN_OPTIONS, json.dumps(data, ensure_ascii=False))
+
+    # Версионируем варианты в БД: KV хранит только последний набор и перезатирается.
+    try:
+        from core.strategy_store import save_options
+        niche_id = niche.id if niche else ""
+        data["strategy_ids"] = await save_options(data["options"], niche_id)
+    except Exception:
+        pass
     return data
 
 
@@ -125,6 +133,18 @@ async def choose_option(db, index: int) -> dict | None:
         return None
     chosen = options[index]
     await _save_conn(db, CONN_CHOSEN, json.dumps(chosen, ensure_ascii=False))
+
+    # Отмечаем выбранную версию активной — с этого момента её результат измеряется.
+    try:
+        ids = data.get("strategy_ids") or []
+        if index < len(ids):
+            from core.strategy_store import activate
+            activated = await activate(ids[index])
+            if activated:
+                chosen = {**chosen, "strategy_id": activated["id"],
+                          "version": activated["version"]}
+    except Exception:
+        pass
     return chosen
 
 

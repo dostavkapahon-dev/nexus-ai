@@ -130,6 +130,15 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     except Exception:
         pass
 
+    # 0а2. Действующая стратегия задаёт угол подачи — иначе каждый ролик сам по себе.
+    try:
+        from core.strategy_store import context as strategy_context
+        sctx = await strategy_context()
+        if sctx:
+            topic = f"{topic or ''}\n\n[СТРАТЕГИЯ]\n{sctx}".strip()
+    except Exception:
+        pass
+
     # 0б. Самопроверка перед дорогой генерацией: агент уточняет задачу сам,
     #     чтобы не гонять тяжёлые модели вслепую (экономия токенов).
     try:

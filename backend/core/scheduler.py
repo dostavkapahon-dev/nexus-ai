@@ -104,6 +104,14 @@ async def run_daily_publish():
 
                 platforms = niche.platforms or ["telegram"]
 
+                strategy_id = ""
+                try:
+                    from core.strategy_store import current as current_strategy
+                    cur = await current_strategy(plan.niche_id)
+                    strategy_id = cur["id"] if cur else ""
+                except Exception:
+                    pass
+
                 # Единый диспетчер публикации (тот же, что в оркестраторе):
                 # официальный API площадки → браузерный агент.
                 from core.orchestrator import nexus_core
@@ -116,7 +124,8 @@ async def run_daily_publish():
                             status=status, external_id=str(res.get("post_id") or ""),
                             post_url=str(res.get("post_url") or ""),
                             topic=(plan.topic or "")[:300], hook=plan.hook or "",
-                            content_format=plan.format or ""))
+                            content_format=plan.format or "",
+                            strategy_id=strategy_id))
                         if not res.get("ok") and chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(res.get('error'))[:80]}")
                     except Exception as e:

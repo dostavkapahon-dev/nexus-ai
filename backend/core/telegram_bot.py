@@ -65,6 +65,7 @@ async def setup_bot_commands():
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
+        {"command": "strategies", "description": "Стратегии: версии и результат"},
         {"command": "pc", "description": "Статус ПК (браузер-агент)"},
         {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
@@ -170,6 +171,27 @@ async def _dispatch_command(chat_id: str, text: str):
     # убираем @botusername из команды (в группах Telegram добавляет его)
     cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
+
+    if cmd == "strategies":
+        from core.strategy_store import effectiveness, current as cur_strategy
+        cur = await cur_strategy()
+        items = await effectiveness()
+        lines = ["🧭 <b>Стратегии</b>", ""]
+        if cur:
+            lines.append(f"▶️ Действующая: <b>«{cur['title']}»</b> (v{cur['version']})")
+            if cur.get("angle"):
+                lines.append(f"   {cur['angle'][:200]}")
+            lines.append("")
+        if items:
+            lines.append("<b>Результативность:</b>")
+            for i in items[:6]:
+                mark = "▶️" if i["status"] == "active" else ("📦" if i["status"] == "archived" else "📝")
+                lines.append(f"{mark} «{i['title']}» v{i['version']} — "
+                             f"{i['posts']} публикаций, ER {i['avg_engagement_rate']}%")
+        else:
+            lines.append("Пока нечего сравнивать. Запусти /strategy — агент предложит варианты.")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
 
     if cmd == "rivals":
         from core.research_store import tracked_competitors, track_competitor
