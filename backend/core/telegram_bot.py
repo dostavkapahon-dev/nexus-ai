@@ -65,6 +65,7 @@ async def setup_bot_commands():
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
+        {"command": "errors", "description": "Что сломалось за сутки"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "strategies", "description": "Стратегии: версии и результат"},
         {"command": "comments", "description": "Комментарии: подготовленные ответы"},
@@ -281,6 +282,30 @@ async def _dispatch_command(chat_id: str, text: str):
             for a in agents:
                 lines.append(f"• {a['agent']}: ${a['cost_usd']:.4f} ({a['calls']} выз.)")
         lines.append("\nЛимит меняется в дашборде → Расходы")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "errors":
+        # Всё сломанное за сутки в одном месте: провалы задач и ошибки моделей.
+        from core.notify import recent_errors
+        hours = 24
+        if args and args[0].isdigit():
+            hours = max(1, min(int(args[0]), 168))
+        data = await recent_errors(hours)
+        if not data["total"]:
+            await send_message(chat_id, f"✅ За последние {hours} ч ошибок нет.")
+            return
+        lines = [f"🚨 <b>Ошибки за {hours} ч</b>", ""]
+        if data["tasks"]:
+            lines.append("<b>Задачи:</b>")
+            for t in data["tasks"]:
+                lines.append(f"❌ <code>{t['id']}</code> {t['kind']} — {t['goal']}")
+                lines.append(f"   {t['error'][:120]}")
+        if data["agents"]:
+            lines += ["", "<b>Вызовы моделей:</b>"]
+            for a in data["agents"]:
+                lines.append(f"⚠️ {a['agent']} / {a['model'] or '—'}: {a['error'][:120]}")
+        lines.append("\nДетали задачи: /task &lt;id&gt;")
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 

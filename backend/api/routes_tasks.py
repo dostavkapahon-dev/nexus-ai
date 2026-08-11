@@ -33,6 +33,16 @@ async def tasks_stats():
     }
 
 
+@router.get("/errors")
+async def tasks_errors(hours: int = 24, limit: int = 10):
+    """Что сломалось за период: провалившиеся задачи и ошибки вызовов моделей.
+
+    Объявлено выше `/{task_id}`: иначе FastAPI примет «errors» за id задачи.
+    """
+    from core.notify import recent_errors
+    return await recent_errors(hours, limit)
+
+
 @router.get("/{task_id}")
 async def get_task_endpoint(task_id: str):
     from core.task_manager import get

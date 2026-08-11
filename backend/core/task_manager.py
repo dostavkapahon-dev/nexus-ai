@@ -137,6 +137,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                          duration_sec=round((finished - started).total_seconds(), 2),
                          result=_safe_result(result), error=None)
             current_task_id.reset(token)
+            await _report(task_id)
             return {"ok": True, "task_id": task_id, "result": result}
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
@@ -150,7 +151,24 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                  duration_sec=round((finished - started).total_seconds(), 2),
                  error=last_error[:2000])
     current_task_id.reset(token)
+    await _report(task_id)
     return {"ok": False, "task_id": task_id, "error": last_error}
+
+
+async def _report(task_id: str):
+    """Отчитывается о завершении задачи в Telegram.
+
+    Раньше о провале ночного джоба владелец узнавал, только если сам заходил
+    в /tasks — снаружи это выглядело как «система просто ничего не постит».
+    Молчаливые успехи фоновых джобов не шлём: см. `core/notify.py`.
+    """
+    try:
+        from core.notify import task_finished
+        task = await get(task_id)
+        if task:
+            await task_finished(task)
+    except Exception:
+        pass
 
 
 def _safe_result(result) -> dict | None:
