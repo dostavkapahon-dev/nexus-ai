@@ -94,22 +94,36 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
     except Exception:
         cmd = "/chat"
 
+    task_id = ""
     try:
         if cmd == "/chat":
             from core import intent
             reply = await intent.chat_reply(text)
             steps = []
         else:
-            # Всё остальное ведёт мозг-дирижёр (Claude → инструменты).
+            # Всё остальное ведёт мозг-дирижёр (Claude → инструменты) под задачей,
+            # чтобы запуск было видно в /api/tasks и он не пропал при сбое.
             from core.marketing_director import run_director
-            # Для явных слэш-команд отдаём дирижёру исходный текст как цель —
-            # он сам решит, что вызвать (factory/publish/browser/delegate).
-            result = await run_director(text)
-            reply = _summarize(result)
-            steps = result.get("steps", [])
+            from core.task_manager import create, run as run_task, add_step
+            task_id = await create("director", text, source=source)
+            outcome = await run_task(task_id, lambda: run_director(text))
+            if outcome.get("ok"):
+                result = outcome["result"]
+                reply = _summarize(result)
+                steps = result.get("steps", [])
+                for s in steps[:20]:
+                    await add_step(task_id, str(s.get("action", ""))[:80],
+                                   ok=bool(s.get("result_ok", True)),
+                                   agent=str(s.get("executor", "") or ""))
+            else:
+                reply = f"⚠️ Ошибка выполнения: {str(outcome.get('error'))[:200]}"
+                steps = []
     except Exception as e:
         reply = f"⚠️ Ошибка выполнения: {str(e)[:200]}"
         steps = []
+
+    if task_id:
+        reply = f"{reply}\n\n🆔 {task_id}"
 
     await log_event(source, "agent", reply)
 
@@ -124,4 +138,4 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
         except Exception:
             pass
 
-    return {"ok": True, "reply": reply, "cmd": cmd, "steps": steps}
+    return {"ok": True, "reply": reply, "cmd": cmd, "steps": steps, "task_id": task_id}

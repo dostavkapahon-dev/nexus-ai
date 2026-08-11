@@ -5,6 +5,16 @@ from api import routes_niche
 pytestmark = pytest.mark.asyncio
 
 
+async def _wait_called(calls, expected, tries=50):
+    """Пайплайн теперь запускается фоновой задачей — даём ей дойти до вызова."""
+    import asyncio
+    for _ in range(tries):
+        if calls == expected:
+            return True
+        await asyncio.sleep(0.02)
+    return calls == expected
+
+
 @pytest.fixture(autouse=True)
 def _no_pipeline(monkeypatch):
     """Создание ниши стартует полный AI-пайплайн в фоне — в тестах глушим."""
@@ -38,7 +48,7 @@ async def test_create_niche_defaults(auth_client):
 
 async def test_create_triggers_pipeline(auth_client, _no_pipeline):
     n = await _create(auth_client)
-    assert _no_pipeline == [n["id"]]
+    assert await _wait_called(_no_pipeline, [n["id"]])
 
 
 async def test_get_and_list(auth_client):
@@ -91,7 +101,10 @@ async def test_plan_empty_for_new_niche(auth_client):
 
 async def test_plan_regenerate_endpoint(auth_client, _no_pipeline):
     n = await _create(auth_client)
+    # Дожидаемся фоновой задачи от создания ниши, иначе она допишется уже
+    # после clear() и исказит проверку.
+    await _wait_called(_no_pipeline, [n["id"]])
     _no_pipeline.clear()
     r = await auth_client.post(f"/api/niches/{n['id']}/plan")
     assert r.status_code == 200
-    assert _no_pipeline == [n["id"]]
+    assert await _wait_called(_no_pipeline, [n["id"]])

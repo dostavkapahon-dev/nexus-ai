@@ -39,7 +39,10 @@ async def create_niche(body: NicheCreate, bg: BackgroundTasks, db: AsyncSession 
     niche = Niche(id=str(uuid.uuid4()), **body.model_dump())
     db.add(niche)
     await db.commit()
-    bg.add_task(nexus_core.run_full_pipeline, niche.id)
+    from core.task_manager import spawn
+    await spawn("pipeline", f"Полный цикл по нише «{niche.name}»",
+                lambda: nexus_core.run_full_pipeline(niche.id),
+                source="dashboard", ref_id=niche.id)
     return niche_to_dict(niche)
 
 @router.get("")
@@ -77,7 +80,10 @@ async def delete_niche(niche_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{niche_id}/plan")
 async def generate_plan(niche_id: str, bg: BackgroundTasks):
-    bg.add_task(nexus_core.run_full_pipeline, niche_id)
+    from core.task_manager import spawn
+    await spawn("pipeline", "Генерация контент-плана",
+                lambda: nexus_core.run_full_pipeline(niche_id),
+                source="dashboard", ref_id=niche_id)
     return {"ok": True}
 
 @router.get("/{niche_id}/plan")

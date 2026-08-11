@@ -1,6 +1,6 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot } from 'lucide-react'
+import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks } from 'lucide-react'
 import Control from './pages/Control'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
@@ -11,6 +11,7 @@ import BotSetup from './pages/BotSetup'
 import CommandCenter from './pages/CommandCenter'
 import AgentSetup from './pages/AgentSetup'
 import Analytics from './pages/Analytics'
+import Tasks from './pages/Tasks'
 import Director from './pages/Director'
 import Login from './pages/Login'
 import { auth } from './lib/api'
@@ -20,7 +21,9 @@ const NAV = [
   { to: '/hq',          icon: Activity,        label: 'Командный центр' },
   { to: '/agent',       icon: Cpu,             label: 'Настройка агента' },
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
+  { to: '/tasks',       icon: ListChecks,      label: 'Задачи' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
+  { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
   { to: '/bot',         icon: Bot,             label: 'Telegram-бот' },
   { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
@@ -85,6 +88,7 @@ function Layout() {
           <Route path="/director"    element={<Director />} />
           <Route path="/new"         element={<NewNiche />} />
           <Route path="/queue"       element={<Queue />} />
+          <Route path="/tasks"       element={<Tasks />} />
           <Route path="/analytics"   element={<Analytics />} />
           <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />

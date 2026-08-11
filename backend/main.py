@@ -23,6 +23,7 @@ from api.routes_profile import router as profile_router
 from api.routes_desktop import router as desktop_router
 from api.routes_automation import router as automation_router
 from api.routes_control import router as control_router
+from api.routes_tasks import router as tasks_router
 
 class ConnectionManager:
     def __init__(self):
@@ -61,6 +62,10 @@ async def lifespan(app: FastAPI):
         for conn in result.scalars():
             os.environ[conn.key_name.upper()] = conn.key_value or ""
     set_broadcast(manager.broadcast)
+    # Задачи, зависшие в RUNNING с прошлого запуска, помечаем потерянными —
+    # иначе они висят вечно и врут о состоянии системы.
+    from core.task_manager import recover_stuck
+    await recover_stuck()
     start_scheduler()
     start_polling()
     # Сервер сам делает разбор аккаунта и шлёт в Telegram (раз в сутки).
@@ -108,6 +113,7 @@ app.include_router(settings_router, dependencies=[Depends(require_auth)])
 app.include_router(profile_router,  dependencies=[Depends(require_auth)])
 app.include_router(automation_router, dependencies=[Depends(require_auth)])
 app.include_router(control_router,    dependencies=[Depends(require_auth)])
+app.include_router(tasks_router,      dependencies=[Depends(require_auth)])
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
 

@@ -62,6 +62,7 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
+        {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "pc", "description": "Статус ПК (браузер-агент)"},
         {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
@@ -168,6 +169,51 @@ async def _dispatch_command(chat_id: str, text: str):
     cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
 
+    if cmd == "tasks":
+        from core.task_manager import list_tasks, STATUS_EMOJI
+        tasks = await list_tasks(limit=10)
+        if not tasks:
+            await send_message(chat_id, "📭 Задач пока нет.")
+            return
+        lines = ["🗂 <b>Последние задачи</b>", ""]
+        for t in tasks:
+            em = STATUS_EMOJI.get(t["status"], "•")
+            dur = f" · {t['duration_sec']:.0f}с" if t.get("duration_sec") else ""
+            lines.append(f"{em} <code>{t['id']}</code> — {t['kind']}{dur}\n   {(t['goal'] or '')[:70]}")
+            if t.get("error"):
+                lines.append(f"   ⚠️ {t['error'][:90]}")
+        lines.append("\nДетали: /task &lt;id&gt;")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "task":
+        if not args:
+            await send_message(chat_id, "Укажи id: <code>/task TASK-2026-000001</code>")
+            return
+        from core.task_manager import get, STATUS_EMOJI
+        t = await get(args[0].strip())
+        if not t:
+            await send_message(chat_id, "Задача не найдена.")
+            return
+        em = STATUS_EMOJI.get(t["status"], "•")
+        lines = [f"{em} <b>{t['id']}</b> — {t['status']}",
+                 f"Тип: {t['kind']} · источник: {t['source']}",
+                 f"Цель: {(t['goal'] or '—')[:300]}",
+                 f"Попыток: {t['attempts']} · время: {t['duration_sec']:.0f}с",
+                 f"Расход: ${t['cost_usd']:.4f} · токенов: {t['tokens']}"]
+        if t.get("agents"):
+            lines.append("Агенты: " + ", ".join(t["agents"][:8]))
+        if t.get("error"):
+            lines.append(f"\n⚠️ <b>Ошибка:</b> <code>{t['error'][:400]}</code>")
+        steps = t.get("steps") or []
+        if steps:
+            lines.append("\n<b>Шаги:</b>")
+            for st in steps[-8:]:
+                mark = "✓" if st.get("ok") else "✗"
+                lines.append(f" {mark} {str(st.get('action'))[:70]}")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
     if cmd in ("menu", "start"):
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
@@ -264,7 +310,9 @@ async def _dispatch_command(chat_id: str, text: str):
         idea = (st.get("chosen") or {}).get("first_reel", "")
         await send_message(chat_id, f"🎬 Запускаю фабрику: <i>{idea[:120]}</i>\nПришлю на согласование.")
         from core.content_factory import run_factory
-        asyncio.create_task(run_factory(topic=idea or None, dry_run=False))
+        from core.task_manager import spawn
+        await spawn("factory", f"Рилс: {idea or 'по стратегии'}",
+                    lambda: run_factory(topic=idea or None, dry_run=False), source="telegram")
         return
 
     if cmd == "pc":
@@ -546,7 +594,10 @@ async def _dispatch_command(chat_id: str, text: str):
             )
             niche = result.scalar_one_or_none()
             if niche:
-                asyncio.create_task(nexus_core.run_full_pipeline(niche.id))
+                from core.task_manager import spawn
+                await spawn("pipeline", f"Полный цикл по нише «{niche.name}»",
+                            lambda nid=niche.id: nexus_core.run_full_pipeline(nid),
+                            source="telegram", ref_id=niche.id)
                 await send_message(chat_id, f"✅ Анализ запущен для ниши <b>{niche.name}</b>")
             else:
                 await send_message(chat_id, f"❌ Ниша '{niche_name}' не найдена. Создай её в дашборде.")
@@ -562,7 +613,10 @@ async def _dispatch_command(chat_id: str, text: str):
                 await send_message(chat_id, "❗ Нет запланированного контента. Запусти /analyze сначала.")
                 return
             for plan in plans:
-                asyncio.create_task(nexus_core.generate_content_for_plan(plan.id))
+                from core.task_manager import spawn
+                await spawn("generate", "Генерация контента",
+                            lambda pid=plan.id: nexus_core.generate_content_for_plan(pid),
+                            source="telegram", ref_id=plan.id)
         await send_message(chat_id, f"⚙️ Запущена генерация для {len(plans)} постов")
 
     elif cmd == "publish":
@@ -587,7 +641,8 @@ async def _dispatch_command(chat_id: str, text: str):
     elif cmd == "trends":
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
-        asyncio.create_task(run_daily_trends())
+        from core.task_manager import spawn
+        await spawn("trends", "Анализ трендов", lambda: run_daily_trends(), source="telegram")
         await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
 
     elif cmd in ("pause", "stop"):
@@ -649,7 +704,8 @@ async def _dispatch_command(chat_id: str, text: str):
     elif cmd in ("trend", "trends"):
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
-        asyncio.create_task(run_daily_trends())
+        from core.task_manager import spawn
+        await spawn("trends", "Анализ трендов", lambda: run_daily_trends(), source="telegram")
         await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
 
     elif cmd == "prompt":
@@ -681,7 +737,10 @@ async def _dispatch_command(chat_id: str, text: str):
         if not args:
             await send_message(chat_id, "❗ Укажи id пункта плана: /generate [id]")
             return
-        asyncio.create_task(nexus_core.generate_content_for_plan(args[0]))
+        from core.task_manager import spawn
+        await spawn("generate", "Генерация контента по id",
+                    lambda pid=args[0]: nexus_core.generate_content_for_plan(pid),
+                    source="telegram", ref_id=args[0])
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
     elif cmd in ("factory", "reel"):
@@ -692,7 +751,9 @@ async def _dispatch_command(chat_id: str, text: str):
         if publish:
             topic = " ".join(args[:-1]) or None
         await send_message(chat_id, f"🏭 Фабрика контента запущена{' (публикация)' if publish else ' (превью)'}...")
-        asyncio.create_task(run_factory(topic=topic, dry_run=not publish))
+        from core.task_manager import spawn
+        await spawn("factory", f"Фабрика: {topic or 'тема по трендам'}",
+                    lambda: run_factory(topic=topic, dry_run=not publish), source="telegram")
 
     elif cmd.startswith("set_goal"):
         try:

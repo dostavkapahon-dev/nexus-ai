@@ -88,7 +88,10 @@ async def list_video_models():
 async def publish_multi(plan_id: str, bg: BackgroundTasks):
     """Опубликовать сгенерированный план во все площадки ниши (API + браузер-fallback)."""
     from core.orchestrator import nexus_core
-    bg.add_task(nexus_core.publish_plan, plan_id)
+    from core.task_manager import spawn
+    await spawn("publish", "Публикация плана во все площадки",
+                lambda: nexus_core.publish_plan(plan_id),
+                source="dashboard", ref_id=plan_id, max_attempts=2)
     return {"ok": True, "message": "Публикация запущена в фоне."}
 
 

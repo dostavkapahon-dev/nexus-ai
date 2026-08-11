@@ -108,3 +108,29 @@ class NicheAnalysisCache(Base):
     drive_url = Column(String)
     analysis_data = Column(JSON)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class Task(Base):
+    """Единица фоновой работы: запуск конвейера, фабрики, публикации, дирижёра.
+
+    Даёт то, чего раньше не было: у каждой работы есть идентификатор, статус,
+    журнал шагов, расход и текст ошибки — упавшая задача больше не исчезает бесследно.
+    """
+    __tablename__ = 'tasks'
+    id = Column(String, primary_key=True)          # TASK-2026-000001
+    source = Column(String, default='api')         # telegram | dashboard | scheduler | api | agent
+    kind = Column(String, nullable=False)          # pipeline | factory | publish | generate | director | trends
+    goal = Column(Text, default='')                # что просили, словами
+    status = Column(String, default='CREATED', index=True)
+    ref_id = Column(String, default='')            # niche_id / plan_id, если применимо
+    steps = Column(JSON, default=list)             # [{ts, agent, action, ok, error}]
+    agents = Column(JSON, default=list)
+    models = Column(JSON, default=list)
+    tokens = Column(Integer, default=0)
+    cost_usd = Column(Float, default=0.0)
+    attempts = Column(Integer, default=0)
+    error = Column(Text)
+    result = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    started_at = Column(DateTime)
+    finished_at = Column(DateTime)
+    duration_sec = Column(Float, default=0.0)

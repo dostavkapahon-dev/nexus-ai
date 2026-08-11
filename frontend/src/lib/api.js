@@ -98,6 +98,13 @@ export const desktop = {
   runAgent: (body) => api.post('/desktop/agent/run', body),
 }
 
+export const tasks = {
+  list: (params) => api.get('/tasks', { params }),
+  stats: () => api.get('/tasks/stats'),
+  get: (id) => api.get(`/tasks/${id}`),
+  cancel: (id) => api.post(`/tasks/${id}/cancel`),
+}
+
 export const control = {
   command: (text) => api.post('/control/command', { text }),
   feed: (limit = 40) => api.get('/control/feed', { params: { limit } }),

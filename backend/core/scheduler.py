@@ -176,6 +176,15 @@ async def run_weekly_analytics():
     await send_message(chat_id, "📊 <b>Еженедельный отчёт Pakhon Studio</b>\n\n" + report)
 
 
+def _tracked(kind: str, goal: str, fn):
+    """Оборачивает джоб в задачу: у ночного запуска тоже есть id, статус и текст ошибки."""
+    async def job():
+        from core.task_manager import create, run
+        task_id = await create(kind, goal, source="scheduler")
+        await run(task_id, fn)
+    return job
+
+
 def start_scheduler():
     """Расписание по таймзоне Pakhon Studio (Asia/Almaty, UTC+5)."""
     global _scheduler
@@ -186,17 +195,23 @@ def start_scheduler():
     _scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
     # 09:00 — Research/тренды (исследование рынка)
-    _scheduler.add_job(run_daily_trends,   CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
+    _scheduler.add_job(_tracked("trends", "Ежедневный анализ трендов", run_daily_trends),
+                       CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
     # 09:30 — Фабрика контента (автоцикл Reels)
-    _scheduler.add_job(run_daily_factory,  CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
+    _scheduler.add_job(_tracked("factory", "Ежедневная фабрика контента", run_daily_factory),
+                       CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
     # 10:00 — Генерация материалов на день
-    _scheduler.add_job(run_daily_generate, CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
+    _scheduler.add_job(_tracked("generate", "Ежедневная генерация материалов", run_daily_generate),
+                       CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
     # 19:00 — Публикация (пик активности IG/TG по Алматы)
-    _scheduler.add_job(run_daily_publish,  CronTrigger(hour=19, minute=0), id="publish",  replace_existing=True)
+    _scheduler.add_job(_tracked("publish", "Ежедневная публикация", run_daily_publish),
+                       CronTrigger(hour=19, minute=0), id="publish",  replace_existing=True)
     # 22:00 — Итоговый статус дня владельцу
-    _scheduler.add_job(run_daily_report,   CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
+    _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
+                       CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
-    _scheduler.add_job(run_weekly_analytics, CronTrigger(day_of_week="sun", hour=20, minute=0),
+    _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),
+                       CronTrigger(day_of_week="sun", hour=20, minute=0),
                        id="weekly", replace_existing=True)
 
     _scheduler.start()

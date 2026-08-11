@@ -1,59 +1,77 @@
 # TASK SYSTEM — NEXUS AI
 
-## Текущее состояние: ⚪ NOT IMPLEMENTED
+## Статус: 🟢 WORKING (BLOCK 01, реализовано)
 
-Системы задач **нет**. Нет модели `Task`, нет `task_id`, нет статусов
-`CREATED / RUNNING / WAITING / COMPLETED / FAILED / CANCELLED`, нет retry и истории запусков.
+Каждая фоновая работа получает задачу: идентификатор, статус, журнал шагов, расход
+и текст ошибки. Упавшая задача больше не исчезает бесследно.
 
-## Как сейчас выполняются фоновые работы
+## Модель `Task` (`database/models.py`)
 
-| Механизм | Где | Проблема |
-|---|---|---|
-| `BackgroundTasks` | `api/routes_queue.py:66`, `api/routes_automation.py:87` | in-process, при рестарте задача теряется молча, статус зависает |
-| `asyncio.create_task` | `core/telegram_bot.py:267,549,565,590,652,684,695` | без ID, упавшая задача исчезает бесследно |
-| APScheduler | `core/scheduler.py:179` | расписание в памяти, пропущенные запуски не догоняются |
+| Поле | Смысл |
+|---|---|
+| `id` | `TASK-2026-000001` — человекочитаемый, сквозная нумерация в году |
+| `source` | telegram · dashboard · scheduler · api · agent |
+| `kind` | pipeline · factory · publish · generate · director · trends · report · analytics |
+| `goal` | что просили, словами |
+| `status` | CREATED · RUNNING · WAITING · COMPLETED · FAILED · CANCELLED |
+| `ref_id` | niche_id / plan_id |
+| `steps` | журнал шагов `[{ts, agent, action, ok, error}]`, последние 100 |
+| `agents`, `models` | кто участвовал и какие модели вызывались |
+| `tokens`, `cost_usd` | накопленный расход |
+| `attempts`, `error`, `result` | попытки, текст ошибки, краткий итог |
+| `created_at`, `started_at`, `finished_at`, `duration_sec` | тайминги |
 
-Единственные внешние `task_id` — задачи Runway (`core/media_generator.py:124-205`),
-нигде не персистятся.
+Индексы по `status` и `created_at`.
 
-## Что ошибочно принимают за очередь задач
-`api/routes_queue.py` + страница `Queue.jsx` — это **CRUD над `ContentPlan`** со строковым
-статусом (`pending` → `generated` → `published`). Это очередь **контента**, а не задач агентов.
-Запуски фабрики, автопилота, дирижёра, браузерных задач в ней не отражаются.
+## API (`core/task_manager.py`)
 
-## Расписание (`core/scheduler.py`, TZ Asia/Almaty)
+| Функция | Назначение |
+|---|---|
+| `create(kind, goal, source, ref_id)` | регистрация задачи (CREATED) |
+| `run(task_id, coro_factory, max_attempts)` | выполнение с замером времени и retry (backoff `2**n`) |
+| `spawn(kind, goal, coro_factory, ...)` | создать + запустить в фоне, вернуть id сразу |
+| `add_step(task_id, action, ok, agent, error)` | журнал шагов |
+| `add_cost(task_id, model, tokens, cost)` | накопление расхода (основа BLOCK 02) |
+| `recover_stuck()` | зависшие RUNNING → FAILED при старте сервера |
+| `list_tasks(status, kind, limit)`, `get(id)`, `cancel(id)` | чтение и отмена |
 
-| id | Время | Функция |
-|---|---|---|
-| `trends` | 09:00 | `run_daily_trends` — TrendAnalyst + отчёт в Telegram |
-| `factory` | 09:30 | `run_daily_factory` — `run_factory(dry_run = not AUTO_PUBLISH)` |
-| `generate` | 10:00 | `run_daily_generate` — до 10 планов `pending` |
-| `publish` | 19:00 | `run_daily_publish` — до 10 планов `generated` |
-| `report` | 22:00 | `run_daily_report` |
-| `weekly` | вс 20:00 | `run_weekly_analytics` |
+`coro_factory` — функция без аргументов, возвращающая корутину: нужна именно фабрика,
+чтобы повторная попытка создавала новую корутину.
 
-⚠️ Докстринг в начале файла устарел (указаны UTC-времена, не совпадающие с кодом).
-⚠️ Ни один джоб не наблюдаем из UI.
+## Что теперь под учётом
 
-## Целевая модель (предложение, не реализовано)
+| Точка запуска | kind |
+|---|---|
+| `api/routes_niche.py` — создание ниши, регенерация плана | `pipeline` |
+| `api/routes_queue.py` — генерация контента | `generate` |
+| `api/routes_automation.py` — публикация плана | `publish` (2 попытки) |
+| `core/telegram_bot.py` — /factory, /reel, /makereel | `factory` |
+| `core/telegram_bot.py` — /analyze, /create, /generate | `pipeline`, `generate` |
+| `core/telegram_bot.py` — /trend | `trends` |
+| `core/command_center.py` — любая команда дирижёру | `director` |
+| `core/scheduler.py` — все 6 cron-джобов | по типу джоба |
 
-```
-Task
- ├── id            TASK-2026-000001
- ├── source        telegram | dashboard | scheduler | agent
- ├── goal          текст задачи
- ├── status        CREATED | RUNNING | WAITING | COMPLETED | FAILED | CANCELLED
- ├── agents[]      кто участвовал
- ├── models[]      какие модели вызывались
- ├── steps[]       журнал шагов с результатами
- ├── tokens, cost  суммарный расход
- ├── error         текст ошибки
- ├── started_at, finished_at, duration_sec
- └── parent_id     для подзадач
-```
+Инфраструктурные `asyncio.create_task` (polling Telegram, обработчики сообщений)
+намеренно НЕ оборачиваются — это не задачи.
 
-Требования: обёртка запуска (любая фоновая работа получает Task), восстановление
-«зависших» RUNNING при старте, отображение в дашборде и `/tasks` в Telegram,
-retry с ограничением попыток.
+## Поверхность управления
 
-**Блокер:** реализация требует миграций и персистентной БД — см. `PROJECT_STATUS.md`.
+- **HTTP:** `GET /api/tasks` (фильтры `status`, `kind`, `limit`), `GET /api/tasks/stats`,
+  `GET /api/tasks/{id}`, `POST /api/tasks/{id}/cancel`.
+- **Telegram:** `/tasks` — последние 10 со статусами; `/task <id>` — детали, шаги, ошибка.
+- **Dashboard:** страница «Задачи» (`/tasks`) — счётчики, фильтры, раскрытие шагов и ошибок,
+  отмена активной задачи, автообновление раз в 5 с.
+
+## Восстановление после рестарта
+`recover_stuck()` вызывается в `lifespan` (`main.py`): задачи, висящие в RUNNING дольше
+`STUCK_AFTER_MIN` (30 мин), помечаются FAILED с пояснением «потеряна при перезапуске» —
+чтобы статус не врал о состоянии системы.
+
+## Тесты (`tests/test_tasks.py`, 8 шт.)
+Успешное завершение и запись результата · падение сохраняет FAILED и текст ошибки ·
+retry со второй попытки · `recover_stuck` · накопление шагов/расхода/агентов ·
+отмена только активных · API-список с фильтрами и `stats` · требование авторизации.
+
+## Осталось (следующие блоки)
+- Привязка расхода AI к задаче на уровне `ai_router` — BLOCK 02.
+- Retry публикаций на уровне площадок — BLOCK 10.

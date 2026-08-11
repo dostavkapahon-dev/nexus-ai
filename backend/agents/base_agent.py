@@ -27,14 +27,18 @@ class BaseAgent(ABC):
             raise
 
     async def log(self, db: AsyncSession, niche_id: str, status: str, model: str, tokens: int, cost: float, duration: float, error: str = None):
-        db.add(AgentLog(
-            niche_id=niche_id,
-            agent_name=self.name,
-            status=status,
-            model_used=model,
-            tokens_used=tokens,
-            cost_usd=cost,
-            duration_sec=duration,
-            error=error
-        ))
-        await db.commit()
+        """Пишет лог в ОТДЕЛЬНОЙ сессии.
+
+        Раньше здесь был commit по общей сессии конвейера — он публиковал и чужие
+        незавершённые изменения. Своя сессия делает лог независимым от вызывающего.
+        """
+        from database.db import AsyncSessionLocal
+        entry = dict(niche_id=niche_id, agent_name=self.name, status=status,
+                     model_used=model, tokens_used=tokens, cost_usd=cost,
+                     duration_sec=duration, error=error)
+        try:
+            async with AsyncSessionLocal() as log_db:
+                log_db.add(AgentLog(**entry))
+                await log_db.commit()
+        except Exception:
+            pass

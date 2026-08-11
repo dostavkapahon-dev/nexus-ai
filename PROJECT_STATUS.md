@@ -6,7 +6,12 @@
 
 Легенда: 🟢 WORKING · 🟡 PARTIAL · 🔴 BROKEN · ⚪ NOT IMPLEMENTED · 🔵 BLOCKED BY API
 
-## Корневая причина нестабильности 🔴
+## Корневая причина нестабильности 🟡 (исправлено в коде, ждёт подключения БД)
+
+**BLOCK 01:** код переведён на постоянную БД — `DATABASE_URL` нормализуется под asyncpg,
+добавлены alembic-миграции (`alembic upgrade head` в `startCommand`) и `DATABASE_URL`
+в `render.yaml`. **Осталось действие пользователя:** создать бесплатный Postgres в Supabase
+и вставить строку подключения в Render → Environment. До этого момента поведение прежнее ↓
 
 `render.yaml` не имеет `disk`/volume, `DATABASE_URL` не задан.
 `database/db.py:5` → `sqlite+aiosqlite:///./nexus.db` (относительный путь, `rootDir: backend`).
@@ -25,7 +30,7 @@ API-ключи выживают только потому, что продубл
 
 | # | Блок | Статус | Комментарий |
 |---|---|---|---|
-| 01 | Core / Orchestrator | 🟡 | Дирижёр есть; нет task id/статусов/retry; две конкурирующие «головы» |
+| 01 | Core / Orchestrator | 🟢 | **BLOCK 01 выполнен:** система задач (id, статусы, retry, шаги, восстановление после рестарта), alembic, Postgres-совместимость |
 | 02 | AI Provider Layer | 🟢 | Единый `ai_router.call`, 6 free + 5 платных, фолбэк-цепочка, backoff |
 | 03 | Social Connectors | 🟡 | Нет интерфейса `SocialConnector`, нет OAuth/refresh/webhooks/rate-limit |
 | 04 | Social Analytics | 🟡 | Чтение есть, но результаты **нигде не сохраняются** |
@@ -36,21 +41,22 @@ API-ключи выживают только потому, что продубл
 | 09 | Content Pipeline | 🟢 | `run_factory` со сквозным отчётом по шагам |
 | 10 | Publishing Engine | 🟡 | Публикация + браузер-фолбэк; нет retry, очереди, персистентных статусов |
 | 11 | Telegram Control Center | 🟢 | ~30 команд, inline-кнопки, голос/медиа, модерация approve/fix/reject |
-| 12 | Web Dashboard | 🟡 | 11 страниц; `Analytics` выпала из навигации; нет health агентов и соцсетей |
+| 12 | Web Dashboard | 🟡 | 12 страниц; добавлены «Задачи», `Analytics` возвращена в меню; нет health агентов и соцсетей |
 
 ## Критические поломки
 
 | Приоритет | Проблема | Где |
 |---|---|---|
-| 🔴 | Вся БД эфемерна на Render | `render.yaml`, `database/db.py:5` |
-| 🔴 | `gemini-1.5-flash` — модели нет в роутере; trend_analyst и funnel_agent стартуют с ошибки | `core/prompt_store.py:50,55` |
+| 🟡 | БД эфемерна, пока не задан `DATABASE_URL` (код готов, нужен Supabase) | `render.yaml` |
+| ✅ | ~~`gemini-1.5-flash`~~ → `gemini-2.0-flash` | `core/prompt_store.py` |
 | 🔴 | `FunnelAgent` не вызывается ниоткуда — мёртвый код | `agents/funnel_agent.py` |
-| 🔴 | `publish_youtube_short` — заглушка, всегда `ok:False` | `publishers/youtube_pub.py:11` |
+| ✅ | `publish_youtube_short` — честный `blocked_by_api` + причина | `publishers/youtube_pub.py` |
 | 🟡 | `ai_mode` (economy/premium) — фикция, агенты его не читают | `core/orchestrator.py:54` |
-| 🟡 | Расходы «мимо кассы»: логируется только `BaseAgent` | `agents/base_agent.py:29` |
+| 🟡 | Расходы «мимо кассы»: логируется только `BaseAgent` (BLOCK 02) | `agents/base_agent.py` |
+| ✅ | ~~`log()` коммитил чужие изменения~~ → отдельная сессия | `agents/base_agent.py` |
 | 🟡 | Секреты plaintext в БД и в `os.environ` всего процесса | `api/routes_settings.py:80-94` |
 | 🟡 | Гонки при read-modify-write KV `Connection` без блокировки | `core/command_center.py`, `core/moderation.py` |
-| ⚪ | Нет системы задач (task id, статусы, retry, история) | — |
+| ✅ | ~~Нет системы задач~~ → реализована, см. `TASK_SYSTEM.md` | `core/task_manager.py` |
 | ⚪ | Нет OAuth и long-lived токенов для соцсетей | — |
 
 ## Что работает надёжно

@@ -3,29 +3,30 @@
 Правило: **один блок за раз** — изменить → протестировать → обновить документацию → отчёт.
 Не переходить к следующему, пока текущий не имеет понятного статуса.
 
-## BLOCK 00 — ПЕРСИСТЕНТНОСТЬ 🔴 БЛОКЕР
-Без него всё остальное не переживёт рестарт.
-- [ ] Render: подключить `disk` (mountPath) **или** перейти на Postgres (`DATABASE_URL`)
-- [ ] Вынести `nexus.db` на постоянный путь; убрать относительный `./nexus.db`
-- [ ] Добавить alembic + первая миграция от текущей схемы
+## BLOCK 00 — ПЕРСИСТЕНТНОСТЬ ✅ (код готов)
+- [x] Postgres-совместимость: `normalize_db_url` (postgres:// → postgresql+asyncpg://), `pool_pre_ping`
+- [x] alembic + baseline-миграция всех 10 таблиц
+- [x] `DATABASE_URL` и `alembic upgrade head` в `render.yaml`
+- [ ] **ДЕЙСТВИЕ ПОЛЬЗОВАТЕЛЯ:** создать бесплатный Postgres в Supabase и вставить
+      строку подключения в Render → Environment → `DATABASE_URL`
 - [ ] Перенести эфемерные `data/*.json` (skills, brand_voice, hook_history) в БД
-- [ ] Тест: рестарт контейнера → данные на месте
 
-## Быстрые 🔴-фиксы (можно параллельно с BLOCK 00)
-- [ ] `core/prompt_store.py:50,55` — заменить несуществующую `gemini-1.5-flash`
-      на рабочую модель (trend_analyst, funnel_agent)
-- [ ] `agents/funnel_agent.py` — подключить к обработке комментариев **или** удалить
-- [ ] `publishers/youtube_pub.py` — заглушка должна возвращать честный
-      `BLOCKED: требуется YOUTUBE_OAUTH_JSON`, а не выглядеть как ошибка
-- [ ] `frontend/src/App.jsx:18-27` — вернуть `Analytics` в навигацию
+## Быстрые 🔴-фиксы
+- [x] `core/prompt_store.py` — `gemini-1.5-flash` → `gemini-2.0-flash`
+- [x] `publishers/youtube_pub.py` — честный `blocked_by_api` с причиной
+- [x] `frontend/src/App.jsx` — `Analytics` возвращена в навигацию
+- [x] `agents/base_agent.py` — лог в отдельной сессии (не коммитит чужие изменения)
+- [ ] `agents/funnel_agent.py` — подключить к обработке комментариев **или** удалить (BLOCK 07)
 - [ ] `core/social_intel.py` — убрать 4 устаревших упоминания Ayrshare в комментариях
 
-## BLOCK 01 — TASK SYSTEM
-- [ ] Модель `Task` (id `TASK-YYYY-NNNNNN`, статусы, агенты, модели, cost, ошибки, время)
-- [ ] Обёртка запуска: любая фоновая работа получает Task
-- [ ] Восстановление «зависших» RUNNING при старте
-- [ ] `/tasks` в Telegram + страница в дашборде
-- [ ] Решить развилку двух «голов»: `orchestrator.run_pipeline` vs `marketing_director`
+## BLOCK 01 — TASK SYSTEM ✅ ВЫПОЛНЕН
+- [x] Модель `Task` + `core/task_manager.py` (создание, retry, шаги, расход, отмена)
+- [x] Обёрнуты все 12 точек запуска фоновой работы + 6 cron-джобов
+- [x] `recover_stuck()` в lifespan — зависшие RUNNING → FAILED
+- [x] `/tasks` и `/task <id>` в Telegram + страница «Задачи» в дашборде
+- [x] API `/api/tasks`, `/api/tasks/stats`, `/api/tasks/{id}`, `/cancel`
+- [x] 8 тестов (`tests/test_tasks.py`), всего 145 passed
+- [ ] Развилка двух «голов»: решено **разделить роли явно** — зафиксировать в докстрингах
 
 ## BLOCK 02 — COST CONTROL
 - [ ] Единая обёртка над `ai_router.call` — расход пишется всегда, с `task_id`

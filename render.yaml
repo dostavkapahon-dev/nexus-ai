@@ -9,8 +9,13 @@ services:
     # чтобы не грузить инстанс 512 МБ. Playwright из requirements нужен только
     # для сетевого подключения к облачному браузеру.
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    # Перед стартом накатываем миграции: схема БД всегда актуальна.
+    startCommand: alembic upgrade head && uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # ПОСТОЯННАЯ БД (Supabase Postgres) — без неё данные теряются при рестарте.
+      # Строка вида postgresql://user:pass@host:5432/postgres — код сам переведёт на asyncpg.
+      - key: DATABASE_URL
+        sync: false
       - key: ADMIN_PASSWORD
         sync: false
       - key: ANTHROPIC_API_KEY

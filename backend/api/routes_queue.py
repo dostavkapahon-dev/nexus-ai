@@ -65,7 +65,10 @@ async def delete_queue(plan_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{plan_id}/generate")
 async def generate(plan_id: str, bg: BackgroundTasks):
-    bg.add_task(nexus_core.generate_content_for_plan, plan_id)
+    from core.task_manager import spawn
+    await spawn("generate", "Генерация контента по пункту плана",
+                lambda: nexus_core.generate_content_for_plan(plan_id),
+                source="dashboard", ref_id=plan_id)
     return {"ok": True}
 
 @router.post("/{plan_id}/publish")
