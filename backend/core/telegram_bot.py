@@ -64,6 +64,7 @@ async def setup_bot_commands():
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
+        {"command": "queue", "description": "Очередь публикаций и повторы"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "strategies", "description": "Стратегии: версии и результат"},
         {"command": "comments", "description": "Комментарии: подготовленные ответы"},
@@ -280,6 +281,36 @@ async def _dispatch_command(chat_id: str, text: str):
             for a in agents:
                 lines.append(f"• {a['agent']}: ${a['cost_usd']:.4f} ({a['calls']} выз.)")
         lines.append("\nЛимит меняется в дашборде → Расходы")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "queue":
+        # Очередь публикаций: что ждёт своего часа, что упало и когда повтор.
+        from core.publish_queue import queue as pub_queue, stats as pub_stats, retry_now
+        arg = args[0].strip() if args else ""
+        if arg:
+            res = await retry_now(arg)
+            mark = "✅" if res.get("ok") else "⚠️"
+            await send_message(chat_id, f"{mark} Повтор {arg}: "
+                                        f"{res.get('error') or res.get('status') or 'опубликовано'}")
+            return
+
+        st = await pub_stats()
+        items = await pub_queue(limit=10)
+        if not items:
+            await send_message(chat_id, "📭 Очередь публикаций пуста.")
+            return
+        emoji = {"published": "✅", "scheduled": "🕓", "retrying": "🔁",
+                 "failed": "❌", "blocked": "🚫", "cancelled": "⛔"}
+        lines = ["📤 <b>Очередь публикаций</b>",
+                 " · ".join(f"{emoji.get(k, '•')} {k}: {v}" for k, v in st.items()), ""]
+        for i in items:
+            when = (i.get("next_retry_at") or i.get("scheduled_at") or "")[:16].replace("T", " ")
+            lines.append(f"{emoji.get(i['status'], '•')} <code>{i['id'][:8]}</code> "
+                         f"{i['platform']} · попыток {i['attempts']} · {when}")
+            if i.get("error"):
+                lines.append(f"   ⚠️ {i['error'][:90]}")
+        lines.append("\nПовторить сейчас: /queue &lt;id&gt;")
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 

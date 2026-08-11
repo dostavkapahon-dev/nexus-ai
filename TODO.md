@@ -59,6 +59,24 @@
 - [x] API `/api/performance/*` + страница «Результаты» в дашборде
 - [x] 10 тестов (`tests/test_post_analytics.py`), всего 178 passed
 
+## BLOCK 09 — CONTENT PIPELINE ✅ ВЫПОЛНЕН
+- [x] Шаги фабрики пишутся в журнал задачи (`_flush_steps`, 4 контрольные точки)
+- [x] Точка согласования — явный шаг `approval_requested`
+- [x] Задача, ждущая аппрува человека, получает статус WAITING, а не COMPLETED
+- [x] `POST /api/automation/factory` создаёт Task и возвращает `task_id`
+- [x] 4 теста (`tests/test_pipeline.py`), всего 228 passed
+
+## BLOCK 10 — PUBLISHING ENGINE ✅ ВЫПОЛНЕН
+- [x] `core/publish_queue.py` — очередь публикаций в БД (переживает рестарт)
+- [x] Повторы с растущей паузой 2/8/30/120 мин, максимум 5 попыток
+- [x] Отказ по существу (нет прав/токена) → `blocked` сразу, без бессмысленных повторов
+- [x] Отложенное расписание: пост на 19:00 не уходит в 10:00
+- [x] Джоб очереди каждые 10 минут + ручной повтор/отмена
+- [x] `Publication` расширена полями очереди (миграция `64e59c73f0d2`)
+- [x] `/api/publish/*`, `/queue` в Telegram, страница «Публикации» в дашборде
+- [x] 8 тестов (`tests/test_publish_queue.py`), всего 236 passed
+- [ ] Живая проверка с реальными токенами площадок — ключей нет, соцсети закрыты прокси среды
+
 ## BLOCK 12 — HEALTH DASHBOARD
 - [ ] API-агрегат по агентам (ONLINE/last run/success rate/cost) из `AgentLog`
 - [ ] Статус соцсетей (токен валиден, срок, permissions)

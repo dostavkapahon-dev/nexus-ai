@@ -277,6 +277,20 @@ async def run_token_maintenance():
     return {"checked": True, "problems": problems}
 
 
+async def run_publish_queue():
+    """Раз в 10 минут разбирает очередь публикаций: отложенные и повторы.
+
+    Задачу заводим только если очередь непустая — иначе журнал задач заполнился бы
+    сотнями пустых записей «ничего не делали» и перестал быть читаемым.
+    """
+    from core.publish_queue import due, process_due
+    if not await due(1):
+        return
+    from core.task_manager import create, run
+    task_id = await create("publish", "Очередь публикаций", source="scheduler")
+    await run(task_id, lambda: process_due())
+
+
 def _tracked(kind: str, goal: str, fn):
     """Оборачивает джоб в задачу: у ночного запуска тоже есть id, статус и текст ошибки."""
     async def job():
@@ -325,6 +339,10 @@ def start_scheduler():
     # 08:00 — проверка и продление токенов площадок (до утренних публикаций)
     _scheduler.add_job(_tracked("tokens", "Проверка токенов площадок", run_token_maintenance),
                        CronTrigger(hour=8, minute=0), id="tokens", replace_existing=True)
+    # Каждые 10 минут — очередь публикаций: отложенные посты и повторы после сбоя.
+    # Без этого джоба упавшая публикация оставалась бы висеть в RETRYING навсегда.
+    _scheduler.add_job(run_publish_queue, CronTrigger(minute="*/10"),
+                       id="publish_queue", replace_existing=True, max_instances=1)
     _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),
                        CronTrigger(day_of_week="sun", hour=20, minute=0),
                        id="weekly", replace_existing=True)

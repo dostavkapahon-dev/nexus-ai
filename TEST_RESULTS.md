@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **228 passed** (после BLOCK 09;
+Прогон: `cd backend && python -m pytest -q` → **236 passed** (после BLOCK 10;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -14,6 +14,8 @@
 | Ниши (CRUD + pipeline) | 01 | `tests/test_niches.py` | 10 | 🟢 PASS |
 | Настройки / ключи | 12 | `tests/test_settings.py` | 9 | 🟢 PASS |
 | Отчёт фабрики | 09 | `tests/test_factory_report.py` | 6 | 🟢 PASS |
+| Конвейер и журнал шагов | 09 | `tests/test_pipeline.py` | 4 | 🟢 PASS |
+| Очередь публикаций и повторы | 10 | `tests/test_publish_queue.py` | 8 | 🟢 PASS |
 
 Дополнительно проверено вручную в ходе аудита:
 - SSRF-guard `server_browser.url_allowed` — metadata/localhost/private блокируются,
@@ -26,7 +28,7 @@
 | Модуль | Блок | Риск |
 |---|---|---|
 | `publishers/*` (все 7) | 03, 10 | **высокий** — публикация не проверена ни одним тестом |
-| `core/orchestrator.py` (`_publish_one`, `publish_plan`) | 10 | высокий |
+| `core/orchestrator.py` (`_publish_one` — сама маршрутизация по коннекторам) | 10 | средний — очередь и повторы вокруг него покрыты `test_publish_queue.py` |
 | `core/social_intel.py` | 04 | высокий |
 | `core/instagram_reader.py` | 03, 04 | высокий |
 | `core/youtube_reader.py` | 03, 04 | средний |

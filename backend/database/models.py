@@ -78,6 +78,16 @@ class Publication(Base):
     content_format = Column(String)
     # Под какой стратегией вышел пост — без этого нельзя сравнить их результативность
     strategy_id = Column(String, index=True)
+    # Очередь и повторы: публикация — сетевая операция, и разовый сбой не должен
+    # означать потерянный пост. Состояние живёт в БД, поэтому переживает рестарт.
+    # status: scheduled | retrying | published | failed | blocked | cancelled
+    scheduled_at = Column(DateTime, index=True)   # когда публиковать (очередь расписания)
+    next_retry_at = Column(DateTime, index=True)  # когда следующая попытка
+    attempts = Column(Integer, default=0)
+    last_error = Column(Text)
+    text = Column(Text)                           # что публикуем — иначе повтор невозможен
+    image_url = Column(Text)
+    task_id = Column(String, index=True)
 
 class AgentLog(Base):
     __tablename__ = 'agent_logs'

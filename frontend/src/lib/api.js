@@ -141,6 +141,14 @@ export const cost = {
   setBudget: (budget_usd_day) => api.post('/cost/budget', { budget_usd_day }),
 }
 
+export const publishing = {
+  queue: (status = '', limit = 50) => api.get('/publish/queue', { params: { status, limit } }),
+  schedule: (body) => api.post('/publish/schedule', body),
+  retry: (id) => api.post(`/publish/${id}/retry`),
+  cancel: (id) => api.post(`/publish/${id}/cancel`),
+  process: () => api.post('/publish/process'),
+}
+
 export const control = {
   command: (text) => api.post('/control/command', { text }),
   feed: (limit = 40) => api.get('/control/feed', { params: { limit } }),

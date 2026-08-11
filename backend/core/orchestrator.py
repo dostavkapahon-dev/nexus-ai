@@ -1,5 +1,6 @@
 import os
 import json
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database.db import AsyncSessionLocal
@@ -269,7 +270,20 @@ class NexusCore:
                 except Exception as e:
                     res = {"ok": False, "error": str(e)}
                 report[platform] = res
-                status = "published" if res.get("ok") else "failed"
+                # Разовый сетевой сбой не должен означать потерянный пост: неудачная
+                # публикация остаётся в очереди с текстом и картинкой, и джоб повторит её.
+                # Отказ по существу (нет прав/токена) повторять бессмысленно — BLOCKED.
+                from core.publish_queue import (PUBLISHED, RETRYING, BLOCKED,
+                                                _is_permanent, _backoff)
+                from core.cost_tracker import current_task_id
+                if res.get("ok"):
+                    status, next_retry = PUBLISHED, None
+                elif _is_permanent(res):
+                    status, next_retry = BLOCKED, None
+                else:
+                    status, next_retry = RETRYING, datetime.utcnow() + _backoff(1)
+                    report[platform] = {**res, "queued_retry": True}
+
                 # Сохраняем не только факт, но и ЧТО опубликовали: тему, хук и формат.
                 # Без этого позже невозможно связать результат с приёмом.
                 db.add(Publication(
@@ -277,7 +291,12 @@ class NexusCore:
                     external_id=str(res.get("post_id") or ""),
                     post_url=str(res.get("post_url") or ""),
                     topic=(plan.topic or "")[:300], hook=plan.hook or "",
-                    content_format=plan.format or "", strategy_id=strategy_id))
+                    content_format=plan.format or "", strategy_id=strategy_id,
+                    attempts=1, next_retry_at=next_retry,
+                    last_error=None if res.get("ok") else
+                        str(res.get("error") or res.get("reason") or "")[:500],
+                    text=text, image_url=image_url,
+                    task_id=current_task_id.get()))
                 await broadcast(plan.niche_id, {"event": "publish_result", "platform": platform, "result": res})
 
             plan.status = "published" if any(r.get("ok") for r in report.values()) else "generated"
