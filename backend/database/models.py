@@ -156,3 +156,40 @@ class Task(Base):
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
     duration_sec = Column(Float, default=0.0)
+
+
+class Research(Base):
+    """История исследований: тренды, разбор чужих роликов, анализ конкурентов.
+
+    Раньше результат жил в одном KV-ключе `viral_recipe` и перезатирался при каждом
+    запуске — сравнить «что менялось в нише» и вернуться к прошлым выводам было нельзя.
+    """
+    __tablename__ = 'research'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche_id = Column(String, index=True)
+    task_id = Column(String, index=True)          # какая задача это породила
+    kind = Column(String, index=True)             # trends | viral | competitor | market
+    query = Column(String)                        # ниша/запрос/ссылки
+    summary = Column(Text)                        # краткий вывод для человека
+    findings = Column(JSON)                       # структурированный результат
+    sources = Column(JSON)                        # откуда взято (ссылки, аккаунты)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+
+class Competitor(Base):
+    """Отслеживаемый конкурент: срез метрик на дату.
+
+    Строк на один аккаунт много — это история, по ней видно динамику
+    (рост подписчиков, изменение вовлечённости), а не только «снимок сегодня».
+    """
+    __tablename__ = 'competitors'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche_id = Column(String, index=True)
+    platform = Column(String, index=True)
+    handle = Column(String, index=True)
+    followers = Column(Integer, default=0)
+    posts_count = Column(Integer, default=0)
+    avg_engagement = Column(Float, default=0.0)
+    top_posts = Column(JSON)                      # что у них зашло
+    checked_at = Column(DateTime, default=datetime.utcnow, index=True)
+    active = Column(Boolean, default=True)        # следим ли за ним сейчас

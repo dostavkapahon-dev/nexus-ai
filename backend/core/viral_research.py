@@ -163,4 +163,16 @@ async def research(urls: list[str], niche: str = "") -> dict:
 
     recipe["_refs"] = [r["meta"] for r in refs]
     await _save_recipe(recipe)
+
+    # История исследований: KV-ключ хранит только последний рецепт и перезатирается,
+    # а здесь остаётся вся хронология с привязкой к нише и задаче.
+    try:
+        from core.research_store import save as save_research
+        await save_research(
+            kind="viral", query=" ".join(urls[:5])[:500],
+            summary=str(recipe.get("recipe", ""))[:2000],
+            findings={k: v for k, v in recipe.items() if k != "_refs"},
+            sources=[r["meta"].get("url") for r in refs if r.get("meta")])
+    except Exception:
+        pass
     return recipe

@@ -86,6 +86,15 @@ async def build_options(db) -> dict:
     except Exception:
         pass
 
+    # Рынок и конкуренты из истории исследований — стратегия на фактах, а не догадках.
+    try:
+        from core.research_store import market_context
+        ctx = await market_context()
+        if ctx:
+            account += "\n\n" + ctx[:2000]
+    except Exception:
+        pass
+
     prompt = TEMPLATE.format(
         niche=(niche.name if niche else "—"),
         product=(prof.product_description if prof else "—") or "—",

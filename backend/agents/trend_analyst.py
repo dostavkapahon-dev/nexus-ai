@@ -25,7 +25,9 @@ class TrendAnalyst(BaseAgent):
         try:
             start = text.find('{')
             end = text.rfind('}') + 1
-            return json.loads(text[start:end])
+            data = json.loads(text[start:end])
+            await self._save_history(niche, city, data, raw_trends, niche_id)
+            return data
         except Exception:
             return {
                 "top_topics": [niche + " тренды"],
@@ -34,3 +36,15 @@ class TrendAnalyst(BaseAgent):
                 "corrections": [],
                 "summary": raw_trends[:300]
             }
+
+    async def _save_history(self, niche: str, city: str, data: dict,
+                            raw: str, niche_id: str = ""):
+        """Тренды складываем в историю — по ней видно, как менялась ниша."""
+        try:
+            from core.research_store import save
+            await save(kind="trends", query=f"{niche} {city}".strip(),
+                       summary=str(data.get("summary", ""))[:2000],
+                       findings=data, sources=[raw[:500]] if raw else [],
+                       niche_id=niche_id)
+        except Exception:
+            pass

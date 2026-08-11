@@ -111,6 +111,16 @@ export const tasks = {
   cancel: (id) => api.post(`/tasks/${id}/cancel`),
 }
 
+export const research = {
+  history: (kind = '', limit = 20) => api.get('/research', { params: { kind, limit } }),
+  stats: () => api.get('/research/stats'),
+  context: () => api.get('/research/context'),
+  competitors: () => api.get('/research/competitors'),
+  trackCompetitor: (platform, handle) => api.post('/research/competitors', { platform, handle }),
+  refreshCompetitors: () => api.post('/research/competitors/refresh'),
+  stopCompetitor: (platform, handle) => api.delete(`/research/competitors/${platform}/${handle}`),
+}
+
 export const performance = {
   overview: (days = 30) => api.get('/performance', { params: { days } }),
   top: (days = 30, limit = 10, worst = false) => api.get('/performance/top', { params: { days, limit, worst } }),

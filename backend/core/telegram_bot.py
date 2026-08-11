@@ -64,6 +64,7 @@ async def setup_bot_commands():
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
+        {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "pc", "description": "Статус ПК (браузер-агент)"},
         {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
@@ -169,6 +170,41 @@ async def _dispatch_command(chat_id: str, text: str):
     # убираем @botusername из команды (в группах Telegram добавляет его)
     cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
+
+    if cmd == "rivals":
+        from core.research_store import tracked_competitors, track_competitor
+        # /rivals instagram nike — добавить и сразу снять срез
+        if len(args) >= 2:
+            await send_message(chat_id, f"🔍 Снимаю метрики @{args[1]}...")
+            res = await track_competitor(args[0], args[1])
+            if res.get("ok"):
+                await send_message(chat_id,
+                    f"✅ <b>@{res['handle']}</b> [{res['platform']}]\n"
+                    f"Подписчиков: {res['followers']}\n"
+                    f"Постов: {res['posts_count']}\n"
+                    f"Вовлечённость: {res['avg_engagement']}%")
+            else:
+                await send_message(chat_id, f"⚠️ {res.get('error', 'не удалось')}")
+            return
+
+        comps = await tracked_competitors()
+        if not comps:
+            await send_message(chat_id,
+                "🔍 Конкуренты не отслеживаются.\n\n"
+                "Добавить: <code>/rivals instagram nike</code>\n"
+                "Площадки: instagram, youtube, tiktok")
+            return
+        lines = ["🔍 <b>Конкуренты</b>", ""]
+        for c in comps:
+            delta = ""
+            if c.get("followers_delta"):
+                sign = "+" if c["followers_delta"] > 0 else ""
+                delta = f" ({sign}{c['followers_delta']})"
+            lines.append(f"<b>@{c['handle']}</b> [{c['platform']}]\n"
+                         f"  {c['followers']} подписчиков{delta} · "
+                         f"ER {c['avg_engagement']}% · срезов: {c['snapshots']}")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
 
     if cmd == "cost":
         from core.cost_tracker import budget_status, by_model, by_agent

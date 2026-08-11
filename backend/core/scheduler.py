@@ -204,6 +204,26 @@ async def run_metrics_collection():
     return {**res, "learned": learned}
 
 
+async def run_competitor_tracking():
+    """Еженедельный срез метрик конкурентов — по нему видно динамику ниши."""
+    from core.research_store import refresh_all
+    res = await refresh_all()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
+        from core.research_store import tracked_competitors
+        from core.telegram_bot import send_message
+        lines = ["🔍 <b>Конкуренты — недельный срез</b>", ""]
+        for c in (await tracked_competitors())[:8]:
+            delta = ""
+            if c.get("followers_delta"):
+                sign = "+" if c["followers_delta"] > 0 else ""
+                delta = f" ({sign}{c['followers_delta']})"
+            lines.append(f"@{c['handle']} [{c['platform']}]: "
+                         f"{c['followers']} подписчиков{delta}, ER {c['avg_engagement']}%")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+    return res
+
+
 async def run_token_maintenance():
     """Следит за токенами площадок: продлевает Instagram и предупреждает о протухании.
 
@@ -271,6 +291,10 @@ def start_scheduler():
     _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
                        CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
+    # Понедельник 07:00 — срез метрик конкурентов
+    _scheduler.add_job(_tracked("competitors", "Срез метрик конкурентов", run_competitor_tracking),
+                       CronTrigger(day_of_week="mon", hour=7, minute=0),
+                       id="competitors", replace_existing=True)
     # 23:00 — сбор реальных метрик опубликованного и обучение на результатах
     _scheduler.add_job(_tracked("metrics", "Сбор метрик публикаций", run_metrics_collection),
                        CronTrigger(hour=23, minute=0), id="metrics", replace_existing=True)
