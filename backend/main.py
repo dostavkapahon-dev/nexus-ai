@@ -26,6 +26,7 @@ from api.routes_control import router as control_router
 from api.routes_tasks import router as tasks_router
 from api.routes_cost import router as cost_router
 from api.routes_publish import router as publish_router
+from api.routes_health import router as system_router
 from api.routes_social import router as social_router, public_router as social_public_router
 from api.routes_analytics import router as performance_router
 from api.routes_research import router as research_router
@@ -123,6 +124,7 @@ app.include_router(control_router,    dependencies=[Depends(require_auth)])
 app.include_router(tasks_router,      dependencies=[Depends(require_auth)])
 app.include_router(cost_router,       dependencies=[Depends(require_auth)])
 app.include_router(publish_router,    dependencies=[Depends(require_auth)])
+app.include_router(system_router,     dependencies=[Depends(require_auth)])
 app.include_router(social_router,     dependencies=[Depends(require_auth)])
 app.include_router(performance_router, dependencies=[Depends(require_auth)])
 app.include_router(research_router,   dependencies=[Depends(require_auth)])

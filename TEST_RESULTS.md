@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **244 passed** (после BLOCK 11;
+Прогон: `cd backend && python -m pytest -q` → **253 passed** (после BLOCK 12;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -17,6 +17,7 @@
 | Конвейер и журнал шагов | 09 | `tests/test_pipeline.py` | 4 | 🟢 PASS |
 | Очередь публикаций и повторы | 10 | `tests/test_publish_queue.py` | 8 | 🟢 PASS |
 | Отчёты о задачах и `/errors` | 11 | `tests/test_notify.py` | 8 | 🟢 PASS |
+| Здоровье системы | 12 | `tests/test_health.py` | 9 | 🟢 PASS |
 
 Дополнительно проверено вручную в ходе аудита:
 - SSRF-guard `server_browser.url_allowed` — metadata/localhost/private блокируются,

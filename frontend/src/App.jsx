@@ -1,6 +1,6 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks, DollarSign, Share2, TrendingUp, Search, Compass, Send } from 'lucide-react'
+import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks, DollarSign, Share2, TrendingUp, Search, Compass, Send, HeartPulse } from 'lucide-react'
 import Control from './pages/Control'
 import Dashboard from './pages/Dashboard'
 import NewNiche from './pages/NewNiche'
@@ -14,6 +14,7 @@ import Analytics from './pages/Analytics'
 import Tasks from './pages/Tasks'
 import Cost from './pages/Cost'
 import Publishing from './pages/Publishing'
+import Health from './pages/Health'
 import Social from './pages/Social'
 import Performance from './pages/Performance'
 import Research from './pages/Research'
@@ -27,6 +28,7 @@ const NAV = [
   { to: '/hq',          icon: Activity,        label: 'Командный центр' },
   { to: '/agent',       icon: Cpu,             label: 'Настройка агента' },
   { to: '/director',    icon: Bot,             label: 'Дирижёр' },
+  { to: '/health',      icon: HeartPulse,      label: 'Здоровье' },
   { to: '/tasks',       icon: ListChecks,      label: 'Задачи' },
   { to: '/queue',       icon: List,            label: 'Очередь' },
   { to: '/strategy',    icon: Compass,         label: 'Стратегии' },
@@ -103,6 +105,7 @@ function Layout() {
           <Route path="/tasks"       element={<Tasks />} />
           <Route path="/cost"        element={<Cost />} />
           <Route path="/publishing" element={<Publishing />} />
+          <Route path="/health"      element={<Health />} />
           <Route path="/social"      element={<Social />} />
           <Route path="/performance" element={<Performance />} />
           <Route path="/research"    element={<Research />} />

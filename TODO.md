@@ -85,12 +85,15 @@
 - [x] `GET /api/tasks/errors` (объявлен выше `/{task_id}`, иначе перехватывался)
 - [x] 8 тестов (`tests/test_notify.py`), всего 244 passed
 
-## BLOCK 12 — HEALTH DASHBOARD
-- [ ] API-агрегат по агентам (ONLINE/last run/success rate/cost) из `AgentLog`
-- [ ] Статус соцсетей (токен валиден, срок, permissions)
-- [ ] Статус планировщика и его 6 джобов
-- [ ] Глобальные логи и ошибки (не по одной нише)
-- [ ] Расходы за день / неделю / месяц
+## BLOCK 12 — HEALTH DASHBOARD ✅ ВЫПОЛНЕН
+- [x] API-агрегат по агентам (online/degraded/silent, last run, success rate, cost) из `AgentLog`
+- [x] Молчащий агент остаётся в списке — иначе сломанный джоб просто исчезает
+- [x] Статус соцсетей через `connectors.health_all()`
+- [x] Статус планировщика и всех его джобов со временем следующего запуска
+- [x] Глобальные ошибки (задачи + вызовы моделей), не по одной нише
+- [x] Расходы за день / неделю / месяц + бюджет
+- [x] `/api/system/health`, `/agents`, `/scheduler`; страница «Здоровье» в дашборде
+- [x] 9 тестов (`tests/test_health.py`), всего 253 passed
 
 ## ТЕСТЫ
 - [ ] Тесты на `publishers/*` и `orchestrator._publish_one`

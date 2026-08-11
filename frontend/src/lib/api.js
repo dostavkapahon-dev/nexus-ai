@@ -141,6 +141,12 @@ export const cost = {
   setBudget: (budget_usd_day) => api.post('/cost/budget', { budget_usd_day }),
 }
 
+export const system = {
+  health: () => api.get('/system/health'),
+  agents: (hours = 24) => api.get('/system/agents', { params: { hours } }),
+  scheduler: () => api.get('/system/scheduler'),
+}
+
 export const publishing = {
   queue: (status = '', limit = 50) => api.get('/publish/queue', { params: { status, limit } }),
   schedule: (body) => api.post('/publish/schedule', body),
