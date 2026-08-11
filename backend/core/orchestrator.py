@@ -343,7 +343,11 @@ class NexusCore:
                     "blocked_by_api": res.get("blocked_by_api", False),
                     "fallback_error": browser.get("error")}
 
-        if mode == "api":
+        # Telegram — свой бот, а не «API площадки». Браузерного сценария для него нет
+        # и быть не должно: без токена это «не настроено», а не повод лезть в браузер.
+        # Иначе наверх уходило «нет браузерного сценария» — причина не та, и очередь
+        # пять раз повторяла заведомо безнадёжную публикацию.
+        if mode == "api" or platform == "telegram":
             missing = connector.missing_env() if connector else []
             return {"ok": False, "platform": platform,
                     "error": "площадка не настроена" + (f": не заданы {', '.join(missing)}" if missing else "")}

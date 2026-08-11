@@ -87,6 +87,35 @@ async def test_permanent_refusal_is_not_retried(client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_unconfigured_telegram_is_blocked_not_retried(client, monkeypatch):
+    """Найдено живой проверкой: без токена Telegram уходил в браузерный путь,
+    возвращал «нет браузерного сценария» и очередь пять раз повторяла заведомо
+    безнадёжную публикацию. Telegram — свой бот, браузером не подменяется."""
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    pub_id = await pq.enqueue("telegram", "текст")
+    await pq.attempt(pub_id)
+
+    pub = await _get(pub_id)
+    assert pub.status == pq.BLOCKED
+    assert "не настроена" in pub.last_error
+    assert "браузерн" not in pub.last_error.lower()   # причина по существу, а не подмена
+    assert await pq.due() == []
+
+
+@pytest.mark.asyncio
+async def test_missing_browser_flow_is_permanent(client, monkeypatch):
+    """Отсутствие браузерного сценария само не пройдёт — повторять нечего."""
+    async def no_flow(platform, text, image_url):
+        return {"ok": False, "error": "Нет браузерного сценария для платформы 'vk'."}
+
+    monkeypatch.setattr(nexus_core, "_publish_one", no_flow)
+    pub_id = await pq.enqueue("vk", "текст")
+    await pq.attempt(pub_id)
+
+    assert (await _get(pub_id)).status == pq.BLOCKED
+
+
+@pytest.mark.asyncio
 async def test_attempts_are_capped(client, monkeypatch):
     async def always_down(platform, text, image_url):
         return {"ok": False, "error": "connection reset"}

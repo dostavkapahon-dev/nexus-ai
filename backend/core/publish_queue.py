@@ -33,7 +33,10 @@ BACKOFF_MIN = (2, 8, 30, 120)
 
 # Формулировки площадок, при которых повтор не имеет смысла.
 _PERMANENT = ("не настроен", "not configured", "нет токена", "blocked_by_api",
-              "invalid_token", "oauth", "permission", "unsupported", "не поддерж")
+              "invalid_token", "oauth", "permission", "unsupported", "не поддерж",
+              # Отсутствие сценария или самого браузера не «пройдёт само»: повторять
+              # это пять раз — впустую жечь время и мусорить в журнале.
+              "нет браузерного сценария", "нет ни пк-агента")
 
 
 def _is_permanent(res: dict) -> bool:
