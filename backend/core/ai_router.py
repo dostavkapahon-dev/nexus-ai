@@ -277,6 +277,41 @@ def estimate_cost(ai_mode: str, posts_per_day: int, days: int) -> float:
     return round(total_tokens / 1000 * avg_cost, 2)
 
 
+async def pick_model(role: str, default: str = "", mode: str = "") -> str:
+    """Модель для роли с учётом режима экономии.
+
+    Раньше переключатель `ai_mode` в профиле ни на что не влиял: агенты брали модель
+    только из prompt_store. Теперь economy/premium реально выбирает набор моделей,
+    а явно заданная пользователем модель (кастомный промпт) остаётся приоритетнее.
+    """
+    if not mode:
+        try:
+            from database.db import AsyncSessionLocal
+            from database.models import UserProfile
+            from sqlalchemy import select as _select
+            async with AsyncSessionLocal() as db:
+                r = await db.execute(_select(UserProfile).limit(1))
+                prof = r.scalar_one_or_none()
+            mode = (prof.ai_mode if prof else "") or "economy"
+        except Exception:
+            mode = "economy"
+    table = PREMIUM_MODELS if mode == "premium" else ECONOMY_MODELS
+    return table.get(role) or default or ECONOMY_MODELS.get(role, "gemini-2.0-flash")
+
+
+async def _track(model: str, tokens: int, cost: float, status: str,
+                 duration: float, error: str = ""):
+    """Запись расхода. Никогда не мешает основному вызову — учёт вторичен."""
+    try:
+        from core.cost_tracker import record, maybe_alert
+        await record(model=model, tokens=tokens, cost=cost, status=status,
+                     duration=duration, error=error)
+        if status == "success" and cost > 0:
+            await maybe_alert()
+    except Exception:
+        pass
+
+
 class AIRouter:
     async def _call_claude(self, model, system, prompt):
         client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -308,7 +343,15 @@ class AIRouter:
             resp = await asyncio.to_thread(m.generate_content, prompt)
             model = alt
         text = resp.text
-        tokens = len(text.split()) * 2
+        # Точный счётчик от SDK, если он есть; эвристика — только как запасной путь.
+        tokens = 0
+        try:
+            um = getattr(resp, "usage_metadata", None)
+            tokens = int(getattr(um, "total_token_count", 0) or 0)
+        except Exception:
+            tokens = 0
+        if not tokens:
+            tokens = len(text.split()) * 2
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.0001), "model_used": model}
 
     async def _call_perplexity(self, model, system, prompt):
@@ -376,10 +419,15 @@ class AIRouter:
                     else:
                         result = await self._call_gemini(m, system, prompt)
                     result["duration_sec"] = round(time.time() - t0, 2)
+                    # Единая касса: расход пишется здесь, поэтому под учётом
+                    # оказывается КАЖДЫЙ вызов модели, кто бы его ни инициировал.
+                    await _track(result.get("model_used", m), result.get("tokens", 0),
+                                 result.get("cost", 0.0), "success", result["duration_sec"])
                     return result
                 except Exception as e:
                     last_error = e
                     errors[m] = f"{type(e).__name__}: {str(e)[:180]}"
+                    await _track(m, 0, 0.0, "error", 0.0, error=str(e)[:300])
                     # Квота/недоступная модель — повторять бессмысленно, идём к следующей.
                     if any(s in str(e).lower() for s in
                            ("insufficient_quota", "resource_exhausted", "429", "not found", "unsupported", "deprecat")):

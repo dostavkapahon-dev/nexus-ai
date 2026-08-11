@@ -105,6 +105,11 @@ export const tasks = {
   cancel: (id) => api.post(`/tasks/${id}/cancel`),
 }
 
+export const cost = {
+  get: (hours = 24) => api.get('/cost', { params: { hours } }),
+  setBudget: (budget_usd_day) => api.post('/cost/budget', { budget_usd_day }),
+}
+
 export const control = {
   command: (text) => api.post('/control/command', { text }),
   feed: (limit = 40) => api.get('/control/feed', { params: { limit } }),

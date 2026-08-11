@@ -64,9 +64,11 @@ async def get_prompt(db: AsyncSession, agent_name: str) -> dict:
         return {
             "system": custom.system_prompt or default.get("system", ""),
             "template": custom.user_prompt_template or default.get("template", ""),
-            "model": custom.ai_model or default.get("model", "claude-sonnet-4-20250514")
+            "model": custom.ai_model or default.get("model", "claude-sonnet-4-20250514"),
+            # Явный выбор пользователя — приоритетнее режима economy/premium.
+            "custom_model": bool(custom.ai_model),
         }
-    return default
+    return {**default, "custom_model": False}
 
 async def save_prompt(db: AsyncSession, agent_name: str, system_prompt: str, user_prompt_template: str, ai_model: str):
     result = await db.execute(select(CustomPrompt).where(CustomPrompt.agent_name == agent_name))

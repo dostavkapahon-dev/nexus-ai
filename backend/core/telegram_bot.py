@@ -63,6 +63,7 @@ async def setup_bot_commands():
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
+        {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "pc", "description": "Статус ПК (браузер-агент)"},
         {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
@@ -168,6 +169,27 @@ async def _dispatch_command(chat_id: str, text: str):
     # убираем @botusername из команды (в группах Telegram добавляет его)
     cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
+
+    if cmd == "cost":
+        from core.cost_tracker import budget_status, by_model, by_agent
+        st = await budget_status()
+        bar = "🛑" if st["exceeded"] else ("⚠️" if st["alert"] else "✅")
+        lines = [f"{bar} <b>Расходы на AI за сутки</b>",
+                 f"Потрачено: <b>${st['cost_usd']:.4f}</b> из ${st['limit_usd']:.2f} ({st['used_pct']}%)",
+                 f"Вызовов: {st['calls']} · токенов: {st['tokens']}"]
+        models = await by_model(24, 5)
+        if models:
+            lines += ["", "<b>По моделям:</b>"]
+            for m in models:
+                lines.append(f"• {m['model']}: ${m['cost_usd']:.4f} ({m['calls']} выз.)")
+        agents = await by_agent(24, 5)
+        if agents:
+            lines += ["", "<b>По агентам:</b>"]
+            for a in agents:
+                lines.append(f"• {a['agent']}: ${a['cost_usd']:.4f} ({a['calls']} выз.)")
+        lines.append("\nЛимит меняется в дашборде → Расходы")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
 
     if cmd == "tasks":
         from core.task_manager import list_tasks, STATUS_EMOJI

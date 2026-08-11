@@ -31,7 +31,7 @@ API-ключи выживают только потому, что продубл
 | # | Блок | Статус | Комментарий |
 |---|---|---|---|
 | 01 | Core / Orchestrator | 🟢 | **BLOCK 01 выполнен:** система задач (id, статусы, retry, шаги, восстановление после рестарта), alembic, Postgres-совместимость |
-| 02 | AI Provider Layer | 🟢 | Единый `ai_router.call`, 6 free + 5 платных, фолбэк-цепочка, backoff |
+| 02 | AI Provider Layer | 🟢 | **BLOCK 02 выполнен:** единая касса расходов (все вызовы), бюджет с алертами, реальный `ai_mode`, точные токены Gemini |
 | 03 | Social Connectors | 🟡 | Нет интерфейса `SocialConnector`, нет OAuth/refresh/webhooks/rate-limit |
 | 04 | Social Analytics | 🟡 | Чтение есть, но результаты **нигде не сохраняются** |
 | 05 | Market / Competitor Research | 🟡 | `viral_research` + duckduckgo + `/hunt`; результат только в `viral_recipe` |
@@ -51,8 +51,8 @@ API-ключи выживают только потому, что продубл
 | ✅ | ~~`gemini-1.5-flash`~~ → `gemini-2.0-flash` | `core/prompt_store.py` |
 | 🔴 | `FunnelAgent` не вызывается ниоткуда — мёртвый код | `agents/funnel_agent.py` |
 | ✅ | `publish_youtube_short` — честный `blocked_by_api` + причина | `publishers/youtube_pub.py` |
-| 🟡 | `ai_mode` (economy/premium) — фикция, агенты его не читают | `core/orchestrator.py:54` |
-| 🟡 | Расходы «мимо кассы»: логируется только `BaseAgent` (BLOCK 02) | `agents/base_agent.py` |
+| ✅ | ~~Расходы «мимо кассы»~~ → запись в `ai_router`, под учётом каждый вызов | `core/cost_tracker.py` |
+| ✅ | ~~`ai_mode` — фикция~~ → `pick_model` реально выбирает economy/premium | `core/ai_router.py` |
 | ✅ | ~~`log()` коммитил чужие изменения~~ → отдельная сессия | `agents/base_agent.py` |
 | 🟡 | Секреты plaintext в БД и в `os.environ` всего процесса | `api/routes_settings.py:80-94` |
 | 🟡 | Гонки при read-modify-write KV `Connection` без блокировки | `core/command_center.py`, `core/moderation.py` |

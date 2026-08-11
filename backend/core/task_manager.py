@@ -118,6 +118,11 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
     started = datetime.utcnow()
     await _patch(task_id, status=RUNNING, started_at=started)
 
+    # Все вызовы моделей внутри этой задачи сами попадут в её расход:
+    # ai_router читает id из контекста, менять вызывающий код не нужно.
+    from core.cost_tracker import current_task_id
+    token = current_task_id.set(task_id)
+
     last_error = ""
     for attempt in range(1, max(1, max_attempts) + 1):
         await _patch(task_id, attempts=attempt)
@@ -127,6 +132,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
             await _patch(task_id, status=COMPLETED, finished_at=finished,
                          duration_sec=round((finished - started).total_seconds(), 2),
                          result=_safe_result(result), error=None)
+            current_task_id.reset(token)
             return {"ok": True, "task_id": task_id, "result": result}
         except Exception as e:
             last_error = f"{type(e).__name__}: {e}"
@@ -139,6 +145,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
     await _patch(task_id, status=FAILED, finished_at=finished,
                  duration_sec=round((finished - started).total_seconds(), 2),
                  error=last_error[:2000])
+    current_task_id.reset(token)
     return {"ok": False, "task_id": task_id, "error": last_error}
 
 

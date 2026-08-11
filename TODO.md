@@ -28,11 +28,15 @@
 - [x] 8 тестов (`tests/test_tasks.py`), всего 145 passed
 - [ ] Развилка двух «голов»: решено **разделить роли явно** — зафиксировать в докстрингах
 
-## BLOCK 02 — COST CONTROL
-- [ ] Единая обёртка над `ai_router.call` — расход пишется всегда, с `task_id`
-- [ ] Бюджет в `UserProfile` + алерт в Telegram (80 %) и стоп (100 %)
-- [ ] Сделать `ai_mode` (economy/premium) реально влияющим на выбор модели
-- [ ] Точный подсчёт токенов там, где провайдер отдаёт `usage`
+## BLOCK 02 — COST CONTROL ✅ ВЫПОЛНЕН
+- [x] Запись расхода внутри `ai_router.call` — под учётом каждый вызов, с привязкой
+      к задаче/агенту/нише через contextvar
+- [x] `UserProfile.budget_usd_day` (миграция) + алерты в Telegram на 80 % и 100 %
+- [x] `pick_model()` — `ai_mode` реально выбирает ECONOMY/PREMIUM (кастомная модель приоритетнее)
+- [x] Точные токены Gemini через `usage_metadata` (была эвристика)
+- [x] `/api/cost`, `/cost` в Telegram, страница «Расходы» в дашборде
+- [x] 8 тестов (`tests/test_cost.py`), всего 153 passed
+- [ ] Жёсткий стоп платных моделей при превышении — осознанно отложено
 
 ## BLOCK 03 — SOCIAL CONNECTORS
 - [ ] Базовый класс `SocialConnector` (publish / read_profile / read_posts / health / refresh)
