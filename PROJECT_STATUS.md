@@ -49,7 +49,7 @@ API-ключи выживают только потому, что продубл
 |---|---|---|
 | 🟡 | БД эфемерна, пока не задан `DATABASE_URL` (код готов, нужен Supabase) | `render.yaml` |
 | ✅ | ~~`gemini-1.5-flash`~~ → `gemini-2.0-flash` | `core/prompt_store.py` |
-| 🔴 | `FunnelAgent` не вызывается ниоткуда — мёртвый код | `agents/funnel_agent.py` |
+| ✅ | ~~`FunnelAgent` — мёртвый код~~ → подключён к комментариям Instagram | `core/engagement.py` |
 | ✅ | `publish_youtube_short` — честный `blocked_by_api` + причина | `publishers/youtube_pub.py` |
 | ✅ | ~~Расходы «мимо кассы»~~ → запись в `ai_router`, под учётом каждый вызов | `core/cost_tracker.py` |
 | ✅ | ~~`ai_mode` — фикция~~ → `pick_model` реально выбирает economy/premium | `core/ai_router.py` |

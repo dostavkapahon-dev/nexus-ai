@@ -16,7 +16,7 @@
 - [x] `publishers/youtube_pub.py` — честный `blocked_by_api` с причиной
 - [x] `frontend/src/App.jsx` — `Analytics` возвращена в навигацию
 - [x] `agents/base_agent.py` — лог в отдельной сессии (не коммитит чужие изменения)
-- [ ] `agents/funnel_agent.py` — подключить к обработке комментариев **или** удалить (BLOCK 07)
+- [x] `agents/funnel_agent.py` — подключён к обработке комментариев (BLOCK 07)
 - [ ] `core/social_intel.py` — убрать 4 устаревших упоминания Ayrshare в комментариях
 
 ## BLOCK 01 — TASK SYSTEM ✅ ВЫПОЛНЕН

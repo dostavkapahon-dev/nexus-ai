@@ -144,6 +144,54 @@ class InstagramConnector(SocialConnector):
         except Exception as e:
             return {"ok": False, "error": str(e)[:200]}
 
+    # ── комментарии ────────────────────────────────────────────────────────
+    async def read_comments(self, limit: int = 20) -> dict:
+        """Комментарии под последними постами — вход для воронки продаж.
+
+        Нужно право instagram_manage_comments; без него Meta вернёт ошибку прав.
+        """
+        if not self.configured():
+            return {"ok": False, "error": "не задан токен Instagram"}
+        try:
+            media = await self._get(f"{self._account_id()}/media",
+                                    {"fields": "id,permalink,caption", "limit": 5})
+            if media.get("error"):
+                return {"ok": False, "error": media["error"].get("message", "")[:200]}
+
+            out = []
+            for m in (media.get("data") or [])[:5]:
+                res = await self._get(f"{m['id']}/comments",
+                                      {"fields": "id,text,username,timestamp,like_count",
+                                       "limit": limit})
+                if res.get("error"):
+                    continue
+                for c in (res.get("data") or []):
+                    out.append({"id": c.get("id"), "text": c.get("text", ""),
+                                "author": c.get("username", ""),
+                                "created_at": c.get("timestamp"),
+                                "likes": c.get("like_count", 0),
+                                "post_id": m["id"], "post_url": m.get("permalink")})
+            return {"ok": True, "platform": self.platform, "comments": out[:limit]}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
+    async def reply_comment(self, comment_id: str, text: str) -> dict:
+        """Ответ на комментарий. Публикуется только после согласования."""
+        if not self.configured():
+            return {"ok": False, "error": "не задан токен Instagram"}
+        try:
+            await self.limiter.acquire()
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(f"{GRAPH}/{comment_id}/replies",
+                                 params={"message": text[:1000],
+                                         "access_token": self._token()})
+                d = r.json()
+            if d.get("error"):
+                return {"ok": False, "error": d["error"].get("message", "")[:200]}
+            return {"ok": True, "reply_id": d.get("id")}
+        except Exception as e:
+            return {"ok": False, "error": str(e)[:200]}
+
     # ── публикация ─────────────────────────────────────────────────────────
     async def publish(self, text: str, image_url: str = "", video_url: str = "") -> dict:
         if not self.configured():

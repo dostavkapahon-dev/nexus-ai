@@ -79,6 +79,19 @@ class SocialConnector(ABC):
     async def publish(self, text: str, image_url: str = "", video_url: str = "") -> dict:
         """Публикация. Возврат: {ok, post_id?, post_url?, via, error?, blocked_by_api?}"""
 
+    # ── комментарии ────────────────────────────────────────────────────────
+    async def read_comments(self, limit: int = 20) -> dict:
+        """Свежие комментарии под последними постами.
+
+        По умолчанию площадка этого не умеет — не выдаём отсутствие за ошибку.
+        """
+        return {"ok": False, "supported": False,
+                "error": f"{self.platform}: чтение комментариев не поддерживается"}
+
+    async def reply_comment(self, comment_id: str, text: str) -> dict:
+        return {"ok": False, "supported": False,
+                "error": f"{self.platform}: ответы на комментарии не поддерживаются"}
+
     # ── токены ─────────────────────────────────────────────────────────────
     async def refresh_token(self) -> dict:
         """Продление токена. По умолчанию площадка этого не требует."""

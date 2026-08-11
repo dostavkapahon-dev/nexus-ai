@@ -213,6 +213,16 @@ async def run_metrics_collection():
     return {**res, "learned": learned}
 
 
+async def run_comments_processing():
+    """Разбирает новые комментарии и готовит ответы на согласование.
+
+    Автоотправка выключена намеренно: ответ от лица бренда — слишком дорогая
+    ошибка, чтобы публиковать его без подтверждения человека.
+    """
+    from core.engagement import process_comments
+    return await process_comments("instagram", limit=10, auto_send=False)
+
+
 async def run_competitor_tracking():
     """Еженедельный срез метрик конкурентов — по нему видно динамику ниши."""
     from core.research_store import refresh_all
@@ -300,6 +310,10 @@ def start_scheduler():
     _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
                        CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
+    # Каждые 4 часа — разбор комментариев (ответы уходят на согласование)
+    _scheduler.add_job(_tracked("comments", "Разбор комментариев", run_comments_processing),
+                       CronTrigger(hour="10,14,18,22", minute=15),
+                       id="comments", replace_existing=True)
     # Понедельник 07:00 — срез метрик конкурентов
     _scheduler.add_job(_tracked("competitors", "Срез метрик конкурентов", run_competitor_tracking),
                        CronTrigger(day_of_week="mon", hour=7, minute=0),

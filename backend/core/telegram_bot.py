@@ -66,6 +66,7 @@ async def setup_bot_commands():
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "strategies", "description": "Стратегии: версии и результат"},
+        {"command": "comments", "description": "Комментарии: подготовленные ответы"},
         {"command": "pc", "description": "Статус ПК (браузер-агент)"},
         {"command": "do", "description": "Выполнить задачу в браузере на ПК"},
         {"command": "status", "description": "Статус системы"},
@@ -171,6 +172,39 @@ async def _dispatch_command(chat_id: str, text: str):
     # убираем @botusername из команды (в группах Telegram добавляет его)
     cmd = cmd.split("@")[0]
     args = text.strip().split()[1:]
+
+    if cmd in ("comments", "reply_all", "reply_discard"):
+        from core.engagement import pending, approve_all, discard_pending, process_comments
+        if cmd == "reply_all":
+            res = await approve_all()
+            msg = f"✅ Отправлено ответов: {res.get('sent', 0)} из {res.get('total', 0)}"
+            if res.get("failed"):
+                msg += "\n⚠️ Не ушли:\n" + "\n".join(res["failed"][:5])
+            await send_message(chat_id, msg)
+            return
+        if cmd == "reply_discard":
+            n = await discard_pending()
+            await send_message(chat_id, f"🗑 Отклонено ответов: {n}")
+            return
+
+        items = await pending()
+        if not items:
+            await send_message(chat_id, "💬 Готовых ответов нет. Ищу новые комментарии...")
+            res = await process_comments("instagram", limit=10)
+            if not res.get("pending_approval"):
+                await send_message(chat_id,
+                    f"Новых комментариев для ответа нет "
+                    f"(разобрано: {res.get('processed', 0)}, пропущено: {res.get('skipped', 0)}).")
+            return
+
+        lines = [f"💬 <b>Ответы на согласовании: {len(items)}</b>", ""]
+        for i, p in enumerate(items[:8], 1):
+            lines.append(f"<b>{i}. @{p['author']}</b> ({p.get('intent') or 'вопрос'})")
+            lines.append(f"   «{p['text'][:120]}»")
+            lines.append(f"   → {p['reply'][:200]}\n")
+        lines.append("Отправить все: /reply_all · Отклонить: /reply_discard")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
 
     if cmd == "strategies":
         from core.strategy_store import effectiveness, current as cur_strategy
