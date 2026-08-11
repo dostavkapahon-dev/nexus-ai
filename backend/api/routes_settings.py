@@ -26,6 +26,12 @@ class ConnectionsBody(BaseModel):
     telegram_post_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
+    # Приложение Meta для подключения Instagram в один клик. Без этих трёх полей
+    # OAuth-кнопка не работала, а вписать их в дашборде было некуда — оставался
+    # только ручной путь через Graph API Explorer.
+    facebook_app_id: Optional[str] = None
+    facebook_app_secret: Optional[str] = None
+    nexus_public_url: Optional[str] = None
     tiktok_access_token: Optional[str] = None
     brightdata_api_key: Optional[str] = None
     ig_handle: Optional[str] = None
