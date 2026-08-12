@@ -14,8 +14,7 @@ from datetime import datetime, timedelta
 import httpx
 
 from connectors.base import SocialConnector
-
-GRAPH = "https://graph.facebook.com/v19.0"
+from connectors import ig_api
 
 # Права, без которых работать не получится.
 NEEDED_SCOPES = ("instagram_basic", "instagram_manage_insights",
@@ -30,15 +29,22 @@ class InstagramConnector(SocialConnector):
 
     # ── служебное ──────────────────────────────────────────────────────────
     def _token(self) -> str:
-        return os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+        return ig_api.token()
 
     def _account_id(self) -> str:
-        return os.getenv("INSTAGRAM_ACCOUNT_ID", "").strip()
+        return ig_api.account_id()
+
+    def configured(self) -> bool:
+        """У Instagram Login числовой id не нужен — аккаунт адресуется как `me`."""
+        return ig_api.configured()
+
+    def missing_env(self) -> list:
+        return ig_api.missing()
 
     async def _get(self, path: str, params: dict) -> dict:
         await self.limiter.acquire()
         async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(f"{GRAPH}/{path}", params={**params, "access_token": self._token()})
+            r = await c.get(ig_api.url(path), params={**params, "access_token": self._token()})
             return r.json()
 
     # ── состояние токена ───────────────────────────────────────────────────
@@ -49,6 +55,9 @@ class InstagramConnector(SocialConnector):
         if not self.configured():
             return {**out, "ok": False,
                     "error": "не заданы " + ", ".join(self.missing_env())}
+        if ig_api.is_instagram_login():
+            return await self._health_instagram_login(out)
+
         try:
             data = await self._get("debug_token", {"input_token": self._token()})
             info = (data or {}).get("data") or {}
@@ -94,7 +103,7 @@ class InstagramConnector(SocialConnector):
         значит не продлить вовсе: через 60 дней публикация встанет без внятной
         причины. Тип запоминается при подключении (`core/ig_connect.py`).
         """
-        if os.getenv("INSTAGRAM_TOKEN_TYPE", "").strip().lower() == "instagram":
+        if ig_api.is_instagram_login():
             return await self._refresh_instagram_login()
 
         app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
@@ -107,7 +116,7 @@ class InstagramConnector(SocialConnector):
             return {"ok": False, "refreshed": False, "error": "нет текущего токена"}
         try:
             async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.get(f"{GRAPH}/oauth/access_token", params={
+                r = await c.get(f"{ig_api.GRAPH_FB}/oauth/access_token", params={
                     "grant_type": "fb_exchange_token",
                     "client_id": app_id,
                     "client_secret": app_secret,
@@ -129,6 +138,33 @@ class InstagramConnector(SocialConnector):
                     if expires_in else "бессрочный"}
         except Exception as e:
             return {"ok": False, "refreshed": False, "error": str(e)[:200]}
+
+    async def _health_instagram_login(self, out: dict) -> dict:
+        """Проверка токена Instagram Login.
+
+        `debug_token` для него недоступен — это эндпоинт приложения Facebook.
+        Поэтому проверяем самым надёжным способом: спрашиваем аккаунт о себе.
+        Ответил — токен живой; права проверить нечем, они заданы при выдаче.
+        """
+        try:
+            data = await self._get("me", {"fields": ig_api.profile_fields()})
+            if data.get("error"):
+                msg = (data["error"].get("message") or "")[:200]
+                return {**out, "ok": False, "error": msg,
+                        "hint": "токен недействителен или истёк — вставьте новый"}
+            return {**out, "ok": True,
+                    "account": data.get("username", ""),
+                    "followers": data.get("followers_count"),
+                    "media_count": data.get("media_count"),
+                    "token_type": "instagram_login",
+                    # Срок не отдаётся в этом ответе; продление идёт джобом в 08:00.
+                    "expires_at": "около 60 дней с момента выдачи",
+                    "days_left": None,
+                    "permissions": [], "missing_permissions": [],
+                    "can_publish": True,
+                    "warning": ""}
+        except Exception as e:
+            return {**out, "ok": False, "error": str(e)[:200]}
 
     async def _refresh_instagram_login(self) -> dict:
         """Продление токена Instagram Login: App Secret не нужен, но есть условия.
@@ -194,7 +230,7 @@ class InstagramConnector(SocialConnector):
         if not self.configured():
             return {"ok": False, "error": "не задан токен Instagram"}
         try:
-            media = await self._get(f"{self._account_id()}/media",
+            media = await self._get(ig_api.me_path("media"),
                                     {"fields": "id,permalink,caption", "limit": 5})
             if media.get("error"):
                 return {"ok": False, "error": media["error"].get("message", "")[:200]}
@@ -223,7 +259,7 @@ class InstagramConnector(SocialConnector):
         try:
             await self.limiter.acquire()
             async with httpx.AsyncClient(timeout=30) as c:
-                r = await c.post(f"{GRAPH}/{comment_id}/replies",
+                r = await c.post(ig_api.url(f"{comment_id}/replies"),
                                  params={"message": text[:1000],
                                          "access_token": self._token()})
                 d = r.json()

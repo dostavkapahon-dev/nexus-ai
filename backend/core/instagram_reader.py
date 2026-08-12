@@ -19,25 +19,26 @@ Business/Creator (обычные приватные профили API не от
 import os
 import httpx
 
-GRAPH = "https://graph.facebook.com/v19.0"
+from connectors import ig_api
 
 
 def _token() -> str:
-    return os.getenv("INSTAGRAM_ACCESS_TOKEN", "").strip()
+    return ig_api.token()
 
 
 def _account_id() -> str:
-    return os.getenv("INSTAGRAM_ACCOUNT_ID", "").strip()
+    return ig_api.account_id()
 
 
 def is_configured() -> bool:
-    return bool(_token() and _account_id())
+    """У Instagram Login числовой id не нужен: аккаунт адресуется как `me`."""
+    return ig_api.configured()
 
 
 async def _get(path: str, params: dict) -> dict:
     params = {**params, "access_token": _token()}
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(f"{GRAPH}/{path}", params=params)
+        r = await c.get(ig_api.url(path), params=params)
         data = r.json()
     if isinstance(data, dict) and data.get("error"):
         raise RuntimeError(data["error"].get("message", "Instagram API error"))
@@ -53,14 +54,14 @@ def _engagement(m: dict) -> int:
 
 async def my_profile() -> dict:
     """Шапка своего аккаунта: username, подписчики, число постов."""
-    return await _get(_account_id(), {"fields": "username,followers_count,media_count,biography"})
+    return await _get(ig_api.node(), {"fields": ig_api.profile_fields()})
 
 
 async def my_media(limit: int = 25) -> list[dict]:
     """Свои посты/Reels с базовыми метриками."""
     fields = ("id,caption,media_type,media_product_type,like_count,comments_count,"
               "timestamp,permalink,thumbnail_url,media_url")
-    data = await _get(f"{_account_id()}/media", {"fields": fields, "limit": limit})
+    data = await _get(ig_api.me_path("media"), {"fields": fields, "limit": limit})
     return data.get("data", []) or []
 
 
@@ -127,10 +128,21 @@ async def analyze_competitor(username: str, top: int = 10) -> dict:
     username = _USERNAME_RE.sub("", username.lstrip("@"))[:30]
     if not username:
         return {"ok": False, "platform": "instagram", "error": "пустой ник"}
+
+    # Business Discovery существует только в Facebook-ветке API: он опирается на
+    # Страницу. С токеном Instagram Login его нет — и это ограничение платформы,
+    # а не сбой. Возвращаем честный отказ, чтобы вызывающий ушёл на бесплатный
+    # путь чтения, а не считал попытку неудачной.
+    if ig_api.is_instagram_login():
+        return {"ok": False, "platform": "instagram", "handle": username,
+                "blocked_by_api": True,
+                "error": "Business Discovery недоступен для токена Instagram Login "
+                         "(IGAA…): он работает только через Страницу Facebook. "
+                         "Конкуренты читаются бесплатным путём — через браузер."}
     bd = (f"business_discovery.username({username})"
           "{username,followers_count,media_count,"
           "media.limit(25){caption,like_count,comments_count,media_type,timestamp,permalink}}")
-    data = await _get(_account_id(), {"fields": bd})
+    data = await _get(ig_api.node(), {"fields": bd})
     disc = data.get("business_discovery") or {}
     media = (disc.get("media") or {}).get("data", []) or []
     ranked = sorted(media, key=_engagement, reverse=True)

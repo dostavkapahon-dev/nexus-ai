@@ -105,15 +105,19 @@ export default function Social() {
         {/* Прямой путь: токен уже получен в панели Meta, OAuth не нужен. */}
         <div className="mt-3 pt-3 border-t border-[#1c1c30]">
           <div className="text-[11px] text-[#9a9ac0] mb-2">
-            Уже есть токен из панели Meta? Вставьте его — система сама определит тип,
-            найдёт Account ID и настроит продление.
+            <b className="text-[#c0c0e0]">Instagram User Access Token</b> — начинается с
+            <code className="mx-1 px-1 rounded bg-[#111120] text-cyan-300">IGAA…</code>
+            Берётся в приложении Meta → Instagram → API setup with Instagram login →
+            Generate token. Страница Facebook для него не нужна.
+            <br />Токен <code className="mx-1 px-1 rounded bg-[#111120] text-cyan-300">EAA…</code>
+            (Страница Facebook) тоже подойдёт — тип определится сам.
           </div>
           <div className="flex gap-2 flex-wrap">
             <input
               value={igToken}
               onChange={(e) => setIgToken(e.target.value)}
               type="password"
-              placeholder="IGAA... или EAA..."
+              placeholder="IGAAxxxxxxxx… (Instagram User Access Token)"
               className="flex-1 min-w-[220px] text-xs px-3 py-2 rounded-lg bg-[#0d0d1a] border border-[#1c1c30] text-[#c0c0e0]"
             />
             <button onClick={connectByToken} disabled={!igToken.trim() || busy === 'token'}
