@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **354 passed** (после вебхуков и прямого подключения Instagram;
+Прогон: `cd backend && python -m pytest -q` → **355 passed** (после вебхуков и прямого подключения Instagram;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам

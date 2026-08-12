@@ -9,9 +9,14 @@ from conftest import TEST_PASSWORD
 
 
 async def test_health(client):
+    """Проверяем по существу, а не точным равенством: эндпоинт задуман растущим
+    (в него добавлена версия сборки), и сравнение целиком ломалось бы на каждом
+    полезном дополнении."""
     r = await client.get("/api/health")
     assert r.status_code == 200
-    assert r.json() == {"ok": True, "service": "nexus-ai"}
+    body = r.json()
+    assert body["ok"] is True
+    assert body["service"] == "nexus-ai"
 
 
 async def test_login_wrong_password(client):

@@ -21,10 +21,12 @@ const fmt = (iso) => (iso ? iso.slice(0, 16).replace('T', ' ') : '—')
 export default function Health() {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [build, setBuild] = useState(null)
 
   const load = async () => {
     setLoading(true)
     try { setData((await system.health()).data) } catch { /* состояние покажет пустой экран */ }
+    try { setBuild((await system.build()).data?.build) } catch { /* не критично */ }
     setLoading(false)
   }
 
@@ -62,6 +64,12 @@ export default function Health() {
             <span className="text-[11px] font-normal opacity-70 ml-2">
               обновлено {fmt(data.generated_at)} UTC
             </span>
+            {build && (
+              // Без версии нельзя отличить «не исправлено» от «не задеплоено».
+              <span className="text-[11px] font-normal opacity-70 ml-2">
+                · сборка <code>{build.commit}</code> · запущена {fmt(build.started_at)}
+              </span>
+            )}
           </div>
 
           {data.ai && !data.ai.available && (

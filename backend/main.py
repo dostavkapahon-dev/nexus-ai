@@ -138,8 +138,13 @@ app.include_router(desktop_router)
 @app.get("/api/health")
 async def health():
     """Лёгкий health-эндпоинт для внешней «пробуждалки» (UptimeRobot и т.п.),
-    чтобы бесплатный Render не засыпал и Telegram-бот не замолкал."""
-    return {"ok": True, "service": "nexus-ai"}
+    чтобы бесплатный Render не засыпал и Telegram-бот не замолкал.
+
+    Отдаёт версию запущенного кода: без неё нельзя отличить «ошибка не исправлена»
+    от «исправление ещё не задеплоено», и починка уходит в гадание.
+    """
+    from core.version import build_info
+    return {"ok": True, "service": "nexus-ai", "build": build_info()}
 
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):

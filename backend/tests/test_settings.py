@@ -84,3 +84,13 @@ async def test_connections_test_works_without_free_provider_keys(auth_client):
     body = r.json()
     assert "httpx" not in str(body)          # никакого UnboundLocalError
     assert "telegram_bot_token" in body      # проверка реально дошла до площадки
+
+
+@pytest.mark.asyncio
+async def test_health_reports_running_build(client):
+    """Несколько раз подряд ошибка на проде оказывалась уже исправленной в коде —
+    Render крутил старую сборку, а понять это было нечем."""
+    r = await client.get("/api/health")
+    build = r.json()["build"]
+    assert build["commit"]                     # либо коммит, либо честное «неизвестно»
+    assert build["started_at"]

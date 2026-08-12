@@ -147,6 +147,7 @@ export const cost = {
 
 export const system = {
   health: () => api.get('/system/health'),
+  build: () => api.get('/health'),
   agents: (hours = 24) => api.get('/system/agents', { params: { hours } }),
   scheduler: () => api.get('/system/scheduler'),
 }
