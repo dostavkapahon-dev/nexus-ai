@@ -320,3 +320,29 @@ async def test_truly_dead_token_still_rejected(client, routes):
     res = await ic.connect(PAGE_TOKEN)
     assert res["ok"] is False
     assert "новый" in res["error"]
+
+
+def test_fingerprint_never_leaks_the_token():
+    """Приметы нужны для диагностики, но сам секрет в них попадать не должен."""
+    token = "IGAA" + "S3CR3T" * 30
+    fp = ic.fingerprint(token)
+    assert "S3CR3TS3CR3T" not in fp          # тела токена нет
+    assert str(len(token)) in fp             # длина есть
+    assert fp.startswith("начинается с «IGAAS3CR")
+
+
+def test_fingerprint_flags_short_string():
+    assert "подозрительно коротко" in ic.fingerprint("IGAA" + "x" * 60)
+    assert "подозрительно коротко" not in ic.fingerprint("IGAA" + "x" * 200)
+
+
+@pytest.mark.asyncio
+async def test_rejection_includes_fingerprint(client, routes):
+    """«Meta не приняла токен» одинаково для обрезанной строки, чужого приложения
+    и просрочки — приметы позволяют различить это без переписки."""
+    routes["routes"] = {"graph.instagram.com/me": {"error": {"message": "invalid"}},
+                        "me/accounts": {"error": {"message": "invalid"}},
+                        "/me": {"error": {"message": "Cannot parse access token"}}}
+    res = await ic.connect("IGAA" + "z" * 120)
+    assert res["ok"] is False
+    assert "длина 124" in res["token_looks_like"]

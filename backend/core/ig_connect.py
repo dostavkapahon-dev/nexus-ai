@@ -102,6 +102,21 @@ def clean_token(raw: str) -> str:
     return "".join(t.split())
 
 
+def fingerprint(token: str) -> str:
+    """Безопасные приметы строки: длина и начало, без самого секрета.
+
+    Настоящий токен Instagram Login — обычно 150–250 символов. Если пришло
+    заметно меньше, строка почти наверняка обрезана при копировании, и это
+    видно сразу — не нужно просить прислать токен (чего делать нельзя).
+    """
+    if not token:
+        return "пусто"
+    hint = ""
+    if len(token) < 100:
+        hint = " — подозрительно коротко, обычно 150–250"
+    return f"начинается с «{token[:8]}», длина {len(token)}{hint}"
+
+
 def diagnose(token: str) -> str | None:
     """Ищет заведомо не-токен и называет вещь своим именем.
 
@@ -142,10 +157,14 @@ async def connect(token: str, account_id: str = "") -> dict:
 
     detected = await _try_instagram(token) or await _try_facebook(token)
     if not detected:
+        # Приметы строки — без самого токена: по ним видно, дошла ли она целиком.
+        # Иначе «Meta не приняла токен» одинаково для обрезанной строки, чужого
+        # приложения и просроченного токена, и разбираться приходится перепиской.
         return {"ok": False,
-                "error": "Meta не приняла токен: он неверный, истёк или выдан "
-                         "для другого приложения. Сгенерируйте новый в панели Meta "
-                         "и скопируйте кнопкой «Copy» целиком."}
+                "error": "Meta не приняла токен: он неверный, истёк, отозван или "
+                         "выдан для другого приложения. Сгенерируйте новый в панели "
+                         "Meta и скопируйте кнопкой «Copy» целиком.",
+                "token_looks_like": fingerprint(token)}
 
     resolved = account_id.strip() or detected.get("account_id", "")
     if not resolved:

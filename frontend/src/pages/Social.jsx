@@ -129,7 +129,7 @@ export default function Social() {
             <div className={`mt-2 text-xs ${igResult.ok ? 'text-green-400' : 'text-amber-400'}`}>
               {igResult.ok
                 ? `Подключено${igResult.username ? ' @' + igResult.username : ''} · ID ${igResult.account_id} · ${igResult.note}`
-                : igResult.error}
+                : `${igResult.error}${igResult.token_looks_like ? ' · вставленная строка: ' + igResult.token_looks_like : ''}`}
             </div>
           )}
         </div>
