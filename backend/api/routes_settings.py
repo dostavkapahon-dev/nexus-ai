@@ -34,6 +34,7 @@ class ConnectionsBody(BaseModel):
     nexus_public_url: Optional[str] = None
     # Cookies площадок для публикации через браузер без API-ключей. Принимается
     # как экспорт расширения (массив), так и storage_state Playwright.
+    instagram_verify_token: Optional[str] = None   # подтверждение подписки на вебхуки
     nexus_browser_storage_state: Optional[str] = None
     nexus_publish_mode: Optional[str] = None
     nexus_browser_cdp: Optional[str] = None

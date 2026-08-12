@@ -3,8 +3,9 @@
 Защищено auth на уровне main.py (кроме OAuth-callback — он приходит извне).
 """
 import os
+import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
@@ -81,6 +82,51 @@ async def social_read_profile(platform: str):
 def _redirect_uri() -> str:
     base = (os.getenv("RENDER_EXTERNAL_URL", "") or os.getenv("NEXUS_PUBLIC_URL", "")).rstrip("/")
     return f"{base}/api/social/oauth/callback" if base else ""
+
+
+@public_router.get("/webhook/instagram")
+async def webhook_verify(request: Request):
+    """Подтверждение подписки. Meta зовёт этот адрес из своей инфраструктуры,
+    без нашей авторизации — поэтому роут публичный, а защита в токене."""
+    from fastapi.responses import PlainTextResponse
+    from core.webhooks import check_subscription
+
+    q = request.query_params
+    ok, payload = check_subscription(q.get("hub.mode", ""), q.get("hub.verify_token", ""),
+                                     q.get("hub.challenge", ""))
+    if not ok:
+        return PlainTextResponse(payload, status_code=403)
+    # Meta ждёт ровно challenge текстом, без кавычек и JSON-обёртки.
+    return PlainTextResponse(payload)
+
+
+@public_router.post("/webhook/instagram")
+async def webhook_receive(request: Request):
+    """Приём событий (комментарии, упоминания) с проверкой подписи приложения."""
+    from fastapi.responses import JSONResponse
+    from core.webhooks import check_signature, handle_events
+
+    body = await request.body()
+    if not check_signature(body, request.headers.get("X-Hub-Signature-256", "")):
+        # Публичный эндпоинт: без валидной подписи запрос мог прислать кто угодно.
+        return JSONResponse({"error": "подпись не совпала"}, status_code=403)
+
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        return JSONResponse({"error": "тело не JSON"}, status_code=400)
+
+    result = await handle_events(payload)
+    # Meta повторяет доставку при любом ответе, кроме 200, и отключает подписку
+    # после серии неудач — поэтому отвечаем 200 даже на внутренний сбой.
+    return JSONResponse(result, status_code=200)
+
+
+@router.get("/webhook/events")
+async def webhook_events(limit: int = 20):
+    """Последние принятые события — видно, доходят ли вебхуки вообще."""
+    from core.webhooks import recent_events, verify_token
+    return {"configured": bool(verify_token()), "events": await recent_events(limit)}
 
 
 @router.get("/browser/session")
