@@ -62,7 +62,6 @@ def normalize_mood(tone: str | None) -> str:
 
 async def add_track_from_url(url: str, mood: str = "universal", name: str = None) -> dict:
     """Скачивает трек по прямой ссылке в библиотеку и проставляет тег настроения."""
-    import json
     import httpx
     os.makedirs(MUSIC_DIR, exist_ok=True)
     fname = name or os.path.basename(url.split("?")[0]) or "track.mp3"

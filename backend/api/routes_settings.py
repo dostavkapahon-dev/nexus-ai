@@ -136,7 +136,6 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
         if not (k := resolve(field)):
             continue
         try:
-            import httpx
             url = _spec["base_url"] + _spec.get("models_path", "/models")
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.get(url, headers={"Authorization": f"Bearer {k}"})
@@ -280,7 +279,6 @@ async def social_intelligence(body: SocialAnalyticsBody):
 
 def _probe_openai_compatible(base_url: str, key: str, models_path: str = "/models") -> dict:
     """Дёргает каталог моделей у OpenAI-совместимого провайдера."""
-    import httpx
     try:
         r = httpx.get(base_url.rstrip("/") + models_path,
                       headers={"Authorization": f"Bearer {key}"}, timeout=20)

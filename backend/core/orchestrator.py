@@ -230,7 +230,7 @@ class NexusCore:
         где есть токен, и браузерного агента как fallback. Возвращает отчёт.
         """
         async with AsyncSessionLocal() as db:
-            from database.models import Publication, GeneratedContent
+            from database.models import Publication
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
             plan = result.scalar_one_or_none()
             if not plan:

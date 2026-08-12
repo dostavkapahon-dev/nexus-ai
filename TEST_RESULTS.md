@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **335 passed** (после вебхуков и прямого подключения Instagram;
+Прогон: `cd backend && python -m pytest -q` → **336 passed** (после вебхуков и прямого подключения Instagram;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -12,7 +12,7 @@
 | Dispatch / делегирование | 01 | `tests/test_dispatch.py` | 18 | 🟢 PASS |
 | Auth + health | 12 | `tests/test_auth.py` | 14 | 🟢 PASS |
 | Ниши (CRUD + pipeline) | 01 | `tests/test_niches.py` | 10 | 🟢 PASS |
-| Настройки / ключи | 12 | `tests/test_settings.py` | 9 | 🟢 PASS |
+| Настройки / ключи | 12 | `tests/test_settings.py` | 10 | 🟢 PASS |
 | Отчёт фабрики | 09 | `tests/test_factory_report.py` | 6 | 🟢 PASS |
 | Конвейер и журнал шагов | 09 | `tests/test_pipeline.py` | 4 | 🟢 PASS |
 | Очередь публикаций и повторы | 10 | `tests/test_publish_queue.py` | 10 | 🟢 PASS |

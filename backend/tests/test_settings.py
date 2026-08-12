@@ -67,3 +67,20 @@ async def test_bot_status_reports_missing_token(auth_client):
     r = await auth_client.get("/api/bot/status")
     assert r.status_code == 200
     assert "ok" in r.json() or "configured" in r.json() or r.json()
+
+
+@pytest.mark.asyncio
+async def test_connections_test_works_without_free_provider_keys(auth_client):
+    """Найдено пользователем: «cannot access local variable 'httpx'».
+
+    Внутри функции стоял `import httpx` в цикле по бесплатным провайдерам.
+    Локальный import делает имя локальным для ВСЕГО тела функции, поэтому если
+    цикл не сделал ни одной итерации (ключей нет), любое обращение к httpx ниже
+    падало с UnboundLocalError — проверка подключений не работала вовсе.
+    """
+    r = await auth_client.post("/api/connections/test",
+                               json={"telegram_bot_token": "123:fake"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "httpx" not in str(body)          # никакого UnboundLocalError
+    assert "telegram_bot_token" in body      # проверка реально дошла до площадки
