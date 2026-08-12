@@ -67,6 +67,11 @@ def routes(monkeypatch):
     return state
 
 
+# Токены в тестах должны быть правдоподобной длины: проверка вставленной строки
+# отклоняет короткие, и это правильное поведение — заглушки под него подстраиваем.
+IG_TOKEN = "IGAA" + "x" * 120
+FB_TOKEN = "EAA" + "y" * 120
+
 IG_LOGIN_OK = {"id": "17841400999", "username": "pahon_ai"}
 FB_PAGES_OK = {"data": [{"name": "Pakhon Studio",
                          "instagram_business_account": {"id": "17841400111"}}]}
@@ -75,7 +80,7 @@ FB_PAGES_OK = {"data": [{"name": "Pakhon Studio",
 @pytest.mark.asyncio
 async def test_instagram_login_token_is_detected(client, routes, monkeypatch):
     routes["routes"] = {"graph.instagram.com/me": IG_LOGIN_OK}
-    res = await ic.connect("IGAAxxxx")
+    res = await ic.connect(IG_TOKEN)
 
     assert res["ok"] is True
     assert res["type"] == "instagram"
@@ -88,7 +93,7 @@ async def test_instagram_login_token_is_detected(client, routes, monkeypatch):
 async def test_facebook_token_is_detected(client, routes):
     routes["routes"] = {"graph.instagram.com/me": {"error": {"message": "нет"}},
                         "me/accounts": FB_PAGES_OK}
-    res = await ic.connect("EAAxxxx")
+    res = await ic.connect(FB_TOKEN)
 
     assert res["ok"] is True
     assert res["type"] == "facebook"
@@ -100,7 +105,7 @@ async def test_facebook_token_is_detected(client, routes):
 async def test_token_type_is_saved_for_future_refresh(client, routes):
     """Без сохранённого типа продление через 60 дней пойдёт не тем способом."""
     routes["routes"] = {"graph.instagram.com/me": IG_LOGIN_OK}
-    await ic.connect("IGAAxxxx")
+    await ic.connect(IG_TOKEN)
 
     from sqlalchemy import select
     from database.db import AsyncSessionLocal
@@ -114,7 +119,7 @@ async def test_token_type_is_saved_for_future_refresh(client, routes):
 async def test_bad_token_says_what_to_do(client, routes):
     routes["routes"] = {"graph.instagram.com/me": {"error": {"message": "invalid"}},
                         "me/accounts": {"error": {"message": "invalid"}}}
-    res = await ic.connect("мусор")
+    res = await ic.connect("EAA" + "z" * 100)   # правдоподобный, но не принятый Meta
     assert res["ok"] is False
     assert "новый" in res["error"]
 
@@ -124,7 +129,7 @@ async def test_page_without_instagram_is_a_different_problem(client, routes):
     """«Страница есть, Instagram не привязан» — не то же, что «токен не подошёл»."""
     routes["routes"] = {"graph.instagram.com/me": {"error": {"message": "нет"}},
                         "me/accounts": {"data": [{"name": "Просто страница"}]}}
-    res = await ic.connect("EAAxxxx")
+    res = await ic.connect(FB_TOKEN)
     assert res["ok"] is False
     assert "не привязан" in res["error"]
 
@@ -133,7 +138,7 @@ async def test_page_without_instagram_is_a_different_problem(client, routes):
 async def test_manual_account_id_wins(client, routes):
     routes["routes"] = {"graph.instagram.com/me": {"error": {"message": "нет"}},
                         "me/accounts": {"data": [{"name": "Страница"}]}}
-    res = await ic.connect("EAAxxxx", account_id="17841400777")
+    res = await ic.connect(FB_TOKEN, account_id="17841400777")
     assert res["ok"] is True
     assert res["account_id"] == "17841400777"
 
@@ -197,7 +202,7 @@ async def test_expired_token_cannot_be_refreshed_and_says_so(client, routes, mon
 async def test_connect_endpoint(auth_client, routes):
     routes["routes"] = {"graph.instagram.com/me": IG_LOGIN_OK}
     r = await auth_client.post("/api/social/instagram/connect",
-                               json={"access_token": "IGAAxxxx"})
+                               json={"access_token": IG_TOKEN})
     body = r.json()
     assert body["ok"] is True and body["type"] == "instagram"
 
@@ -206,3 +211,62 @@ async def test_connect_endpoint(auth_client, routes):
 async def test_connect_requires_auth(client):
     r = await client.post("/api/social/instagram/connect", json={"access_token": "x"})
     assert r.status_code in (401, 403)
+
+
+# ──────────── диагностика вставленной строки ────────────
+# «Invalid OAuth access token - Cannot parse access token» — самый частый ответ
+# Meta, и по нему невозможно понять, что именно не так со вставленной строкой.
+
+def test_line_breaks_from_copying_are_removed():
+    """Панель Meta переносит длинный токен по строкам — переводы копируются с ним."""
+    raw = "IGAA" + "x" * 40 + "\n" + "y" * 40 + "  \n"
+    assert ic.clean_token(raw) == "IGAA" + "x" * 40 + "y" * 40
+
+
+def test_quotes_are_stripped():
+    assert ic.clean_token('"IGAA' + "z" * 60 + '"').startswith("IGAA")
+
+
+def test_app_id_is_named_as_such():
+    assert "App ID" in ic.diagnose("1234567890")
+
+
+def test_app_secret_is_named_as_such():
+    assert "App Secret" in ic.diagnose("a1b2c3d4e5f60718293a4b5c6d7e8f90")
+
+
+def test_truncated_token_is_detected():
+    msg = ic.diagnose("IGAAxxxxxxxxxxxxxxxxxxxx…xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    assert "не полностью" in msg
+
+
+def test_short_string_is_detected():
+    assert "слишком короткая" in ic.diagnose("IGAAshort")
+
+
+def test_unexpected_prefix_is_reported():
+    msg = ic.diagnose("EAAB" .replace("EAA", "XYZ") + "q" * 80)
+    assert "начинается" in msg
+
+
+def test_valid_looking_token_passes_diagnosis():
+    assert ic.diagnose("IGAA" + "a" * 120) is None
+    assert ic.diagnose("EAA" + "b" * 120) is None
+
+
+@pytest.mark.asyncio
+async def test_pasted_app_id_never_reaches_meta(client, routes):
+    """Заведомо неверную строку не отправляем в Meta — ответ был бы невнятным."""
+    routes["routes"] = {}
+    res = await ic.connect("1234567890")
+    assert res["ok"] is False
+    assert "App ID" in res["error"]
+    assert routes["seen"] == []          # запроса к Meta не было
+
+
+@pytest.mark.asyncio
+async def test_token_with_line_breaks_is_accepted(client, routes):
+    """Именно этот случай и даёт «Cannot parse access token»."""
+    routes["routes"] = {"graph.instagram.com/me": IG_LOGIN_OK}
+    res = await ic.connect("IGAA" + "x" * 60 + "\n  " + "y" * 60)
+    assert res["ok"] is True

@@ -60,17 +60,63 @@ async def _try_instagram(token: str) -> dict | None:
         return None
 
 
+def clean_token(raw: str) -> str:
+    """Убирает из вставленного токена то, что ломает его при копировании.
+
+    Панель Meta переносит длинный токен по строкам, и вместе с ним копируются
+    переводы строк и пробелы. Meta на такой строке отвечает «Cannot parse access
+    token» — по этому тексту невозможно догадаться, что дело в переносе.
+    """
+    t = (raw or "").strip().strip('"').strip("'")
+    # Внутренние пробелы и переводы строк — всегда следствие копирования,
+    # в самом токене их не бывает.
+    return "".join(t.split())
+
+
+def diagnose(token: str) -> str | None:
+    """Ищет заведомо не-токен и называет вещь своим именем.
+
+    Иначе пользователь получает от Meta «Cannot parse access token» и не понимает,
+    что вставил App ID, обрезанную строку или вовсе не то поле.
+    """
+    if not token:
+        return "поле пустое — вставьте токен из панели Meta"
+    if "…" in token or "..." in token:
+        return ("токен скопирован не полностью — в строке есть многоточие. "
+                "В панели Meta нажмите «Copy» рядом с токеном, а не выделяйте мышью")
+    if token.isdigit():
+        return ("это App ID, а не токен. Токен — длинная строка, начинается "
+                "с IGAA… или EAA…")
+    if len(token) == 32 and all(c in "0123456789abcdefABCDEF" for c in token):
+        return ("это App Secret, а не токен доступа. Токен длиннее и начинается "
+                "с IGAA… или EAA…")
+    if len(token) < 50:
+        return (f"строка слишком короткая для токена ({len(token)} символов). "
+                "Настоящий токен — сотни символов, начинается с IGAA… или EAA…")
+    if not (token.startswith("IGAA") or token.startswith("EAA")):
+        head = token[:6]
+        return (f"токен начинается с «{head}…» — обычно это IGAA… (Instagram Login) "
+                "или EAA… (Страница Facebook). Проверьте, что скопировали именно "
+                "Access Token, а не другое поле")
+    return None
+
+
 async def connect(token: str, account_id: str = "") -> dict:
     """Подключает Instagram по готовому токену: определяет тип, находит id, сохраняет."""
-    token = (token or "").strip()
-    if not token:
-        return {"ok": False, "error": "пустой токен"}
+    token = clean_token(token)
+
+    # Сначала то, что видно без обращения к Meta: так пользователь получает
+    # понятную причину вместо «Cannot parse access token».
+    problem = diagnose(token)
+    if problem:
+        return {"ok": False, "error": problem}
 
     detected = await _try_instagram(token) or await _try_facebook(token)
     if not detected:
         return {"ok": False,
                 "error": "Meta не приняла токен: он неверный, истёк или выдан "
-                         "для другого приложения. Сгенерируйте новый в панели Meta."}
+                         "для другого приложения. Сгенерируйте новый в панели Meta "
+                         "и скопируйте кнопкой «Copy» целиком."}
 
     resolved = account_id.strip() or detected.get("account_id", "")
     if not resolved:
