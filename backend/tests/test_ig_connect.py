@@ -270,3 +270,53 @@ async def test_token_with_line_breaks_is_accepted(client, routes):
     routes["routes"] = {"graph.instagram.com/me": IG_LOGIN_OK}
     res = await ic.connect("IGAA" + "x" * 60 + "\n  " + "y" * 60)
     assert res["ok"] is True
+
+
+# ──────────── токен Страницы Facebook ────────────
+# Graph API Explorer выдаёт именно Page Access Token, и старый интерфейс просил
+# ровно его. У такого токена нет «списка страниц»: /me/accounts отвечает ошибкой,
+# и раньше рабочий токен получал «Meta не приняла токен».
+
+PAGE_TOKEN = "EAA" + "p" * 120
+
+
+@pytest.mark.asyncio
+async def test_page_access_token_is_accepted(client, routes):
+    routes["routes"] = {
+        "graph.instagram.com/me": {"error": {"message": "нет"}},
+        "me/accounts": {"error": {"message": "(#100) Tried accessing nonexisting field"}},
+        "/me": {"name": "Pakhon Studio",
+                "instagram_business_account": {"id": "17841400555"}},
+    }
+    res = await ic.connect(PAGE_TOKEN)
+
+    assert res["ok"] is True
+    assert res["type"] == "facebook"
+    assert res["account_id"] == "17841400555"
+    assert res["page"] == "Pakhon Studio"
+
+
+@pytest.mark.asyncio
+async def test_page_token_without_linked_instagram_says_so(client, routes):
+    """«Instagram не привязан» — не то же, что «токен не подошёл»."""
+    routes["routes"] = {
+        "graph.instagram.com/me": {"error": {"message": "нет"}},
+        "me/accounts": {"error": {"message": "нельзя"}},
+        "/me": {"name": "Просто страница"},
+    }
+    res = await ic.connect(PAGE_TOKEN)
+    assert res["ok"] is False
+    assert "не привязан" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_truly_dead_token_still_rejected(client, routes):
+    """Оба запроса отклонены — значит, токен действительно нерабочий."""
+    routes["routes"] = {
+        "graph.instagram.com/me": {"error": {"message": "invalid"}},
+        "me/accounts": {"error": {"message": "invalid"}},
+        "/me": {"error": {"message": "Invalid OAuth access token"}},
+    }
+    res = await ic.connect(PAGE_TOKEN)
+    assert res["ok"] is False
+    assert "новый" in res["error"]

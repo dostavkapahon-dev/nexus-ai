@@ -23,26 +23,55 @@ TYPE_KEY = "instagram_token_type"
 
 
 async def _try_facebook(token: str) -> dict | None:
-    """Токен Facebook: ищем Страницы пользователя и привязанный к ним Instagram."""
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.get(f"{GRAPH_FB}/me/accounts", params={
-                "fields": "name,instagram_business_account", "access_token": token})
-            data = r.json()
-        if data.get("error"):
+    """Токен Facebook. Их тоже два вида, и проверять надо оба.
+
+    `/me/accounts` перечисляет Страницы — это работает только для токена
+    **пользователя**. Токен **Страницы** (а именно его выдаёт Graph API Explorer,
+    и именно его просил старый интерфейс) на этот запрос отвечает ошибкой: у него
+    нет «списка страниц», он сам и есть страница. Раньше такой токен получал
+    «Meta не приняла токен», хотя был совершенно рабочим.
+    """
+    async def ask(path: str, fields: str):
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.get(f"{GRAPH_FB}/{path}",
+                                params={"fields": fields, "access_token": token})
+                return r.json()
+        except Exception:
             return None
+
+    alive, page_name = False, ""
+
+    # 1. Токен пользователя: у него есть список Страниц.
+    data = await ask("me/accounts", "name,instagram_business_account")
+    if data and not data.get("error"):
+        alive = True
         for page in data.get("data") or []:
             iba = page.get("instagram_business_account") or {}
             if iba.get("id"):
                 return {"type": "facebook", "account_id": iba["id"],
                         "page": page.get("name", "")}
-        # Токен рабочий, но Instagram к Странице не привязан — это другая беда,
-        # и сообщить о ней надо иначе, чем «токен не подошёл».
-        return {"type": "facebook", "account_id": "", "page": "",
-                "warning": "токен принят, но ни к одной Странице не привязан "
+            page_name = page_name or page.get("name", "")
+
+    # 2. Токен Страницы: списка страниц у него нет, спрашиваем саму страницу.
+    me = await ask("me", "name,instagram_business_account")
+    if me and not me.get("error"):
+        alive = True
+        iba = me.get("instagram_business_account") or {}
+        if iba.get("id"):
+            return {"type": "facebook", "account_id": iba["id"],
+                    "page": me.get("name", "")}
+        page_name = page_name or me.get("name", "")
+
+    # Meta ответила хотя бы на один запрос — токен живой, но Instagram не привязан.
+    # Это другая беда, и говорить о ней надо иначе, чем «токен не подошёл».
+    if alive:
+        return {"type": "facebook", "account_id": "", "page": page_name,
+                "warning": "токен принят, но к Странице не привязан "
                            "Instagram Business/Creator аккаунт"}
-    except Exception:
-        return None
+
+    # Оба запроса отклонены — токен действительно не работает.
+    return None
 
 
 async def _try_instagram(token: str) -> dict | None:
