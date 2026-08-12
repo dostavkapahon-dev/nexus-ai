@@ -64,6 +64,18 @@ manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Первое, что видно в логах Render: какой код запущен и в каком он состоянии.
+    # Без этой строки нельзя было отличить «ошибка не исправлена» от «сборка
+    # не доехала», и починка уходила в гадание.
+    try:
+        from core.version import build_info
+        b = build_info()
+        print(f"[NEXUS] сборка {b['commit']} · миграции: {b['migration']} · "
+              f"Chromium: {'установлен' if b['browser_installed'] else 'нет'}",
+              flush=True)
+    except Exception:
+        pass
+
     await init_db()
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(Connection))

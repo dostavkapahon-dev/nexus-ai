@@ -34,6 +34,33 @@ def _from_git() -> str:
         return ""
 
 
+def migration_status() -> str:
+    """Прошли ли миграции при старте.
+
+    Раньше `alembic upgrade head && uvicorn` означал, что при неудаче миграции
+    сервис не поднимался вовсе, и причину было видно только в логах Render.
+    Теперь старт продолжается, а результат виден снаружи.
+    """
+    try:
+        with open("/tmp/nexus_migration") as f:
+            return "ok" if f.read().strip() == "ok" else "ошибка миграции"
+    except FileNotFoundError:
+        return "неизвестно"      # локальный запуск без startCommand
+    except Exception:
+        return "неизвестно"
+
+
+def browser_ready() -> bool:
+    """Установлен ли Chromium: без него браузерный путь публикации не работает."""
+    try:
+        from playwright._impl._driver import compute_driver_executable  # noqa: F401
+        import glob
+        base = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "") or os.path.expanduser("~/.cache/ms-playwright")
+        return bool(glob.glob(os.path.join(base, "chromium*")))
+    except Exception:
+        return False
+
+
 def build_info() -> dict:
     """Коммит, ветка и время старта процесса. Считается один раз."""
     global _cached
@@ -44,4 +71,6 @@ def build_info() -> dict:
             "branch": os.getenv("RENDER_GIT_BRANCH", "").strip() or "—",
             "started_at": datetime.utcnow().isoformat(timespec="seconds"),
         }
-    return dict(_cached)
+    # Эти два меняются от запуска к запуску — считаем каждый раз.
+    return {**_cached, "migration": migration_status(),
+            "browser_installed": browser_ready()}
