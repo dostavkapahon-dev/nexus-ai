@@ -206,3 +206,28 @@ async def test_research_api(auth_client, monkeypatch):
 
     r5 = await auth_client.delete("/api/research/competitors/tiktok/rival")
     assert r5.json()["stopped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_api_failure_falls_back_to_free_path(client, monkeypatch):
+    """Найдено утечкой окружения между тестами: при заданном, но нерабочем токене
+    исключение из основного API обрывало разбор, и бесплатный запасной путь —
+    ради которого код и написан — не пробовался вовсе."""
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", "протухший")
+    monkeypatch.setenv("INSTAGRAM_ACCOUNT_ID", "1784140")
+
+    async def broken(handle):
+        raise RuntimeError("403 Forbidden")
+
+    async def free_path(handle):
+        return {"ok": True, "followers": 500, "posts_count": 10,
+                "top_posts": [{"likes": 50, "comments": 5}]}
+
+    import core.instagram_reader as ir
+    import core.social_intel as si
+    monkeypatch.setattr(ir, "analyze_competitor", broken)
+    monkeypatch.setattr(si, "_fetch_instagram", free_path)
+
+    res = await rs.track_competitor("instagram", "rival")
+    assert res["ok"] is True
+    assert res["followers"] == 500

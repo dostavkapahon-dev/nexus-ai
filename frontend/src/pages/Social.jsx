@@ -14,6 +14,8 @@ export default function Social() {
   const [oauth, setOauth] = useState(null)
   const [browser, setBrowser] = useState(null)
   const [session, setSession] = useState(null)
+  const [igToken, setIgToken] = useState('')
+  const [igResult, setIgResult] = useState(null)
 
   const load = async () => {
     setLoading(true)
@@ -40,6 +42,17 @@ export default function Social() {
       if (r.data?.ok && r.data.url) window.location.href = r.data.url
       else setOauth(r.data?.error || 'Не удалось получить ссылку')
     } catch (e) { setOauth(e.message) }
+  }
+
+  // Токен уже выдан в панели Meta — гонять его через OAuth незачем.
+  const connectByToken = async () => {
+    setBusy('token'); setIgResult(null)
+    try {
+      const r = await social.connectInstagramToken(igToken.trim())
+      setIgResult(r.data)
+      if (r.data?.ok) { setIgToken(''); load() }
+    } catch (e) { setIgResult({ ok: false, error: e.message }) }
+    setBusy('')
   }
 
   const checkSession = async () => {
@@ -88,6 +101,34 @@ export default function Social() {
           <button onClick={connectInstagram} className="btn-primary text-sm">Подключить</button>
         </div>
         {oauth && <div className="mt-2 text-xs text-amber-400">{oauth}</div>}
+
+        {/* Прямой путь: токен уже получен в панели Meta, OAuth не нужен. */}
+        <div className="mt-3 pt-3 border-t border-[#1c1c30]">
+          <div className="text-[11px] text-[#9a9ac0] mb-2">
+            Уже есть токен из панели Meta? Вставьте его — система сама определит тип,
+            найдёт Account ID и настроит продление.
+          </div>
+          <div className="flex gap-2 flex-wrap">
+            <input
+              value={igToken}
+              onChange={(e) => setIgToken(e.target.value)}
+              type="password"
+              placeholder="IGAA... или EAA..."
+              className="flex-1 min-w-[220px] text-xs px-3 py-2 rounded-lg bg-[#0d0d1a] border border-[#1c1c30] text-[#c0c0e0]"
+            />
+            <button onClick={connectByToken} disabled={!igToken.trim() || busy === 'token'}
+              className="text-sm px-3 py-2 rounded-lg bg-[#111120] border border-[#1c1c30] text-[#c0c0e0] disabled:opacity-40">
+              {busy === 'token' ? 'Проверяю…' : 'Подключить по токену'}
+            </button>
+          </div>
+          {igResult && (
+            <div className={`mt-2 text-xs ${igResult.ok ? 'text-green-400' : 'text-amber-400'}`}>
+              {igResult.ok
+                ? `Подключено${igResult.username ? ' @' + igResult.username : ''} · ID ${igResult.account_id} · ${igResult.note}`
+                : igResult.error}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Путь без ключей Meta: публикация через веб-интерфейс на сервере. */}

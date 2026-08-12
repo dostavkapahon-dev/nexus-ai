@@ -150,6 +150,22 @@ async def browser_status():
             "publish_mode": os.getenv("NEXUS_PUBLISH_MODE", "auto")}
 
 
+class TokenBody(BaseModel):
+    access_token: str
+    account_id: str | None = None
+
+
+@router.post("/instagram/connect")
+async def instagram_connect(body: TokenBody):
+    """Прямое подключение по готовому токену — без прохождения OAuth.
+
+    Токен уже выдан в панели Meta, поэтому система только определяет его тип,
+    находит Account ID и запоминает, каким способом продлевать через 60 дней.
+    """
+    from core.ig_connect import connect
+    return await connect(body.access_token, body.account_id or "")
+
+
 @router.get("/oauth/start")
 async def oauth_start():
     """Ссылка на подключение Instagram через Facebook.

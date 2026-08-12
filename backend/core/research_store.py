@@ -84,6 +84,18 @@ def _as_dict(r: Research) -> dict:
 
 # ─────────────────────────── конкуренты ───────────────────────────
 
+async def _try(coro) -> dict:
+    """Выполняет попытку основного источника, не давая ей обрушить весь разбор.
+
+    Причину не теряем: она вернётся как `error` и попадёт в отчёт, если запасной
+    источник тоже не сработает.
+    """
+    try:
+        return await coro or {}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"}
+
+
 async def track_competitor(platform: str, handle: str, niche_id: str = "") -> dict:
     """Снимает текущие метрики конкурента и добавляет срез в историю.
 
@@ -97,13 +109,16 @@ async def track_competitor(platform: str, handle: str, niche_id: str = "") -> di
     try:
         if platform == "instagram":
             from core.instagram_reader import analyze_competitor, is_configured
-            data = await analyze_competitor(handle) if is_configured() else {}
+            # Сбой основного API не должен обрывать разбор: ниже есть бесплатный
+            # путь, ради которого всё и написано. Раньше исключение (403, таймаут,
+            # протухший токен) улетало наружу, и запасной источник не пробовался.
+            data = await _try(analyze_competitor(handle)) if is_configured() else {}
             if not data.get("ok"):
                 from core.social_intel import _fetch_instagram
                 data = await _fetch_instagram(handle)
         elif platform == "youtube":
             from core.youtube_reader import analyze, is_configured
-            data = await analyze(handle) if is_configured() else {}
+            data = await _try(analyze(handle)) if is_configured() else {}
             if not data.get("ok"):
                 from core.social_intel import _fetch_channel
                 data = await _fetch_channel("youtube", handle)

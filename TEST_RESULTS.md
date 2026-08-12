@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **312 passed** (после BLOCK 12, браузерного пути публикации и вебхуков;
+Прогон: `cd backend && python -m pytest -q` → **325 passed** (после вебхуков и прямого подключения Instagram;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -22,6 +22,7 @@
 | Строка подключения к БД | 01 | `tests/test_db_url.py` | 11 | 🟢 PASS |
 | Браузерная сессия без API | 10 | `tests/test_browser_session.py` | 15 | 🟢 PASS |
 | Вебхуки Instagram (подпись, токен) | 03 | `tests/test_webhooks.py` | 23 | 🟢 PASS |
+| Подключение Instagram по токену | 03 | `tests/test_ig_connect.py` | 12 | 🟢 PASS |
 
 Живая проверка на поднятом сервере (2026-08-11), не только тестами:
 - Приложение стартует, `/api/health` отвечает → 🟢 PASS.

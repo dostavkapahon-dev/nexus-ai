@@ -86,10 +86,17 @@ class InstagramConnector(SocialConnector):
             return {**out, "ok": False, "error": str(e)[:200]}
 
     async def refresh_token(self) -> dict:
-        """Меняет короткоживущий токен на long-lived (60 дней) и сохраняет его.
+        """Продлевает токен. Способ зависит от того, какого он семейства.
 
-        Нужны FACEBOOK_APP_ID и FACEBOOK_APP_SECRET — их выдаёт своё приложение Meta.
+        У Meta два несовместимых вида токенов, и продлеваются они по-разному:
+        токен Instagram Login — запросом `refresh_access_token` на graph.instagram.com,
+        токен Facebook — обменом `fb_exchange_token`. Применить не тот способ —
+        значит не продлить вовсе: через 60 дней публикация встанет без внятной
+        причины. Тип запоминается при подключении (`core/ig_connect.py`).
         """
+        if os.getenv("INSTAGRAM_TOKEN_TYPE", "").strip().lower() == "instagram":
+            return await self._refresh_instagram_login()
+
         app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
         app_secret = os.getenv("FACEBOOK_APP_SECRET", "").strip()
         if not (app_id and app_secret):
@@ -120,6 +127,40 @@ class InstagramConnector(SocialConnector):
                     "expires_in_days": round(expires_in / 86400, 1) if expires_in else None,
                     "valid_until": (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
                     if expires_in else "бессрочный"}
+        except Exception as e:
+            return {"ok": False, "refreshed": False, "error": str(e)[:200]}
+
+    async def _refresh_instagram_login(self) -> dict:
+        """Продление токена Instagram Login: App Secret не нужен, но есть условия.
+
+        Meta продлевает только токен, которому уже больше 24 часов и который ещё
+        не истёк. Просроченный не восстановить — нужен новый из панели, и лучше
+        сказать это прямо, чем отдать невнятную ошибку Meta.
+        """
+        token = self._token()
+        if not token:
+            return {"ok": False, "refreshed": False, "error": "нет текущего токена"}
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.get("https://graph.instagram.com/refresh_access_token",
+                                params={"grant_type": "ig_refresh_token",
+                                        "access_token": token})
+                data = r.json()
+            if data.get("error"):
+                msg = (data["error"].get("message") or "")[:200]
+                return {"ok": False, "refreshed": False, "error": msg,
+                        "hint": "если токен уже истёк, продлить его нельзя — "
+                                "сгенерируйте новый в панели Meta и вставьте заново"}
+            new_token = data.get("access_token")
+            if not new_token:
+                return {"ok": False, "refreshed": False, "error": "Meta не вернула токен"}
+
+            await _save_key("instagram_access_token", new_token)
+            expires_in = int(data.get("expires_in") or 0)
+            return {"ok": True, "refreshed": True, "method": "ig_refresh_token",
+                    "expires_in_days": round(expires_in / 86400, 1) if expires_in else None,
+                    "valid_until": (datetime.utcnow() + timedelta(seconds=expires_in)).isoformat()
+                    if expires_in else None}
         except Exception as e:
             return {"ok": False, "refreshed": False, "error": str(e)[:200]}
 

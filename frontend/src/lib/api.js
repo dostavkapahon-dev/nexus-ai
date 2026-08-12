@@ -96,6 +96,8 @@ export const social = {
   posts: (platform, limit = 10) => api.post(`/social/${platform}/posts`, { limit }),
   profile: (platform) => api.get(`/social/${platform}/profile`),
   oauthStart: () => api.get('/social/oauth/start'),
+  connectInstagramToken: (access_token, account_id = '') =>
+    api.post('/social/instagram/connect', { access_token, account_id }),
   browserStatus: () => api.get('/social/browser/status'),
   browserSession: (platform = 'instagram') => api.get('/social/browser/session', { params: { platform } }),
 }
