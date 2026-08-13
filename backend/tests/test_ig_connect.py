@@ -390,3 +390,83 @@ async def test_pasted_token_is_cleaned_and_typed_on_save(auth_client):
 
     assert os.environ["INSTAGRAM_ACCESS_TOKEN"] == IG_TOKEN
     assert os.environ["INSTAGRAM_TOKEN_TYPE"] == "instagram"
+
+
+# ── проверка доступа ──────────────────────────────────────────────────────────
+# «Meta приняла токен» и «всё работает» — разные вещи: токен может читаться,
+# но не пускать к публикации, если аккаунт личный. Права из debug_token тоже
+# не ответ — они показывают запрошенное, а не то, что пройдёт на деле.
+
+MEDIA_OK = {"data": [{"id": "1789"}]}
+
+
+@pytest.fixture
+def _ig_token(monkeypatch):
+    monkeypatch.setenv("INSTAGRAM_ACCESS_TOKEN", IG_TOKEN)
+    monkeypatch.setenv("INSTAGRAM_TOKEN_TYPE", "instagram")
+
+
+@pytest.mark.asyncio
+async def test_access_reports_every_capability(routes, _ig_token):
+    routes["routes"] = {"/me/media": MEDIA_OK, "1789/comments": {"data": []},
+                        "/me": {**IG_LOGIN_OK, "account_type": "BUSINESS",
+                                "followers_count": 1200}}
+    res = await ic.check_access()
+
+    assert res["ok"] is True
+    assert res["account"]["username"] == "pahon_ai"
+    assert {c["what"] for c in res["checks"]} == {
+        "Чтение своего профиля", "Чтение своих публикаций",
+        "Чтение комментариев", "Публикация"}
+    assert all(c["ok"] is True for c in res["checks"])
+
+
+@pytest.mark.asyncio
+async def test_personal_account_cannot_publish(routes, _ig_token):
+    """Личный аккаунт Meta к публикации не пускает — это надо назвать прямо."""
+    routes["routes"] = {"/me/media": MEDIA_OK, "1789/comments": {"data": []},
+                        "/me": {**IG_LOGIN_OK, "account_type": "PERSONAL"}}
+    res = await ic.check_access()
+
+    publish = next(c for c in res["checks"] if c["what"] == "Публикация")
+    assert publish["ok"] is False
+    assert "Business" in publish["error"]
+    assert res["ok"] is False and "публикация" in res["summary"]
+
+
+@pytest.mark.asyncio
+async def test_refused_operation_shows_meta_answer(routes, _ig_token):
+    """Отказ по одной операции не должен выглядеть как общий сбой."""
+    routes["routes"] = {"/me/media": {"error": {"message": "недостаточно прав"}},
+                        "/me": {**IG_LOGIN_OK, "account_type": "BUSINESS"}}
+    res = await ic.check_access()
+
+    media = next(c for c in res["checks"] if c["what"] == "Чтение своих публикаций")
+    assert media["ok"] is False and media["error"] == "недостаточно прав"
+    assert next(c for c in res["checks"] if c["what"] == "Чтение своего профиля")["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_no_posts_is_not_a_refusal(routes, _ig_token):
+    """Нет постов — проверять комментарии не на чем. Это не отказ в доступе."""
+    routes["routes"] = {"/me/media": {"data": []},
+                        "/me": {**IG_LOGIN_OK, "account_type": "CREATOR"}}
+    res = await ic.check_access()
+
+    comments = next(c for c in res["checks"] if c["what"] == "Чтение комментариев")
+    assert comments["ok"] is None and res["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_access_without_token_says_what_to_do(monkeypatch):
+    monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
+    res = await ic.check_access()
+    assert res["ok"] is False and "вставьте его" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_access_endpoint(auth_client, routes, _ig_token):
+    routes["routes"] = {"/me/media": {"data": []},
+                        "/me": {**IG_LOGIN_OK, "account_type": "BUSINESS"}}
+    r = await auth_client.get("/api/social/instagram/access")
+    assert r.json()["ok"] is True

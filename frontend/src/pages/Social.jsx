@@ -17,6 +17,7 @@ export default function Social() {
   const [igToken, setIgToken] = useState('')
   const [igResult, setIgResult] = useState(null)
   const [hook, setHook] = useState(null)
+  const [access, setAccess] = useState(null)
   const [copied, setCopied] = useState('')
 
   const load = async () => {
@@ -63,6 +64,13 @@ export default function Social() {
       setIgResult(r.data)
       if (r.data?.ok) { setIgToken(''); load() }
     } catch (e) { setIgResult({ ok: false, error: e.message }) }
+    setBusy('')
+  }
+
+  const checkAccess = async () => {
+    setBusy('access'); setAccess(null)
+    try { setAccess((await social.instagramAccess()).data) }
+    catch (e) { setAccess({ ok: false, error: e.message, checks: [] }) }
     setBusy('')
   }
 
@@ -130,6 +138,40 @@ export default function Social() {
                 : `${igResult.error}${igResult.token_looks_like ? ' · вставленная строка: ' + igResult.token_looks_like : ''}`}
             </div>
           )}
+
+          {/* «Токен принят» и «всё работает» — разные вещи, и разница видна
+              только по самим операциям. */}
+          <div className="mt-3 pt-3 border-t border-[#1c1c30]">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="text-[11px] text-[#9a9ac0]">
+                Проверка доступа: что сохранённый токен реально умеет
+              </div>
+              <button onClick={checkAccess} disabled={busy === 'access'}
+                className="text-[11px] px-2.5 py-1.5 rounded-lg bg-[#111120] border border-[#1c1c30] text-[#c0c0e0] disabled:opacity-40">
+                {busy === 'access' ? 'Проверяю…' : 'Проверить доступ'}
+              </button>
+            </div>
+            {access && (
+              <div className="mt-2 space-y-1">
+                {access.account?.username && (
+                  <div className="text-[11px] text-[#7a7a9a]">
+                    @{access.account.username} · {access.account.account_type || 'тип не сообщён'}
+                    {access.account.followers != null && ` · ${access.account.followers} подписчиков`}
+                    {' · '}{access.api}
+                  </div>
+                )}
+                {(access.checks || []).map((c) => (
+                  <div key={c.what} className={'text-[11px] ' + (
+                    c.ok === true ? 'text-green-400' : c.ok === false ? 'text-red-400' : 'text-[#7a7a9a]')}>
+                    {c.ok === true ? '✅' : c.ok === false ? '❌' : '➖'} {c.what}
+                    {c.detail && <span className="text-[#5a5a7a]"> — {c.detail}</span>}
+                    {c.error && <span className="text-red-400/80"> — {c.error}</span>}
+                  </div>
+                ))}
+                {access.error && <div className="text-[11px] text-amber-400">{access.error}</div>}
+              </div>
+            )}
+          </div>
 
           {/* Путь через Facebook оставлен, но убран с первого плана: он нужен
               только для Business Discovery (разбор чужих аккаунтов через API). */}

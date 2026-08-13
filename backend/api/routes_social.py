@@ -166,6 +166,13 @@ async def instagram_connect(body: TokenBody):
     return await connect(body.access_token, body.account_id or "")
 
 
+@router.get("/instagram/access")
+async def instagram_access():
+    """Что сохранённый токен реально умеет — проверкой самих операций."""
+    from core.ig_connect import check_access
+    return await check_access()
+
+
 @router.get("/webhook/config")
 async def webhook_config():
     """Готовые значения для панели Meta: адрес обратного вызова и токен подтверждения.

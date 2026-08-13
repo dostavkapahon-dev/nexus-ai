@@ -433,10 +433,18 @@ export default function Connections() {
     await connectionsApi.save(values)
     setSaved(true); setTimeout(() => setSaved(false), 2000); setSaving(false)
   }
+  // Проверка сперва сохраняет. Раньше зелёная галочка означала только «Meta
+  // приняла ключ» — вписанное значение при этом нигде не оставалось, и после
+  // перезагрузки страницы пропадало. Выглядело как «подключено», работало как
+  // «не подключено».
   const testAll = async () => {
     setTesting(true)
-    try { const r = await connectionsApi.test(values); setTestResults(r.data || {}) }
-    catch { setTestResults({}) }
+    try {
+      await connectionsApi.save(values)
+      setSaved(true); setTimeout(() => setSaved(false), 2000)
+      const r = await connectionsApi.test(values)
+      setTestResults(r.data || {})
+    } catch { setTestResults({}) }
     setTesting(false)
   }
   const connectedCount = PROVIDERS.filter(p => p.fields.some(f => values[f.key])).length

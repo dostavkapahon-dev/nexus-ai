@@ -183,3 +183,82 @@ async def connect(token: str, account_id: str = "") -> dict:
             "note": ("Токен сохранён. Продление настроено автоматически: "
                      + ("запрос refresh_access_token" if detected["type"] == "instagram"
                         else "обмен fb_exchange_token") + ", джоб в 08:00.")}
+
+
+async def check_access() -> dict:
+    """Что токен реально умеет — по операциям, а не по списку прав.
+
+    «Токен принят» и «работает публикация» — разные вещи: Meta может принять
+    токен, но отказать в чтении медиа или в публикации, если у аккаунта не тот
+    тип или не выдано право. Права из `debug_token` тоже не ответ: они
+    показывают запрошенное, а не то, что пройдёт на деле. Поэтому дёргаем сами
+    операции и показываем ответ Meta по каждой.
+    """
+    from connectors import ig_api
+
+    if not ig_api.configured():
+        return {"ok": False, "error": "не задан токен Instagram — вставьте его на этой странице",
+                "checks": []}
+
+    tok = ig_api.token()
+
+    async def probe(path: str, params: dict) -> tuple[bool, str, dict]:
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.get(ig_api.url(path), params={**params, "access_token": tok})
+                d = r.json()
+        except Exception as e:
+            return False, f"сеть недоступна: {type(e).__name__}", {}
+        if isinstance(d, dict) and d.get("error"):
+            return False, str(d["error"].get("message", ""))[:160], {}
+        return True, "", d if isinstance(d, dict) else {}
+
+    checks, account = [], {}
+
+    ok, err, data = await probe(ig_api.me_path(), {"fields": ig_api.profile_fields()})
+    if ok:
+        account = {"username": data.get("username", ""), "id": data.get("id", ""),
+                   "account_type": data.get("account_type", ""),
+                   "followers": data.get("followers_count"),
+                   "media_count": data.get("media_count")}
+    checks.append({"what": "Чтение своего профиля", "ok": ok, "error": err,
+                   "detail": f"@{account.get('username','')}" if ok else ""})
+
+    ok_media, err_media, media = await probe(ig_api.me_path("media"), {"fields": "id", "limit": 1})
+    checks.append({"what": "Чтение своих публикаций", "ok": ok_media, "error": err_media,
+                   "detail": "" if not ok_media else
+                             ("постов нет" if not (media.get("data") or []) else "доступно")})
+
+    # Комментарии проверяем на самом свежем посте: без поста проверять нечего,
+    # и это не отказ в доступе, а отсутствие материала.
+    items = (media.get("data") or []) if ok_media else []
+    if items:
+        ok_c, err_c, _ = await probe(f"{items[0]['id']}/comments", {"fields": "id", "limit": 1})
+        checks.append({"what": "Чтение комментариев", "ok": ok_c, "error": err_c, "detail": ""})
+    else:
+        checks.append({"what": "Чтение комментариев", "ok": None, "error": "",
+                       "detail": "нечего проверять — нет ни одной публикации"})
+
+    # Публикацию не выполняем: проверка не должна оставлять постов в аккаунте.
+    # Тип аккаунта — единственное, что можно узнать не публикуя.
+    a_type = (account.get("account_type") or "").upper()
+    if not account:
+        checks.append({"what": "Публикация", "ok": None, "error": "",
+                       "detail": "неизвестно — профиль не прочитался"})
+    elif a_type in ("BUSINESS", "CREATOR", "MEDIA_CREATOR"):
+        checks.append({"what": "Публикация", "ok": True, "error": "",
+                       "detail": f"тип аккаунта {a_type} — публикация разрешена"})
+    elif a_type:
+        checks.append({"what": "Публикация", "ok": False,
+                       "error": f"тип аккаунта {a_type}: Meta не пускает к публикации "
+                                "личные аккаунты — переключите на Business или Creator",
+                       "detail": ""})
+    else:
+        checks.append({"what": "Публикация", "ok": None, "error": "",
+                       "detail": "тип аккаунта не сообщён"})
+
+    failed = [c for c in checks if c["ok"] is False]
+    return {"ok": not failed, "token_type": ig_api.token_type(),
+            "api": ig_api.base(), "account": account, "checks": checks,
+            "summary": ("всё доступно" if not failed
+                        else "не работает: " + ", ".join(c["what"].lower() for c in failed))}
