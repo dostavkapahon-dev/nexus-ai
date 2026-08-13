@@ -93,6 +93,20 @@ async def get_connections(db: AsyncSession = Depends(get_db)):
 @router.post("/api/connections")
 async def save_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
+
+    # Токен из панели Meta переносится по строкам, и вместе с ним копируются
+    # пробелы и переводы строк — Meta на такой строке отвечает «Cannot parse
+    # access token». Раньше чистил только путь «Подключить по токену», а этот —
+    # нет, и один и тот же ключ вёл себя по-разному на двух страницах.
+    if data.get("instagram_access_token"):
+        from core.ig_connect import clean_token
+        token = clean_token(data["instagram_access_token"])
+        data["instagram_access_token"] = token
+        # От типа зависит и адрес API, и способ продления через 60 дней.
+        # Без этого прошлый сохранённый тип молча применялся к новому токену.
+        if "****" not in token:
+            data["instagram_token_type"] = "instagram" if token.startswith("IGAA") else "facebook"
+
     for key_name, key_value in data.items():
         if not key_value or "****" in key_value:
             continue
@@ -182,14 +196,25 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
             results["telegram_bot_token"] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("instagram_access_token"):
+        # У Meta два несовместимых API, и токен живёт только в своём. Токен
+        # Instagram Login (IGAA…) на graph.facebook.com — не токен, а просто
+        # строка, и Facebook отвечает «Cannot parse access token». Рабочий ключ
+        # выглядел сломанным, потому что проверялся не на том сервере.
+        from core.ig_connect import clean_token
+        key = clean_token(key)
+        is_ig = key.startswith("IGAA")
+        endpoint = ("https://graph.instagram.com/v21.0/me" if is_ig
+                    else "https://graph.facebook.com/v19.0/me")
+        fields = "id,username" if is_ig else "id,name"
         try:
             async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.get("https://graph.facebook.com/v19.0/me", params={"access_token": key, "fields": "id,name"})
+                r = await c.get(endpoint, params={"access_token": key, "fields": fields})
                 d = r.json()
                 if "error" in d:
                     results["instagram_access_token"] = {"ok": False, "message": d["error"]["message"][:120]}
                 else:
-                    results["instagram_access_token"] = {"ok": True, "message": f"Аккаунт: {d.get('name', d.get('id'))} ✓"}
+                    name = d.get("username") or d.get("name") or d.get("id")
+                    results["instagram_access_token"] = {"ok": True, "message": f"Аккаунт: {name} ✓"}
         except Exception as e:
             results["instagram_access_token"] = {"ok": False, "message": str(e)[:120]}
 

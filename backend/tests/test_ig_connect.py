@@ -346,3 +346,47 @@ async def test_rejection_includes_fingerprint(client, routes):
     res = await ic.connect("IGAA" + "z" * 120)
     assert res["ok"] is False
     assert "длина 124" in res["token_looks_like"]
+
+
+# ── Проверка ключа на странице «Ключи» ────────────────────────────────────────
+# Именно здесь жил самый дорогой по времени дефект: рабочий токен IGAA…
+# проверялся на graph.facebook.com, где он не токен вовсе, и Meta отвечала
+# «Cannot parse access token». Пользователь трижды менял исправный ключ.
+
+@pytest.mark.asyncio
+async def test_ig_login_token_is_checked_on_instagram_api(auth_client, routes):
+    routes["routes"] = {"graph.instagram.com/v21.0/me": IG_LOGIN_OK,
+                        "graph.facebook.com": {"error": {
+                            "message": "Invalid OAuth access token - Cannot parse access token"}}}
+
+    r = await auth_client.post("/api/connections/test",
+                               json={"instagram_access_token": IG_TOKEN})
+    res = r.json()["instagram_access_token"]
+
+    assert res["ok"] is True, "токен Instagram Login проверен не на своём API"
+    assert "pahon_ai" in res["message"]
+    assert not any("graph.facebook.com" in u for u in routes["seen"])
+
+
+@pytest.mark.asyncio
+async def test_facebook_token_still_checked_on_facebook(auth_client, routes):
+    routes["routes"] = {"graph.facebook.com": {"id": "1", "name": "Pakhon Studio"}}
+
+    r = await auth_client.post("/api/connections/test",
+                               json={"instagram_access_token": FB_TOKEN})
+
+    assert r.json()["instagram_access_token"]["ok"] is True
+    assert any("graph.facebook.com" in u for u in routes["seen"])
+
+
+@pytest.mark.asyncio
+async def test_pasted_token_is_cleaned_and_typed_on_save(auth_client):
+    """Панель Meta переносит токен по строкам — переносы приезжают вместе с ним."""
+    import os
+    dirty = IG_TOKEN[:60] + "\n  " + IG_TOKEN[60:]
+
+    r = await auth_client.post("/api/connections", json={"instagram_access_token": dirty})
+    assert r.json()["ok"] is True
+
+    assert os.environ["INSTAGRAM_ACCESS_TOKEN"] == IG_TOKEN
+    assert os.environ["INSTAGRAM_TOKEN_TYPE"] == "instagram"
