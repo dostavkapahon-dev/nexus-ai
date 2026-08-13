@@ -84,7 +84,25 @@ def test_bad_headers_are_rejected(monkeypatch, header):
 def test_no_secret_means_no_trust(monkeypatch):
     """Без секрета проверить подлинность нечем — значит, не доверяем."""
     monkeypatch.delenv("FACEBOOK_APP_SECRET", raising=False)
+    monkeypatch.delenv("INSTAGRAM_APP_SECRET", raising=False)
     assert wh.check_signature(b"{}", "sha256=" + "0" * 64) is False
+
+
+# Приложение может быть чисто Instagram — Facebook в нём нет вовсе, и секрет
+# называется Instagram app secret. Пока источником был только FACEBOOK_APP_SECRET,
+# вебхуки в таком приложении молча не проходили подпись.
+
+def test_instagram_app_secret_is_accepted(monkeypatch):
+    monkeypatch.delenv("FACEBOOK_APP_SECRET", raising=False)
+    monkeypatch.setenv("INSTAGRAM_APP_SECRET", SECRET)
+    body = json.dumps(COMMENT_PAYLOAD).encode()
+    assert wh.check_signature(body, _sign(body)) is True
+
+
+def test_wrong_instagram_secret_still_rejected(monkeypatch):
+    monkeypatch.delenv("FACEBOOK_APP_SECRET", raising=False)
+    monkeypatch.setenv("INSTAGRAM_APP_SECRET", SECRET)
+    assert wh.check_signature(b"{}", _sign(b"{}", "чужой-секрет")) is False
 
 
 # ───────────────────────────── разбор событий ─────────────────────────────

@@ -35,6 +35,9 @@ class ConnectionsBody(BaseModel):
     # Cookies площадок для публикации через браузер без API-ключей. Принимается
     # как экспорт расширения (массив), так и storage_state Playwright.
     instagram_verify_token: Optional[str] = None   # подтверждение подписки на вебхуки
+    # В приложении без Facebook секрет для подписи вебхуков называется
+    # Instagram app secret — отдельное поле, чтобы не заставлять заполнять «facebook».
+    instagram_app_secret: Optional[str] = None
     instagram_token_type: Optional[str] = None     # facebook | instagram — способ продления
     nexus_browser_storage_state: Optional[str] = None
     nexus_publish_mode: Optional[str] = None

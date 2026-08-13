@@ -88,29 +88,16 @@ export default function Social() {
       </div>
 
       <div className="card p-4 mb-4 border border-violet-500/25">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <div>
-            <div className="text-sm font-medium text-[#e8e8f5] flex items-center gap-2">
-              <Link2 className="w-4 h-4 text-violet-400" /> Подключить Instagram через Facebook
-            </div>
-            <div className="text-[11px] text-[#5a5a7a] mt-1">
-              Обычный OAuth вместо ручного копирования токена. Нужен аккаунт Business/Creator,
-              привязанный к Facebook-странице.
-            </div>
+        {/* Основной путь — по токену из панели Meta. Facebook для него не нужен. */}
+        <div>
+          <div className="text-sm font-medium text-[#e8e8f5] flex items-center gap-2">
+            <Link2 className="w-4 h-4 text-violet-400" /> Подключить Instagram
           </div>
-          <button onClick={connectInstagram} className="btn-primary text-sm">Подключить</button>
-        </div>
-        {oauth && <div className="mt-2 text-xs text-amber-400">{oauth}</div>}
-
-        {/* Прямой путь: токен уже получен в панели Meta, OAuth не нужен. */}
-        <div className="mt-3 pt-3 border-t border-[#1c1c30]">
-          <div className="text-[11px] text-[#9a9ac0] mb-2">
-            <b className="text-[#c0c0e0]">Instagram User Access Token</b> — начинается с
-            <code className="mx-1 px-1 rounded bg-[#111120] text-cyan-300">IGAA…</code>
-            Берётся в приложении Meta → Instagram → API setup with Instagram login →
-            Generate token. Страница Facebook для него не нужна.
-            <br />Токен <code className="mx-1 px-1 rounded bg-[#111120] text-cyan-300">EAA…</code>
-            (Страница Facebook) тоже подойдёт — тип определится сам.
+          <div className="text-[11px] text-[#9a9ac0] mt-1 mb-2">
+            Приложение Meta → Instagram → «API setup with Instagram login» → шаг 2
+            «Generate token» → кнопкой <b className="text-[#c0c0e0]">Copy</b> скопируйте
+            токен <code className="mx-1 px-1 rounded bg-[#111120] text-cyan-300">IGAA…</code>
+            и вставьте сюда. Страница Facebook не нужна.
           </div>
           <div className="flex gap-2 flex-wrap">
             <input
@@ -132,6 +119,18 @@ export default function Social() {
                 : `${igResult.error}${igResult.token_looks_like ? ' · вставленная строка: ' + igResult.token_looks_like : ''}`}
             </div>
           )}
+
+          {/* Путь через Facebook оставлен, но убран с первого плана: он нужен
+              только для Business Discovery (разбор чужих аккаунтов через API). */}
+          <div className="mt-3 pt-3 border-t border-[#1c1c30] text-[11px] text-[#5a5a7a]">
+            Нужен разбор чужих аккаунтов через Business Discovery? Это работает только
+            через Страницу Facebook —{' '}
+            <button onClick={connectInstagram} className="text-violet-400 hover:underline">
+              подключить через Facebook
+            </button>
+            . Для публикации и комментариев не требуется.
+            {oauth && <div className="mt-1 text-amber-400">{oauth}</div>}
+          </div>
         </div>
       </div>
 

@@ -49,14 +49,23 @@ def check_signature(body: bytes, header: str) -> bool:
     Сравнение — постоянного времени: обычное `==` подсказывает атакующему,
     сколько первых байт он угадал.
     """
-    secret = os.getenv("FACEBOOK_APP_SECRET", "").strip()
-    if not (secret and header):
+    if not header:
         return False
     algo, _, sent = (header or "").partition("=")
     if algo != "sha256" or not sent:
         return False
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(sent.encode("utf-8", "ignore"), expected.encode())
+    # Приложение может быть чисто Instagram — тогда Facebook в нём нет вообще,
+    # а секрет называется Instagram app secret. Раньше единственным источником
+    # был FACEBOOK_APP_SECRET, и без Facebook вебхуки молча не проходили подпись.
+    # Пробуем оба: подпись валидна, если сходится хотя бы с одним.
+    for secret in (os.getenv("INSTAGRAM_APP_SECRET", "").strip(),
+                   os.getenv("FACEBOOK_APP_SECRET", "").strip()):
+        if not secret:
+            continue
+        expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+        if hmac.compare_digest(sent.encode("utf-8", "ignore"), expected.encode()):
+            return True
+    return False
 
 
 def parse_events(payload: dict) -> list[dict]:

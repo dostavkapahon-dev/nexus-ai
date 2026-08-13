@@ -1,6 +1,6 @@
 # TEST RESULTS — NEXUS AI
 
-Прогон: `cd backend && python -m pytest -q` → **361 passed** (после вебхуков и прямого подключения Instagram;
+Прогон: `cd backend && python -m pytest -q` → **363 passed** (после вебхуков и прямого подключения Instagram;
 на момент аудита от 2026-08-11 было 137).
 
 ## Покрытие по блокам
@@ -21,7 +21,7 @@
 | Работа без внешних ИИ | 02 | `tests/test_no_ai_mode.py` | 8 | 🟢 PASS |
 | Строка подключения к БД | 01 | `tests/test_db_url.py` | 11 | 🟢 PASS |
 | Браузерная сессия без API | 10 | `tests/test_browser_session.py` | 15 | 🟢 PASS |
-| Вебхуки Instagram (подпись, токен) | 03 | `tests/test_webhooks.py` | 23 | 🟢 PASS |
+| Вебхуки Instagram (подпись, токен) | 03 | `tests/test_webhooks.py` | 25 | 🟢 PASS |
 | Подключение Instagram по токену | 03 | `tests/test_ig_connect.py` | 31 | 🟢 PASS |
 | Instagram Login API (IGAA…) | 03 | `tests/test_ig_login_api.py` | 15 | 🟢 PASS |
 

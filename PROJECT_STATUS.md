@@ -32,7 +32,7 @@ API-ключи выживают только потому, что продубл
 |---|---|---|---|
 | 01 | Core / Orchestrator | 🟢 | **BLOCK 01 выполнен:** система задач (id, статусы, retry, шаги, восстановление после рестарта), alembic, Postgres-совместимость |
 | 02 | AI Provider Layer | 🟢 | **BLOCK 02 выполнен:** единая касса расходов (все вызовы), бюджет с алертами, реальный `ai_mode`, точные токены Gemini |
-| 03 | Social Connectors | 🟢 | **BLOCK 03 выполнен:** `SocialConnector` + 6 коннекторов, OAuth Instagram, продление токенов, rate-limit, health |
+| 03 | Social Connectors | 🟢 | **BLOCK 03 выполнен:** `SocialConnector` + 6 коннекторов, продление токенов, rate-limit, health. Instagram подключается **без Facebook** — по токену `IGAA…` (Instagram Login); Facebook нужен только для Business Discovery |
 | 04 | Social Analytics | 🟢 | **BLOCK 04 выполнен:** метрики публикаций в БД, джоб сбора в 23:00, обучение памяти агента на реальных результатах |
 | 05 | Market / Competitor Research | 🟢 | **BLOCK 05 выполнен:** история исследований в БД, отслеживание конкурентов с динамикой, сводка рынка для агентов |
 | 06 | Content Strategy | 🟢 | **BLOCK 06 выполнен:** версии стратегий в БД, привязка публикаций, сравнение по фактическому ER |
