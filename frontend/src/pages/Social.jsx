@@ -16,12 +16,23 @@ export default function Social() {
   const [session, setSession] = useState(null)
   const [igToken, setIgToken] = useState('')
   const [igResult, setIgResult] = useState(null)
+  const [hook, setHook] = useState(null)
+  const [copied, setCopied] = useState('')
 
   const load = async () => {
     setLoading(true)
     try { setData((await social.health()).data) } catch {}
     try { setBrowser((await social.browserStatus()).data) } catch {}
+    try { setHook((await social.webhookConfig()).data) } catch {}
     setLoading(false)
+  }
+
+  // Значения длинные, и опечатка при перепечатывании даёт у Meta безликое
+  // «couldn't be validated» — поэтому только копированием.
+  const copy = async (what, value) => {
+    try { await navigator.clipboard.writeText(value); setCopied(what) }
+    catch { setCopied('') }
+    setTimeout(() => setCopied(''), 1500)
   }
   useEffect(() => { load() }, [])
 
@@ -132,6 +143,47 @@ export default function Social() {
             {oauth && <div className="mt-1 text-amber-400">{oauth}</div>}
           </div>
         </div>
+      </div>
+
+      {/* Готовые значения для панели Meta: составлять руками их больше не нужно. */}
+      <div className="card p-4 mb-4 border border-cyan-500/25">
+        <div className="text-sm font-medium text-[#e8e8f5] mb-1">
+          💬 Комментарии в реальном времени (необязательно)
+        </div>
+        <div className="text-[11px] text-[#5a5a7a] mb-3">
+          Без этого комментарии разбираются раз в 4 часа. Вставьте оба значения в
+          панели Meta → Instagram → Webhooks, поля <b>comments</b> и <b>mentions</b>.
+        </div>
+
+        {hook?.callback_url ? (
+          <div className="space-y-2">
+            {[['Callback URL', hook.callback_url, 'url'],
+              ['Verify token', hook.verify_token, 'token']].map(([label, value, key]) => (
+              <div key={key}>
+                <div className="text-[10px] text-[#5a5a7a] mb-1">{label}</div>
+                <div className="flex gap-2">
+                  <code className="flex-1 min-w-0 text-[11px] px-2 py-1.5 rounded-lg bg-[#0d0d1a] border border-[#1c1c30] text-cyan-300 truncate">
+                    {value}
+                  </code>
+                  <button onClick={() => copy(key, value)}
+                    className="text-[11px] px-2.5 py-1.5 rounded-lg bg-[#111120] border border-[#1c1c30] text-[#c0c0e0] shrink-0">
+                    {copied === key ? 'Скопировано' : 'Копировать'}
+                  </button>
+                </div>
+              </div>
+            ))}
+            {!hook.app_secret_set && (
+              <div className="text-[11px] text-amber-400 mt-1">
+                ⚠️ Не задан Instagram app secret — события будут отклоняться по подписи.
+                Ключи API → Instagram.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="text-[11px] text-amber-400">
+            {hook?.error || 'Загружаю…'}
+          </div>
+        )}
       </div>
 
       {/* Путь без ключей Meta: публикация через веб-интерфейс на сервере. */}

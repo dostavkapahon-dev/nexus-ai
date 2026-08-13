@@ -210,3 +210,54 @@ def test_non_ascii_token_is_rejected_not_crashed(monkeypatch):
 def test_non_ascii_signature_is_rejected_not_crashed(monkeypatch):
     monkeypatch.setenv("FACEBOOK_APP_SECRET", SECRET)
     assert wh.check_signature(b"{}", "sha256=подпись") is False
+
+
+# ── готовые значения для панели Meta ──────────────────────────────────────────
+# Оба значения раньше составлялись руками: адрес угадывался, токен придумывался
+# и вписывался в двух местах. Расхождение в один символ Meta объясняет безликим
+# «The callback URL or verify token couldn't be validated».
+
+@pytest.mark.asyncio
+async def test_webhook_config_gives_ready_values(auth_client, monkeypatch):
+    monkeypatch.setenv("NEXUS_PUBLIC_URL", "https://nexus-ai.onrender.com/")
+    monkeypatch.delenv(wh.VERIFY_TOKEN_ENV, raising=False)
+
+    d = (await auth_client.get("/api/social/webhook/config")).json()
+
+    assert d["ok"] is True
+    assert d["callback_url"] == "https://nexus-ai.onrender.com/api/social/webhook/instagram"
+    assert d["verify_token"] and d["verify_token_generated"] is True
+
+
+@pytest.mark.asyncio
+async def test_generated_token_actually_confirms_subscription(auth_client, monkeypatch):
+    """Сгенерированное значение обязано проходить собственную же проверку."""
+    monkeypatch.setenv("NEXUS_PUBLIC_URL", "https://nexus-ai.onrender.com")
+    monkeypatch.delenv(wh.VERIFY_TOKEN_ENV, raising=False)
+
+    token = (await auth_client.get("/api/social/webhook/config")).json()["verify_token"]
+    ok, payload = wh.check_subscription("subscribe", token, "12345")
+
+    assert ok is True and payload == "12345"
+
+
+@pytest.mark.asyncio
+async def test_existing_token_is_not_regenerated(auth_client, monkeypatch):
+    """Перевыпуск сломал бы уже настроенную в панели Meta подписку."""
+    monkeypatch.setenv("NEXUS_PUBLIC_URL", "https://nexus-ai.onrender.com")
+    monkeypatch.setenv(wh.VERIFY_TOKEN_ENV, "уже-настроенный")
+
+    d = (await auth_client.get("/api/social/webhook/config")).json()
+
+    assert d["verify_token"] == "уже-настроенный"
+    assert d["verify_token_generated"] is False
+
+
+@pytest.mark.asyncio
+async def test_no_public_url_says_what_to_do(auth_client, monkeypatch):
+    monkeypatch.delenv("NEXUS_PUBLIC_URL", raising=False)
+    monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+
+    d = (await auth_client.get("/api/social/webhook/config")).json()
+
+    assert d["ok"] is False and "публичный адрес" in d["error"]

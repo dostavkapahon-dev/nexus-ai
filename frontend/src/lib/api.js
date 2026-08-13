@@ -98,6 +98,7 @@ export const social = {
   oauthStart: () => api.get('/social/oauth/start'),
   connectInstagramToken: (access_token, account_id = '') =>
     api.post('/social/instagram/connect', { access_token, account_id }),
+  webhookConfig: () => api.get('/social/webhook/config'),
   browserStatus: () => api.get('/social/browser/status'),
   browserSession: (platform = 'instagram') => api.get('/social/browser/session', { params: { platform } }),
 }

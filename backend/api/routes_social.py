@@ -166,6 +166,50 @@ async def instagram_connect(body: TokenBody):
     return await connect(body.access_token, body.account_id or "")
 
 
+@router.get("/webhook/config")
+async def webhook_config():
+    """Готовые значения для панели Meta: адрес обратного вызова и токен подтверждения.
+
+    Раньше оба значения приходилось составлять вручную — адрес угадывать по
+    имени сервиса, токен придумывать и вписывать в двух местах одинаково.
+    Расхождение в один символ давало у Meta безликое «The callback URL or verify
+    token couldn't be validated». Теперь адрес считается от фактического
+    публичного адреса, а токен генерируется и сохраняется сам при первом заходе.
+    """
+    import secrets
+    from core.webhooks import VERIFY_TOKEN_ENV
+    from connectors.instagram import _save_key
+
+    base = (os.getenv("RENDER_EXTERNAL_URL", "")
+            or os.getenv("NEXUS_PUBLIC_URL", "")).strip().rstrip("/")
+
+    token = os.getenv(VERIFY_TOKEN_ENV, "").strip()
+    generated = False
+    if not token:
+        # Значение произвольное — важно лишь, чтобы совпадало здесь и в панели.
+        token = "nexus-" + secrets.token_hex(12)
+        await _save_key(VERIFY_TOKEN_ENV.lower(), token)
+        generated = True
+
+    app_secret_set = bool(os.getenv("INSTAGRAM_APP_SECRET", "").strip()
+                          or os.getenv("FACEBOOK_APP_SECRET", "").strip())
+
+    return {
+        "ok": bool(base),
+        "callback_url": f"{base}/api/social/webhook/instagram" if base else "",
+        "verify_token": token,
+        "verify_token_generated": generated,
+        "app_secret_set": app_secret_set,
+        "fields": ["comments", "mentions"],
+        "error": "" if base else
+                 "не определён публичный адрес сервиса — впишите его в Ключи API → Instagram",
+        "note": ("Скопируйте оба значения в панель Meta → Instagram → Webhooks. "
+                 "Без Instagram app secret события будут отклоняться по подписи."
+                 if app_secret_set is False else
+                 "Скопируйте оба значения в панель Meta → Instagram → Webhooks."),
+    }
+
+
 @router.get("/oauth/start")
 async def oauth_start():
     """Ссылка на подключение Instagram через Facebook.
