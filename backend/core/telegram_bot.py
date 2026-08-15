@@ -159,12 +159,10 @@ async def _refresh_env_from_db():
     """Подтягивает ключи из БД в окружение — чтобы сохранённое в дашборде
     работало сразу, без перезапуска сервера (процесс бота читал env на старте)."""
     try:
-        from database.models import Connection
-        async with AsyncSessionLocal() as db:
-            res = await db.execute(select(Connection))
-            for c in res.scalars():
-                if c.key_value and "****" not in (c.key_value or ""):
-                    os.environ[c.key_name.upper()] = c.key_value
+        # Тот же слой, что и на старте сервера: он расшифровывает значения,
+        # иначе после включения шифрования бот подставлял бы шифротекст.
+        from core.credentials import load_into_env
+        await load_into_env()
     except Exception:
         pass
 

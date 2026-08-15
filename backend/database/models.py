@@ -119,7 +119,15 @@ class Connection(Base):
     id = Column(String, primary_key=True, default=gen_id)
     key_name = Column(String, unique=True, nullable=False)
     key_value = Column(Text)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    # Когда подключение появилось и когда его меняли — без этого в интерфейсе
+    # нельзя ответить на вопрос «когда я это подключал».
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Результат последней проверки связи: чтобы страница подключений показывала
+    # состояние сразу, а не дёргала провайдера при каждом открытии.
+    last_check_at = Column(DateTime)
+    last_check_ok = Column(Boolean)
+    last_check_error = Column(String)
 
 class UserProfile(Base):
     """Global user profile — product description, brand style, strategy settings."""

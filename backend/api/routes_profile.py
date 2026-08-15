@@ -72,8 +72,10 @@ async def cost_estimate(ai_mode: str = "economy", posts_per_day: int = 1, days: 
 async def check_infrastructure(db: AsyncSession = Depends(get_db)):
     results = {}
 
+    from core import secrets
     conn_result = await db.execute(select(Connection))
-    db_keys = {c.key_name: c.key_value for c in conn_result.scalars()}
+    db_keys = {c.key_name: (secrets.decrypt(c.key_value or "") or "")
+               for c in conn_result.scalars()}
     def key(name): return os.getenv(name.upper()) or db_keys.get(name, "")
 
     # 1. Anthropic

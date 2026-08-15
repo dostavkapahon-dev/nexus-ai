@@ -78,10 +78,10 @@ async def lifespan(app: FastAPI):
         pass
 
     await init_db()
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Connection))
-        for conn in result.scalars():
-            os.environ[conn.key_name.upper()] = conn.key_value or ""
+    # Доступы едут в окружение через один слой: он же расшифровывает их и, если
+    # шифрование только что включили, дошифровывает старые записи.
+    from core.credentials import load_into_env
+    await load_into_env()
     set_broadcast(manager.broadcast)
     # Задачи, зависшие в RUNNING с прошлого запуска, помечаем потерянными —
     # иначе они висят вечно и врут о состоянии системы.

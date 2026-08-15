@@ -5,7 +5,9 @@
 ```
 USER
  ├── Telegram (long-polling)         core/telegram_bot.py
- └── Web Dashboard (React/Vite)      frontend/
+ └── Web (React/Vite)                frontend/  — 7 разделов:
+      Главная · Командный центр · Подключения · Агенты · Контент ·
+      Настройки · API/Credentials
               ↓
    command_center.run_command        core/command_center.py   ← единая точка входа
               ↓ intent.route()       core/intent.py
@@ -28,6 +30,8 @@ USER
                                             server_browser / desktop_agent
               ↓
    SQLite (эфемерная!) + Connection KV + data/*.json
+   доступы: core/credentials.py → core/secrets.py (шифрование NEXUS_SECRET_KEY)
+            → os.environ на старте, весь код читает их через os.getenv
 ```
 
 ## Второй конвейер (архитектурная развилка ⚠️)

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
+import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { connections as connectionsApi } from '../lib/api'
 
 const PROVIDERS = [
@@ -328,8 +328,10 @@ const PROVIDERS = [
   },
 ]
 
-function FieldInput({ field, value, onChange, testResult }) {
+function FieldInput({ field, value, onChange, onDelete, testResult }) {
   const [show, setShow] = React.useState(false)
+  // Пустое поле означает «не трогали» — стереть ключ можно только явной кнопкой.
+  const saved = Boolean(value)
   return (
     <div className="space-y-1">
       <label className="text-xs text-nexus-muted">{field.label}</label>
@@ -348,6 +350,12 @@ function FieldInput({ field, value, onChange, testResult }) {
           </button>
         )}
       </div>
+      {saved && (
+        <button type="button" onClick={() => onDelete(field)}
+          className="flex items-center gap-1 text-xs text-nexus-muted hover:text-red-400 transition">
+          <Trash2 className="w-3 h-3" /> Удалить ключ
+        </button>
+      )}
       {testResult && (
         <div className={'flex items-center gap-1 text-xs ' + (testResult.ok ? 'text-green-400' : 'text-red-400')}>
           {testResult.ok ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
@@ -358,7 +366,7 @@ function FieldInput({ field, value, onChange, testResult }) {
   )
 }
 
-function ProviderCard({ provider, values, onChange, testResults }) {
+function ProviderCard({ provider, values, onChange, onDelete, testResults }) {
   const [open, setOpen] = React.useState(false)
   const hasKeys = provider.fields.some(f => values[f.key])
   const tested = provider.fields.filter(f => testResults[f.key])
@@ -392,7 +400,8 @@ function ProviderCard({ provider, values, onChange, testResults }) {
           <div className="p-4 space-y-4">
             <h4 className="text-xs font-semibold text-purple-300 uppercase tracking-wider">API Ключи</h4>
             {provider.fields.map(field => (
-              <FieldInput key={field.key} field={field} value={values[field.key]} onChange={onChange} testResult={testResults[field.key]} />
+              <FieldInput key={field.key} field={field} value={values[field.key]} onChange={onChange}
+                onDelete={onDelete} testResult={testResults[field.key]} />
             ))}
           </div>
           <div className="p-4">
@@ -447,6 +456,15 @@ export default function Connections() {
     } catch { setTestResults({}) }
     setTesting(false)
   }
+  const removeKey = async (field) => {
+    if (!window.confirm(`Удалить ${field.label}? Ключ будет стёрт с сервера.`)) return
+    const { data } = await connectionsApi.remove(field.key)
+    if (data?.ok) {
+      setValues(p => { const next = { ...p }; delete next[field.key]; return next })
+      setTestResults(p => { const next = { ...p }; delete next[field.key]; return next })
+      if (data.note) window.alert(data.note)
+    }
+  }
   const connectedCount = PROVIDERS.filter(p => p.fields.some(f => values[f.key])).length
   return (
     <div className="max-w-4xl mx-auto">
@@ -478,13 +496,13 @@ export default function Connections() {
               ⭐ Необходимое для Reels-автоматизации
             </div>
             <div className="space-y-3">
-              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} onDelete={removeKey} testResults={testResults} />)}
             </div>
             <div className="text-xs font-semibold text-[#5a5a7a] uppercase tracking-wider mt-6 mb-2">
               Опционально — можно подключить позже (есть бесплатные)
             </div>
             <div className="space-y-3 opacity-80">
-              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} onDelete={removeKey} testResults={testResults} />)}
             </div>
           </>
         )

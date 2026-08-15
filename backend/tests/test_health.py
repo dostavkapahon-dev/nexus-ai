@@ -115,3 +115,14 @@ async def test_agents_api(auth_client):
 async def test_system_health_requires_auth(client):
     r = await client.get("/api/system/health")
     assert r.status_code in (401, 403)
+
+
+@pytest.mark.asyncio
+async def test_summary_is_short_and_answers_five_questions(auth_client):
+    """Главная должна отвечать на пять вопросов ТЗ одним запросом."""
+    body = (await auth_client.get("/api/system/summary")).json()
+    assert set(body) >= {"system", "connections", "current_task",
+                         "published_today", "errors"}
+    assert isinstance(body["connections"], list)
+    # Задач нет — значит и «текущей задачи» нет, а не выдуманный прогресс.
+    assert body["current_task"] is None or "percent" in body["current_task"]

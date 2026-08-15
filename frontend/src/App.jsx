@@ -1,48 +1,49 @@
 import React from 'react'
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom'
-import { Activity, Zap, LayoutDashboard, PlusCircle, List, Rocket, Cpu, BarChart2, Plug, LogOut, Bot, ListChecks, DollarSign, Share2, TrendingUp, Search, Compass, Send, HeartPulse } from 'lucide-react'
-import Control from './pages/Control'
-import Dashboard from './pages/Dashboard'
-import NewNiche from './pages/NewNiche'
-import Queue from './pages/Queue'
-import PromptStudio from './pages/PromptStudio'
-import Connections from './pages/Connections'
-import TelegramConnect from './pages/TelegramConnect'
-import BotSetup from './pages/BotSetup'
+import { Home as HomeIcon, Zap, Activity, Plug, Bot, Calendar, Settings as Cog, KeyRound, LogOut } from 'lucide-react'
+import Home from './pages/Home'
 import CommandCenter from './pages/CommandCenter'
-import AgentSetup from './pages/AgentSetup'
-import Analytics from './pages/Analytics'
-import Tasks from './pages/Tasks'
-import Cost from './pages/Cost'
-import Publishing from './pages/Publishing'
-import Health from './pages/Health'
-import Social from './pages/Social'
-import Performance from './pages/Performance'
+import ConnectionsHub from './pages/ConnectionsHub'
+import Agents from './pages/Agents'
+import Content from './pages/Content'
+import Settings from './pages/Settings'
+import Credentials from './pages/Credentials'
 import Research from './pages/Research'
 import Strategy from './pages/Strategy'
-import Director from './pages/Director'
+import Performance from './pages/Performance'
 import Login from './pages/Login'
 import { auth } from './lib/api'
 
+// Семь разделов вместо восемнадцати. Всё, что раньше было отдельным пунктом,
+// живёт внутри одного из них: очереди — в «Контенте», ключи и площадки —
+// в «Подключениях», промпты, расходы и здоровье — в «Настройках».
 const NAV = [
-  { to: '/',            icon: Rocket,          label: 'Центр управления' },
-  { to: '/hq',          icon: Activity,        label: 'Командный центр' },
-  { to: '/agent',       icon: Cpu,             label: 'Настройка агента' },
-  { to: '/director',    icon: Bot,             label: 'Дирижёр' },
-  { to: '/health',      icon: HeartPulse,      label: 'Здоровье' },
-  { to: '/tasks',       icon: ListChecks,      label: 'Задачи' },
-  { to: '/queue',       icon: List,            label: 'Очередь' },
-  { to: '/strategy',    icon: Compass,         label: 'Стратегии' },
-  { to: '/research',    icon: Search,          label: 'Исследования' },
-  { to: '/performance', icon: TrendingUp,      label: 'Результаты' },
-  { to: '/analytics',   icon: BarChart2,       label: 'Аналитика' },
-  { to: '/publishing',  icon: Send,            label: 'Публикации' },
-  { to: '/cost',        icon: DollarSign,      label: 'Расходы' },
-  { to: '/social',      icon: Share2,          label: 'Площадки' },
-  { to: '/connections', icon: Plug,            label: 'Ключи API' },
-  { to: '/telegram',    icon: Send,            label: 'Telegram-канал' },
-  { to: '/bot',         icon: Bot,             label: 'Telegram-бот' },
-  { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
+  { to: '/',            icon: HomeIcon, label: 'Главная' },
+  { to: '/hq',          icon: Activity, label: 'Командный центр' },
+  { to: '/connections', icon: Plug,     label: 'Подключения' },
+  { to: '/agents',      icon: Bot,      label: 'Агенты' },
+  { to: '/content',     icon: Calendar, label: 'Контент' },
+  { to: '/settings',    icon: Cog,      label: 'Настройки' },
+  { to: '/credentials', icon: KeyRound, label: 'API / Credentials' },
+]
+
+// Старые адреса остаются рабочими: они у пользователя в закладках и в ссылках
+// из Telegram. Убрать можно, когда станет видно, что по ним больше не ходят.
+const LEGACY_REDIRECTS = [
+  ['/dash', '/'],
+  ['/health', '/settings?tab=health'],
+  ['/cost', '/settings?tab=cost'],
+  ['/prompts', '/settings?tab=prompts'],
+  ['/agent', '/settings?tab=agent'],
+  ['/new', '/settings'],
+  ['/analytics', '/'],
+  ['/director', '/hq'],
+  ['/queue', '/content?tab=plan'],
+  ['/publishing', '/content?tab=publications'],
+  ['/tasks', '/content?tab=tasks'],
+  ['/social', '/connections?tab=platforms'],
+  ['/bot', '/connections?tab=telegram'],
+  ['/telegram', '/connections?tab=telegram'],
 ]
 
 function RequireAuth({ children }) {
@@ -99,26 +100,20 @@ function Layout() {
       <Sidebar />
       <main className="flex-1 ml-52 p-6 overflow-auto min-h-screen">
         <Routes>
-          <Route path="/"            element={<Control />} />
-          <Route path="/dash"        element={<Dashboard />} />
-          <Route path="/director"    element={<Director />} />
-          <Route path="/new"         element={<NewNiche />} />
-          <Route path="/queue"       element={<Queue />} />
-          <Route path="/tasks"       element={<Tasks />} />
-          <Route path="/cost"        element={<Cost />} />
-          <Route path="/publishing" element={<Publishing />} />
-          <Route path="/health"      element={<Health />} />
-          <Route path="/social"      element={<Social />} />
-          <Route path="/performance" element={<Performance />} />
+          <Route path="/"            element={<Home />} />
+          <Route path="/hq"          element={<CommandCenter />} />
+          <Route path="/connections" element={<ConnectionsHub />} />
+          <Route path="/agents"      element={<Agents />} />
+          <Route path="/content"     element={<Content />} />
+          <Route path="/settings"    element={<Settings />} />
+          <Route path="/credentials" element={<Credentials />} />
+          {/* Не в меню, но со своей ценностью и ссылками из командного центра. */}
           <Route path="/research"    element={<Research />} />
           <Route path="/strategy"    element={<Strategy />} />
-          <Route path="/analytics"   element={<Analytics />} />
-          <Route path="/prompts"     element={<PromptStudio />} />
-          <Route path="/connections" element={<Connections />} />
-          <Route path="/telegram"    element={<TelegramConnect />} />
-          <Route path="/bot"         element={<BotSetup />} />
-          <Route path="/hq"          element={<CommandCenter />} />
-          <Route path="/agent"       element={<AgentSetup />} />
+          <Route path="/performance" element={<Performance />} />
+          {LEGACY_REDIRECTS.map(([from, to]) => (
+            <Route key={from} path={from} element={<Navigate to={to} replace />} />
+          ))}
         </Routes>
       </main>
     </div>

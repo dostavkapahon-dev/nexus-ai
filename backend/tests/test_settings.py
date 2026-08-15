@@ -11,15 +11,17 @@ def test_mask_hides_middle():
     assert mask(KEY) == "sk-t****cdef"
 
 
-def test_mask_skips_short_and_empty():
-    assert mask("short") == ""
+def test_mask_hides_short_value_but_keeps_it_visible():
+    # Короткое значение прячем целиком, но не «стираем»: пустая строка означала
+    # бы, что ключ не сохранён, — и пользователь сохранял его снова и снова.
+    assert mask("short") == "*****"
     assert mask("") == ""
     assert mask(None) == ""
 
 
 async def test_save_then_get_returns_masked(auth_client):
     r = await auth_client.post("/api/connections", json={"openai_api_key": KEY})
-    assert r.status_code == 200 and r.json() == {"ok": True}
+    assert r.status_code == 200 and r.json()["ok"] is True
 
     got = (await auth_client.get("/api/connections")).json()
     assert got["openai_api_key"] == mask(KEY)

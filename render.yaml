@@ -29,6 +29,11 @@ services:
         sync: false
       - key: ADMIN_PASSWORD
         sync: false
+      # Ключ шифрования сохранённых доступов. Пока он не задан, ключи площадок
+      # лежат в базе открытым текстом. Задайте любую длинную строку — и НЕ теряйте
+      # её: без неё зашифрованные значения прочитать нельзя, их придётся ввести заново.
+      - key: NEXUS_SECRET_KEY
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY

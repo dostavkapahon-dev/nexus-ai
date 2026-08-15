@@ -55,6 +55,9 @@ export const connections = {
   list: () => api.get('/connections'),
   save: (data) => api.post('/connections', data),
   test: (data) => api.post('/connections/test', data),
+  remove: (key) => api.delete(`/connections/${key}`),
+  status: () => api.get('/connections/status'),
+  recheck: (key) => api.post(`/connections/${key}/recheck`),
 }
 
 export const analytics = {
@@ -148,6 +151,7 @@ export const cost = {
 }
 
 export const system = {
+  summary: () => api.get('/system/summary'),
   health: () => api.get('/system/health'),
   build: () => api.get('/health'),
   agents: (hours = 24) => api.get('/system/agents', { params: { hours } }),
