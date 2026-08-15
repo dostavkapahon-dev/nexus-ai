@@ -26,9 +26,13 @@ async def next_job():
 
 @router.get("/jobs")
 async def list_jobs(status: str = "", limit: int = 50):
-    from core.production_queue import jobs, stats, producer
-    return {"items": await jobs(status, limit), "stats": await stats(),
-            "producer": await producer()}
+    from core.production_queue import jobs, stats, producer, brief_as_text
+
+    # ТЗ словами кладём прямо в список: исполнителю его надо переслать, а тянуть
+    # ради текста `/next` нельзя — тот забирает задание себе.
+    items = [{**j, "brief_text": brief_as_text(j.get("brief"))}
+             for j in await jobs(status, limit)]
+    return {"items": items, "stats": await stats(), "producer": await producer()}
 
 
 @router.get("/jobs/{job_id}")

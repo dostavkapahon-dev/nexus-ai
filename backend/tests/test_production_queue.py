@@ -223,6 +223,17 @@ async def test_api_full_round_trip(auth_client, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_jobs_list_carries_brief_text(auth_client):
+    """ТЗ словами должно быть видно в списке: его пересылают исполнителю, а
+    тянуть ради текста /next нельзя — тот забирает задание себе."""
+    await auth_client.post("/api/production/jobs", json={"brief": BRIEF})
+
+    items = (await auth_client.get("/api/production/jobs")).json()["items"]
+    assert "Раскадровка" in items[0]["brief_text"]
+    assert items[0]["status"] == "queued", "просмотр списка не должен забирать задание"
+
+
+@pytest.mark.asyncio
 async def test_api_fail_tells_the_owner(auth_client, monkeypatch):
     told = []
 

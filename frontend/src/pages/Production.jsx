@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Clapperboard, Loader, RefreshCw, RotateCcw, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Clapperboard, Loader, RefreshCw, RotateCcw, X, ChevronDown, ChevronUp, Copy, Check, Upload } from 'lucide-react'
 import { production } from '../lib/api'
 
 // Производство роликов внешним исполнителем. Здесь видно, какое ТЗ ушло,
@@ -15,10 +15,68 @@ const STATUS = {
 
 const fmt = (iso) => (iso ? iso.slice(0, 16).replace('T', ' ') : '—')
 
-function Job({ job, onRetry, onCancel }) {
+const NEXT_NOTE = {
+  awaiting_approval: 'Ролик ушёл вам в Telegram на согласование.',
+  no_telegram: 'Ролик принят, но согласовать некому — Telegram не подключён.',
+}
+
+// Форма приёма готового медиа. Ссылки приносит внешний исполнитель, сервер
+// сам их не достанет — без этой формы задание висит в очереди навсегда.
+function Handover({ job, onDone }) {
+  const [form, setForm] = useState({ video_url: '', image_url: '', audio_url: '', note: '' })
+  const [err, setErr] = useState('')
+  const [busy, setBusy] = useState(false)
+  const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
+
+  const send = async () => {
+    setErr(''); setBusy(true)
+    try {
+      const { data } = await production.result(job.id, form)
+      if (!data.ok) { setErr(data.error || 'сервер не принял результат'); return }
+      onDone(NEXT_NOTE[data.next?.status] || data.next?.note || 'Результат принят.')
+    } catch (e) {
+      setErr(e.response?.data?.detail || e.message)
+    } finally { setBusy(false) }
+  }
+
+  const field = (k, ph) => (
+    <input value={form[k]} onChange={set(k)} placeholder={ph}
+      className="w-full bg-[#09091a] border border-[#1c1c30] rounded-lg px-3 py-2 text-xs
+                 text-[#c0c0e0] placeholder-[#4a4a68] focus:outline-none focus:border-violet-500/40" />
+  )
+
+  return (
+    <div className="mt-3 space-y-2 bg-[#09091a] rounded-lg p-3">
+      {field('video_url', 'ссылка на готовый ролик (mp4)')}
+      {field('image_url', 'ссылка на обложку или фото')}
+      {field('audio_url', 'ссылка на озвучку')}
+      {field('note', 'заметка: чем и как сделано')}
+      {err && <div className="text-xs text-red-300">{err}</div>}
+      <button onClick={send} disabled={busy}
+        className="px-3 py-1.5 rounded-lg text-xs bg-violet-600/20 border border-violet-500/30
+                   text-violet-200 hover:bg-violet-600/30 disabled:opacity-40">
+        {busy ? 'Отправляю…' : 'Отправить в конвейер'}
+      </button>
+      <p className="text-[11px] text-[#5a5a7a]">
+        Дальше система смонтирует ролик и пришлёт вам на согласование.
+      </p>
+    </div>
+  )
+}
+
+function Job({ job, onRetry, onCancel, onDone }) {
   const [open, setOpen] = useState(false)
+  const [give, setGive] = useState(false)
+  const [copied, setCopied] = useState(false)
   const st = STATUS[job.status] || STATUS.queued
   const brief = job.brief || {}
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(job.brief_text || JSON.stringify(brief, null, 2))
+      setCopied(true); setTimeout(() => setCopied(false), 2000)
+    } catch { setOpen(true) }   // буфер недоступен — просто раскрываем ТЗ
+  }
 
   return (
     <div className={`rounded-xl border p-4 ${st.cls}`}>
@@ -52,6 +110,17 @@ function Job({ job, onRetry, onCancel }) {
           {open ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
           ТЗ
         </button>
+        <button onClick={copy}
+          className="text-xs text-[#5a5a7a] hover:text-cyan-300 flex items-center gap-1">
+          {copied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+          {copied ? 'скопировано' : 'копировать ТЗ'}
+        </button>
+        {job.status !== 'done' && job.status !== 'cancelled' && (
+          <button onClick={() => setGive(g => !g)}
+            className="text-xs text-[#5a5a7a] hover:text-emerald-300 flex items-center gap-1">
+            <Upload className="w-3 h-3" /> вставить готовое
+          </button>
+        )}
         {job.status !== 'done' && (
           <>
             <button onClick={() => onRetry(job)}
@@ -66,9 +135,11 @@ function Job({ job, onRetry, onCancel }) {
         )}
       </div>
 
+      {give && <Handover job={job} onDone={onDone} />}
+
       {open && (
         <pre className="text-[11px] text-[#8a8ab0] whitespace-pre-wrap mt-2 bg-[#09091a] rounded-lg p-3 overflow-x-auto">
-          {JSON.stringify(brief, null, 2)}
+          {job.brief_text || JSON.stringify(brief, null, 2)}
         </pre>
       )}
     </div>
@@ -78,6 +149,7 @@ function Job({ job, onRetry, onCancel }) {
 export default function Production() {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
 
   const load = async () => {
     setBusy(true)
@@ -130,6 +202,12 @@ export default function Production() {
         </p>
       </div>
 
+      {note && (
+        <div className="text-sm text-emerald-300 bg-emerald-500/5 border border-emerald-500/25 rounded-xl p-3">
+          {note}
+        </div>
+      )}
+
       {items.length === 0 && (
         <div className="text-sm text-[#5a5a7a] bg-[#0d0d1c] border border-[#1c1c30] rounded-xl p-5">
           Заданий пока нет. Они появятся, когда конвейер подготовит ТЗ на ролик.
@@ -140,7 +218,8 @@ export default function Production() {
         {items.map(job => (
           <Job key={job.id} job={job}
             onRetry={async (j) => { await production.retry(j.id); load() }}
-            onCancel={async (j) => { await production.cancel(j.id); load() }} />
+            onCancel={async (j) => { await production.cancel(j.id); load() }}
+            onDone={(msg) => { setNote(msg); load() }} />
         ))}
       </div>
     </div>
