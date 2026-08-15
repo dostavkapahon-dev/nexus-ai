@@ -1,11 +1,44 @@
 # AGENTS — реестр агентов NEXUS AI
 
+## Реестр ролей (`agents/registry.py`)
+
+Роли из ТЗ объявлены явно; классы-агенты и core-модули не переписывались —
+роль ссылается на то, что уже работает.
+
+| Роль | Чем занимается | Нужен доступ | Опирается на |
+|---|---|---|---|
+| `director` | главный управляющий агент | — | `core/marketing_director.py` |
+| `research` | исследование интернета | — | `core/websearch.py`, `core/viral_research.py`, `agents/trend_analyst.py` |
+| `instagram` | работа с Instagram | `INSTAGRAM_ACCESS_TOKEN` | `connectors/instagram.py`, `core/instagram_reader.py` |
+| `tiktok` | работа с TikTok | `TIKTOK_ACCESS_TOKEN` | `connectors/tiktok.py` |
+| `telegram` | работа с Telegram | `TELEGRAM_BOT_TOKEN` | `core/telegram_channels.py`, `connectors/telegram.py` |
+| `content_strategist` | контентная стратегия | — | `agents/strategist.py`, `agents/niche_analyst.py` |
+| `script` | сценарии роликов | — | `core/creative_director.py` |
+| `video` | видео и Reels | — | `core/media_generator.py`, `core/montage.py` |
+| `copywriter` | тексты | — | `agents/copywriter.py`, `voice_adapter.py`, `adapter.py` |
+| `analytics` | аналитика | — | `core/post_analytics.py`, `agents/reporter.py` |
+| `publisher` | публикация | — | `core/publish_queue.py`, `core/autopublish.py`, `publishers/` |
+
+Роль без нужного доступа считается нерабочей: она не попадает в системный промпт
+дирижёра и отказывается запускаться с понятной причиной, а не падает по ходу дела.
+
+`delegate` дирижёра принимает и ключ роли, и имя модели-исполнителя: сначала
+проверяется реестр, затем `core/dispatch.py`.
+
+Все задачи проходят через дирижёра. Агенты не публикуют сами — это проверяется
+тестом `tests/test_agent_registry.py::test_agents_are_not_publishing_on_their_own`.
+
+API: `GET /api/agents`, `POST /api/agents/{key}/run` (запуск оформляется задачей
+и виден в общем журнале). Страница — «🤖 Агенты».
+
 ## Базовый класс
 `agents/base_agent.py:8` — `BaseAgent(ABC)`, атрибут `name`.
 - `call_ai(db, niche_id, variables) -> str` — берёт промпт и модель из `core/prompt_store.py`
   (БД `custom_prompts` → фолбэк `DEFAULT_PROMPTS`), подставляет переменные, зовёт
   `ai_router.call`, логирует в `AgentLog`.
 - `log(db, niche_id, status, model, tokens, cost, duration, error)` — запись расхода.
+- Профиль Главного агента (`core/agent_profile.py`) подмешивается в системную часть
+  промпта здесь же — одной точкой на всех агентов.
 
 ⚠️ Выбор модели у агентов идёт **только** через `prompt_store`. Словари `ECONOMY_MODELS` /
 `PREMIUM_MODELS` из `ai_router` на агентов не влияют, поэтому режим `ai_mode` не работает.

@@ -57,6 +57,13 @@ async def _full_system() -> str:
     from core.dispatch import executors_doc
     base = SYSTEM + "\n\n--- ИСПОЛНИТЕЛИ ДЛЯ delegate (только эти доступны) ---\n" + executors_doc()
     try:
+        from agents.registry import agents_doc
+        doc = agents_doc()
+        if doc:
+            base += "\n\n" + doc
+    except Exception:
+        pass
+    try:
         from core.brand import system_prompt
         base = await system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + base
     except Exception:
@@ -79,7 +86,9 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "executor": {"type": "string",
-                             "description": "Имя исполнителя из списка доступных в системном промпте."},
+                             "description": ("Имя исполнителя-модели ИЛИ ключ агента "
+                                             "из списка в системном промпте (research, "
+                                             "copywriter, content_strategist и т.д.).")},
                 "task": {"type": "string", "description": "Что именно сделать — конкретно и полно."},
                 "system": {"type": "string", "description": "Роль исполнителя, если нужна особая."},
                 "context": {"type": "string", "description": "Данные, на которые опираться."},
@@ -192,8 +201,15 @@ TOOLS = [
 
 async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "delegate":
+        executor = (inp.get("executor") or "").strip().lower()
+        # Сначала роль агента, потом модель: имена не пересекаются, а роль несёт
+        # свою специализацию и своего исполнителя.
+        from agents.registry import get as get_agent, run as run_agent_role
+        if get_agent(executor):
+            return await run_agent_role(executor, inp.get("task", ""),
+                                        inp.get("context", ""))
         from core.dispatch import delegate
-        return await delegate(executor=inp.get("executor", ""), task=inp.get("task", ""),
+        return await delegate(executor=executor, task=inp.get("task", ""),
                               system=inp.get("system", ""), context=inp.get("context", ""))
     if name == "web_search":
         from core.websearch import search

@@ -86,6 +86,11 @@ export const agent = {
   deleteSkill: (id) => api.delete(`/agent/skills/${id}`),
 }
 
+export const agents = {
+  list: () => api.get('/agents'),
+  run: (key, task, context = '') => api.post(`/agents/${key}/run`, { task, context }),
+}
+
 export const agentProfile = {
   get: () => api.get('/agent-profile'),
   save: (data) => api.put('/agent-profile', data),

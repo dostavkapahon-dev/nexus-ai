@@ -1,42 +1,63 @@
 import React, { useEffect, useState } from 'react'
-import { Bot, Loader, RefreshCw } from 'lucide-react'
+import { Bot, Loader, RefreshCw, Play, CheckCircle, AlertTriangle } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { system } from '../lib/api'
+import { agents as agentsApi } from '../lib/api'
 
-// Список агентов и их состояние по журналу вызовов. Роли из ТЗ (Research,
-// Instagram, Publisher и т.д.) появятся здесь, когда будет реестр агентов;
-// пока показываем то, что действительно существует и работает, — придумывать
-// карточки под несуществующие роли значило бы врать про возможности системы.
-const LABELS = {
-  niche_analyst: 'Аналитик ниши',
-  viral_hunter: 'Охотник за вирусами',
-  strategist: 'Стратег',
-  copywriter: 'Копирайтер',
-  reviewer: 'Ревьюер',
-  voice_adapter: 'Голос бренда',
-  visual_creator: 'Визуал',
-  adapter: 'Адаптер площадок',
-  trend_analyst: 'Тренды',
-  funnel_agent: 'Воронка',
-  reporter: 'Отчёты',
-}
-
-const STATUS = {
-  online: { label: 'Работает', cls: 'text-emerald-300 bg-emerald-500/10 border-emerald-500/25' },
-  degraded: { label: 'С ошибками', cls: 'text-amber-300 bg-amber-500/10 border-amber-500/25' },
-  silent: { label: 'Молчит', cls: 'text-[#7a7a9a] bg-[#12122a] border-[#1c1c30]' },
-}
+// Роли агентов по ТЗ. Показываем не только «кто есть», но и чего конкретно
+// не хватает роли, чтобы работать: «агент не работает» без причины —
+// бесполезная информация.
 
 const fmt = (iso) => (iso ? iso.slice(0, 16).replace('T', ' ') : 'ни разу')
+
+function RunBox({ agentKey, onDone }) {
+  const [task, setTask] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [res, setRes] = useState(null)
+
+  const run = async () => {
+    if (!task.trim()) return
+    setBusy(true); setRes(null)
+    try {
+      const { data } = await agentsApi.run(agentKey, task.trim())
+      setRes(data)
+      onDone?.()
+    } catch (e) {
+      setRes({ ok: false, error: e.response?.data?.detail || e.message })
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-3 space-y-2">
+      <div className="flex gap-2">
+        <input value={task} onChange={e => setTask(e.target.value)}
+          onKeyDown={e => e.key === 'Enter' && run()}
+          placeholder="Что поручить этой роли"
+          className="flex-1 bg-[#09091a] border border-[#1c1c30] rounded-lg px-3 py-1.5 text-xs outline-none focus:border-violet-500/50" />
+        <button onClick={run} disabled={busy}
+          className="px-3 py-1.5 rounded-lg bg-violet-600/20 border border-violet-500/30 text-violet-300 text-xs flex items-center gap-1.5 disabled:opacity-50">
+          {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+          Запустить
+        </button>
+      </div>
+      {res && (
+        <div className={`text-xs whitespace-pre-wrap ${res.ok ? 'text-[#c0c0e0]' : 'text-red-400'}`}>
+          {res.ok ? (res.result?.text || res.result?.error || 'готово') : res.error}
+          {res.task_id && <span className="text-[#5a5a7a]"> · {res.task_id}</span>}
+        </div>
+      )}
+    </div>
+  )
+}
 
 export default function Agents() {
   const [items, setItems] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [open, setOpen] = useState('')
 
   const load = async () => {
     setBusy(true)
     try {
-      const { data } = await system.agents(24 * 7)
+      const { data } = await agentsApi.list()
       setItems(data.agents || [])
     } finally { setBusy(false) }
   }
@@ -50,7 +71,9 @@ export default function Agents() {
         </div>
         <div className="flex-1">
           <h1 className="text-xl font-bold">Агенты</h1>
-          <p className="text-sm text-[#5a5a7a]">Кто работает, с каким успехом и когда в последний раз</p>
+          <p className="text-sm text-[#5a5a7a]">
+            Все задачи проходят через дирижёра — агенты не управляют системой сами
+          </p>
         </div>
         <button onClick={load} disabled={busy}
           className="text-[#5a5a7a] hover:text-violet-300 disabled:opacity-40">
@@ -64,35 +87,55 @@ export default function Agents() {
         </div>
       )}
 
-      {items && items.length === 0 && (
-        <div className="bg-[#0d0d1c] border border-[#1c1c30] rounded-xl p-5 text-sm text-[#5a5a7a]">
-          Агенты ещё не запускались. Поставьте задачу в{' '}
-          <Link to="/hq" className="text-violet-400">Командном центре</Link>.
-        </div>
-      )}
-
       <div className="grid md:grid-cols-2 gap-3">
-        {(items || []).map(a => {
-          const st = STATUS[a.status] || STATUS.silent
-          return (
-            <div key={a.agent} className={`rounded-xl border p-4 ${st.cls}`}>
-              <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{LABELS[a.agent] || a.agent}</span>
-                <span className="text-xs">{st.label}</span>
-              </div>
-              <div className="text-xs mt-2 space-y-0.5 opacity-80">
-                <div>вызовов за неделю: {a.calls ?? 0}</div>
-                <div>успешно: {a.success_rate ?? 0}%</div>
-                <div>последний запуск: {fmt(a.last_run)}</div>
-              </div>
+        {(items || []).map(a => (
+          <div key={a.key}
+            className={`rounded-xl border p-4 ${a.ready
+              ? 'border-[#1c1c30] bg-[#0d0d1c]'
+              : 'border-amber-500/25 bg-amber-500/5'}`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium">{a.title}</span>
+              {a.ready
+                ? <span className="text-xs text-emerald-300 flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" /> готов
+                  </span>
+                : <span className="text-xs text-amber-300 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" /> нет доступа
+                  </span>}
             </div>
-          )
-        })}
+            <div className="text-xs text-[#5a5a7a] mt-1">{a.role}</div>
+            <ul className="text-xs text-[#8a8ab0] mt-2 space-y-0.5">
+              {a.does.map(d => <li key={d}>· {d}</li>)}
+            </ul>
+
+            {!a.ready && (
+              <div className="text-xs text-amber-300/90 mt-2">
+                нужен ключ: {a.missing.join(', ')} —{' '}
+                <Link to="/connections?tab=keys" className="underline">подключить</Link>
+              </div>
+            )}
+
+            <div className="text-[11px] text-[#5a5a7a] mt-2">
+              вызовов: {a.calls ?? 0} · последний запуск: {fmt(a.last_run)}
+            </div>
+
+            {a.ready && a.key !== 'director' && (
+              open === a.key
+                ? <RunBox agentKey={a.key} onDone={load} />
+                : <button onClick={() => setOpen(a.key)}
+                    className="mt-3 text-xs text-violet-300 hover:text-violet-200">
+                    Поставить задачу
+                  </button>
+            )}
+          </div>
+        ))}
       </div>
 
       <p className="text-xs text-[#5a5a7a]">
-        Промпты агентов настраиваются в{' '}
-        <Link to="/settings?tab=prompts" className="text-violet-400">Настройках</Link>.
+        Промпты настраиваются в{' '}
+        <Link to="/settings?tab=prompts" className="text-violet-400">Настройках</Link>,
+        рамка работы агента — в{' '}
+        <Link to="/settings?tab=agent" className="text-violet-400">профиле Главного агента</Link>.
       </p>
     </div>
   )
