@@ -144,6 +144,36 @@ class UserProfile(Base):
     google_drive_access_token = Column(Text, default='')     # OAuth token from Google Sign-In
     updated_at = Column(DateTime, default=datetime.utcnow)
 
+class AgentProfile(Base):
+    """Настройки Главного агента — «дирижёра»: кто мы, для кого и по каким правилам.
+
+    Раньше это знание было размазано: бренд и площадки захардкожены в
+    `core/brand.py` под одну студию, ниша и tone of voice лежали в `Niche`,
+    продукт — в `UserProfile`, и ни одно из этих полей не доходило до промпта
+    дирижёра. Здесь оно собрано в одном месте и попадает в каждый запрос к модели.
+
+    Строка одна на систему (singleton): агент у пользователя один.
+    """
+    __tablename__ = 'agent_profile'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche = Column(String, default='')
+    brand_name = Column(String, default='')
+    brand_location = Column(String, default='')
+    goals = Column(Text, default='')                 # чего добиваемся
+    audience = Column(Text, default='')              # для кого
+    style = Column(Text, default='')                 # визуальный стиль
+    tone_of_voice = Column(String, default='')
+    platforms = Column(JSON, default=list)
+    posts_per_day = Column(Integer, default=1)
+    rules = Column(Text, default='')                 # что делать всегда
+    constraints = Column(Text, default='')           # чего не делать никогда
+    tasks = Column(Text, default='')                 # постоянные задачи агента
+    strategy = Column(Text, default='')
+    timezone = Column(String, default='')
+    brand_voice = Column(Text, default='')
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class NicheAnalysisCache(Base):
     """Cached niche analysis stored on Google Drive — avoid re-analysis."""
     __tablename__ = 'niche_analysis_cache'

@@ -4,6 +4,7 @@ import {
   ExternalLink, Cpu, Zap, Brain, Send, Wand2, Clapperboard, Film, Star,
   Monitor, MonitorOff,
 } from 'lucide-react'
+import { Link } from 'react-router-dom'
 import { ai, control, automation, desktop } from '../lib/api'
 
 // Человеческие имена агентов — ключи совпадают с тем, что шлёт бэкенд в WS.
@@ -383,9 +384,20 @@ export default function CommandCenter() {
         <Activity className="w-6 h-6 text-violet-400" />
         <h1 className="text-xl font-semibold text-[#e8e8f5]">Командный центр</h1>
       </div>
-      <p className="text-sm text-[#5a5a7a] mb-5">
+      <p className="text-sm text-[#5a5a7a] mb-3">
         Управление задачами: команды, создание контента и живая картина работы агентов.
       </p>
+
+      {/* Разделы, которые нужны не каждый день: в меню их нет, но потерять их нельзя. */}
+      <div className="flex gap-2 flex-wrap mb-5 text-xs">
+        {[['/research', 'Исследования'], ['/strategy', 'Стратегии'],
+          ['/performance', 'Результаты']].map(([to, label]) => (
+          <Link key={to} to={to}
+            className="px-3 py-1.5 rounded-lg border border-[#1c1c30] text-[#5a5a7a] hover:text-violet-300 hover:border-violet-500/25 transition">
+            {label}
+          </Link>
+        ))}
+      </div>
 
       <Pult />
       <Factory />

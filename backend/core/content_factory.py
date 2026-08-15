@@ -31,21 +31,28 @@ TREND_HELPER_MODEL = "sonar-pro"  # Perplexity; при отсутствии кл
 
 
 async def _research_trends(topic: str | None) -> str:
-    """Помощник ищет тренды — ТОЛЬКО если подключён Perplexity (реальный поиск).
-    Без него не дёргаем лишний AI — мозг (Claude) работает сам.
+    """Свежие тренды из интернета перед созданием контента.
+
+    Раньше это работало только с ключом Perplexity, иначе фабрика придумывала
+    тему вслепую. Теперь идём через общий поиск: с ключом — живой поиск, без
+    ключа — бесплатный источник, и тема опирается хоть на какие-то факты.
     """
-    if not os.getenv("PERPLEXITY_API_KEY"):
-        return ""
-    from core.ai_router import ai_router
-    q = (f"Найди 5 свежих вирусных трендов в нише AI/digital бизнес "
-         f"{'по теме: ' + topic if topic else 'в Instagram Reels и YouTube Shorts на этой неделе'}. "
-         f"Учитывай Казахстан/СНГ. Кратко: тема + почему залетает.")
+    from core.agent_profile import get as get_profile
+    from core.websearch import search
+
+    niche = ""
     try:
-        res = await ai_router.call(TREND_HELPER_MODEL,
-                                   "Ты ассистент-аналитик трендов. Отвечай кратко, по делу.", q)
-        return res.get("text", "")[:1500]
+        niche = (await get_profile()).get("niche") or ""
+    except Exception:
+        pass
+    q = (f"вирусные тренды {niche or 'AI digital бизнес'} "
+         f"{topic or 'Reels Shorts на этой неделе'}").strip()
+    try:
+        found = await search(q, max_results=5)
     except Exception:
         return ""
+    items = found.get("items") or []
+    return "\n".join(f"- {i['title']}: {i.get('snippet', '')}" for i in items)[:1500]
 
 _ANALYSIS_PROMPT = """\
 Ты — AI-маркетолог Pakhon Studio. Придумай ОДНУ тему дня для ниши AI/digital
@@ -86,7 +93,7 @@ async def _analyze(topic: str | None) -> dict:
         hint += f"\n\nСВЕЖИЕ ТРЕНДЫ (от ассистента, учти их):\n{trends}"
     prompt = _ANALYSIS_PROMPT.format(topic_hint=hint)
     try:
-        result = await ai_router.call(BRAIN_MODEL, system_prompt(), prompt)
+        result = await ai_router.call(BRAIN_MODEL, await system_prompt(), prompt)
         raw = result.get("text", "")
     except Exception as e:
         return {"theme": topic or "AI для бизнеса", "hook_type": "тайна",

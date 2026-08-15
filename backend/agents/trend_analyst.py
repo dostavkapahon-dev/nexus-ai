@@ -1,19 +1,25 @@
 """
 АГЕНТ 6: Daily Trend Analyst
 Запускается каждый день в 09:00.
-Ищет тренды через DuckDuckGo, анализирует через Gemini,
+Ищет тренды в интернете (core/websearch — Perplexity, иначе DuckDuckGo),
+анализирует через Gemini,
 корректирует завтрашний контент-план, отправляет отчёт в Telegram.
 """
 import json
 from agents.base_agent import BaseAgent
-from core.duckduckgo import search_trends
+from core.websearch import search
 
 class TrendAnalyst(BaseAgent):
     name = "trend_analyst"
 
     async def analyze_trends(self, db, niche_id: str, niche: str, city: str = "") -> dict:
-        # Step 1: fetch real trends via DuckDuckGo (free, no key)
-        raw_trends = await search_trends(niche, city)
+        # Шаг 1: живые тренды из интернета. Через общий поиск, а не напрямую
+        # через хрупкий скрейпинг DuckDuckGo: если он сломается, остаётся
+        # Perplexity, и агент не остаётся без данных совсем.
+        where = f"{niche} {city}".strip()
+        found = await search(f"{where} тренды и вирусные форматы сейчас", max_results=8)
+        raw_trends = "\n".join(
+            f"- {i['title']}: {i.get('snippet', '')}" for i in found.get("items", []))
 
         # Step 2: AI analysis of what patterns mean for content
         text = await self.call_ai(db, niche_id, {

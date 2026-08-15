@@ -66,7 +66,7 @@ async def build_brief(analysis: dict) -> dict:
     """Полное продакшен-ТЗ с раскадровкой и промтами."""
     from core.ai_router import ai_router
     try:
-        res = await ai_router.call("claude-sonnet-4-6", system_prompt(),
+        res = await ai_router.call("claude-sonnet-4-6", await system_prompt(),
                                    _BRIEF_PROMPT.format(analysis=json.dumps(analysis, ensure_ascii=False)))
         raw = res.get("text", "")
         s, e = raw.find("{"), raw.rfind("}") + 1
@@ -137,7 +137,7 @@ async def wow_review(brief: dict) -> dict:
     """Само-ревью на «вау». Может вернуть усиленный хук."""
     from core.ai_router import ai_router
     try:
-        res = await ai_router.call("claude-sonnet-4-6", system_prompt(),
+        res = await ai_router.call("claude-sonnet-4-6", await system_prompt(),
                                    _WOW_PROMPT.format(brief=json.dumps(brief, ensure_ascii=False)[:3000]))
         raw = res.get("text", "")
         s, e = raw.find("{"), raw.rfind("}") + 1

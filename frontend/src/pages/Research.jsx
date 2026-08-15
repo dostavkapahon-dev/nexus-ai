@@ -3,7 +3,7 @@ import { Search, Plus, RefreshCw, Loader, TrendingUp, TrendingDown, Trash2, User
 import { research } from '../lib/api'
 
 const KINDS = [
-  { k: '', l: 'Все' }, { k: 'trends', l: 'Тренды' },
+  { k: '', l: 'Все' }, { k: 'web', l: 'Интернет' }, { k: 'trends', l: 'Тренды' },
   { k: 'viral', l: 'Разборы роликов' }, { k: 'competitor', l: 'Конкуренты' },
 ]
 const PLATFORMS = ['instagram', 'youtube', 'tiktok']
@@ -15,6 +15,10 @@ export default function Research() {
   const [platform, setPlatform] = useState('instagram')
   const [handle, setHandle] = useState('')
   const [busy, setBusy] = useState('')
+  // Поиск в интернете — тот же, которым пользуется дирижёр. Нужен, чтобы
+  // человек мог проверить руками: система не нашла или поиск сломан.
+  const [topic, setTopic] = useState('')
+  const [found, setFound] = useState(null)
 
   const load = async () => {
     try {
@@ -44,6 +48,16 @@ export default function Research() {
     setBusy(''); load()
   }
 
+  const explore = async () => {
+    if (!topic.trim()) return
+    setBusy('search'); setFound(null)
+    try {
+      const r = await research.deep(topic.trim())
+      setFound(r.data)
+    } catch (e) { setFound({ ok: false, error: e.message }) }
+    setBusy(''); load()
+  }
+
   const stop = async (p, h) => {
     if (!confirm(`Перестать следить за @${h}? История сохранится.`)) return
     try { await research.stopCompetitor(p, h) } catch {}
@@ -59,6 +73,47 @@ export default function Research() {
         <p className="text-xs text-[#5a5a7a] mt-1">
           История трендов и разборов + динамика конкурентов — на этом строится стратегия
         </p>
+      </div>
+
+      {/* ИССЛЕДОВАНИЕ ИНТЕРНЕТА */}
+      <div className="card p-5 mb-4">
+        <div className="font-semibold flex items-center gap-2 mb-1">
+          <Search className="w-4 h-4 text-cyan-400" /> Исследовать тему
+        </div>
+        <p className="text-xs text-[#5a5a7a] mb-3">
+          Поиск не ограничен списком сайтов: агент сам решает, где искать
+        </p>
+        <div className="flex gap-2 flex-wrap">
+          <input value={topic} onChange={e => setTopic(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && explore()}
+            placeholder="например: что сейчас залетает у доставок еды"
+            className="flex-1 min-w-[240px] bg-[#0d0d1a] border border-[#1c1c30] rounded-lg px-3 py-2 text-sm text-[#e8e8f5] placeholder-[#5a5a7a] outline-none focus:border-cyan-500/50" />
+          <button onClick={explore} disabled={busy === 'search'}
+            className="btn-primary flex items-center gap-2 disabled:opacity-50">
+            {busy === 'search' ? <Loader className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            Исследовать
+          </button>
+        </div>
+        {found && (
+          <div className="mt-3 text-xs">
+            {found.ok === false && <div className="text-red-400">{found.error}</div>}
+            {found.summary && (
+              <div className="bg-[#0d0d1a] rounded-lg p-3 whitespace-pre-wrap text-[#c0c0e0]">
+                {found.summary}
+              </div>
+            )}
+            {found.note && <div className="text-amber-400 mt-2">{found.note}</div>}
+            {(found.sources || []).map((s, i) => (
+              <div key={i} className="mt-1.5">
+                <a href={s.url} target="_blank" rel="noreferrer"
+                  className={s.read ? 'text-cyan-400 hover:underline' : 'text-[#5a5a7a]'}>
+                  {s.title || s.url}
+                </a>
+                {!s.read && <span className="text-[#5a5a7a]"> — не удалось прочитать</span>}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* КОНКУРЕНТЫ */}

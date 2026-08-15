@@ -86,6 +86,12 @@ export const agent = {
   deleteSkill: (id) => api.delete(`/agent/skills/${id}`),
 }
 
+export const agentProfile = {
+  get: () => api.get('/agent-profile'),
+  save: (data) => api.put('/agent-profile', data),
+  preview: () => api.get('/agent-profile/preview'),
+}
+
 export const bot = {
   status: () => api.get('/bot/status'),
   testPost: (chat_id) => api.post('/bot/test-post', { chat_id }),
@@ -136,6 +142,9 @@ export const research = {
   trackCompetitor: (platform, handle) => api.post('/research/competitors', { platform, handle }),
   refreshCompetitors: () => api.post('/research/competitors/refresh'),
   stopCompetitor: (platform, handle) => api.delete(`/research/competitors/${platform}/${handle}`),
+  search: (query, max_results = 8) => api.post('/research/search', { query, max_results }),
+  fetch: (url) => api.post('/research/fetch', { url }),
+  deep: (topic, pages = 3) => api.post('/research/deep', { topic, pages }),
 }
 
 export const performance = {

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Settings as Cog } from 'lucide-react'
+import AgentProfile from './AgentProfile'
 import AgentSetup from './AgentSetup'
 import PromptStudio from './PromptStudio'
 import Cost from './Cost'
@@ -10,7 +11,8 @@ import Health from './Health'
 // (агент, промпты, расходы, здоровье), между которыми не было видимой разницы
 // для пользователя — все четыре про «как система настроена и как себя чувствует».
 const TABS = [
-  { id: 'agent', label: 'Агент и бренд', El: AgentSetup },
+  { id: 'agent', label: 'Главный агент', El: AgentProfile },
+  { id: 'skills', label: 'Память и навыки', El: AgentSetup },
   { id: 'prompts', label: 'Промпты', El: PromptStudio },
   { id: 'cost', label: 'Расходы', El: Cost },
   { id: 'health', label: 'Здоровье', El: Health },
