@@ -55,6 +55,9 @@ export const connections = {
   list: () => api.get('/connections'),
   save: (data) => api.post('/connections', data),
   test: (data) => api.post('/connections/test', data),
+  remove: (key) => api.delete(`/connections/${key}`),
+  status: () => api.get('/connections/status'),
+  recheck: (key) => api.post(`/connections/${key}/recheck`),
 }
 
 export const analytics = {
@@ -81,6 +84,28 @@ export const agent = {
   skills: () => api.get('/agent/skills'),
   addSkill: (data) => api.post('/agent/skills', data),
   deleteSkill: (id) => api.delete(`/agent/skills/${id}`),
+}
+
+export const production = {
+  jobs: (status = '', limit = 50) => api.get('/production/jobs', { params: { status, limit } }),
+  next: () => api.get('/production/next'),
+  create: (brief, kind = 'reel') => api.post('/production/jobs', { brief, kind }),
+  result: (id, body) => api.post(`/production/${id}/result`, body),
+  fail: (id, error) => api.post(`/production/${id}/fail`, { error }),
+  retry: (id) => api.post(`/production/${id}/retry`),
+  cancel: (id) => api.post(`/production/${id}/cancel`),
+  setProducer: (producer) => api.post('/production/producer', { producer }),
+}
+
+export const agents = {
+  list: () => api.get('/agents'),
+  run: (key, task, context = '') => api.post(`/agents/${key}/run`, { task, context }),
+}
+
+export const agentProfile = {
+  get: () => api.get('/agent-profile'),
+  save: (data) => api.put('/agent-profile', data),
+  preview: () => api.get('/agent-profile/preview'),
 }
 
 export const bot = {
@@ -133,6 +158,9 @@ export const research = {
   trackCompetitor: (platform, handle) => api.post('/research/competitors', { platform, handle }),
   refreshCompetitors: () => api.post('/research/competitors/refresh'),
   stopCompetitor: (platform, handle) => api.delete(`/research/competitors/${platform}/${handle}`),
+  search: (query, max_results = 8) => api.post('/research/search', { query, max_results }),
+  fetch: (url) => api.post('/research/fetch', { url }),
+  deep: (topic, pages = 3) => api.post('/research/deep', { topic, pages }),
 }
 
 export const performance = {
@@ -148,6 +176,7 @@ export const cost = {
 }
 
 export const system = {
+  summary: () => api.get('/system/summary'),
   health: () => api.get('/system/health'),
   build: () => api.get('/health'),
   agents: (hours = 24) => api.get('/system/agents', { params: { hours } }),
@@ -160,6 +189,26 @@ export const publishing = {
   retry: (id) => api.post(`/publish/${id}/retry`),
   cancel: (id) => api.post(`/publish/${id}/cancel`),
   process: () => api.post('/publish/process'),
+  pending: (limit = 50) => api.get('/publish/pending', { params: { limit } }),
+  approve: (id) => api.post(`/publish/${id}/approve`),
+  autoGet: () => api.get('/publish/auto'),
+  autoSet: (body) => api.post('/publish/auto', body),
+}
+
+export const telegram = {
+  status: () => api.get('/telegram/status'),
+  botCheck: (token) => api.post('/telegram/bot/check', { token }),
+  botConnect: (token) => api.post('/telegram/bot/connect', { token }),
+  channels: () => api.get('/telegram/channels'),
+  discover: () => api.get('/telegram/channels/discover'),
+  check: (chat_id) => api.post('/telegram/channels/check', { chat_id }),
+  test: (chat_id, keep = false) => api.post('/telegram/channels/test', { chat_id, keep }),
+  add: (chat_id) => api.post('/telegram/channels/add', { chat_id }),
+  setDefault: (chat_id) => api.post('/telegram/channels/default', { chat_id }),
+  remove: (chat_id) => api.post('/telegram/channels/remove', { chat_id }),
+  publish: (body) => api.post('/telegram/publish', body),
+  message: (text, chat_id) => api.post('/telegram/message', { text, chat_id }),
+  publicationStatus: (id) => api.get(`/telegram/publication/${id}`),
 }
 
 export const control = {

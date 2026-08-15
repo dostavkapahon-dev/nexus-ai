@@ -28,7 +28,7 @@ async def _get(pub_id):
 @pytest.mark.asyncio
 async def test_transient_failure_is_retried_not_lost(client, monkeypatch):
     """Раньше сетевой сбой означал потерянный пост: строка failed без текста."""
-    async def flaky(platform, text, image_url):
+    async def flaky(platform, text, image_url, video_url=""):
         return {"ok": False, "error": "timeout: площадка не ответила"}
 
     monkeypatch.setattr(nexus_core, "_publish_one", flaky)
@@ -49,7 +49,7 @@ async def test_transient_failure_is_retried_not_lost(client, monkeypatch):
 async def test_retry_eventually_succeeds(client, monkeypatch):
     calls = {"n": 0}
 
-    async def flaky(platform, text, image_url):
+    async def flaky(platform, text, image_url, video_url=""):
         calls["n"] += 1
         if calls["n"] == 1:
             return {"ok": False, "error": "502 bad gateway"}
@@ -71,7 +71,7 @@ async def test_retry_eventually_succeeds(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_permanent_refusal_is_not_retried(client, monkeypatch):
     """Нет прав у API — повторять бессмысленно, это не временный сбой."""
-    async def blocked(platform, text, image_url):
+    async def blocked(platform, text, image_url, video_url=""):
         return {"ok": False, "blocked_by_api": True,
                 "error": "YouTube: загрузка требует OAuth-права youtube.upload"}
 
@@ -105,7 +105,7 @@ async def test_unconfigured_telegram_is_blocked_not_retried(client, monkeypatch)
 @pytest.mark.asyncio
 async def test_missing_browser_flow_is_permanent(client, monkeypatch):
     """Отсутствие браузерного сценария само не пройдёт — повторять нечего."""
-    async def no_flow(platform, text, image_url):
+    async def no_flow(platform, text, image_url, video_url=""):
         return {"ok": False, "error": "Нет браузерного сценария для платформы 'vk'."}
 
     monkeypatch.setattr(nexus_core, "_publish_one", no_flow)
@@ -117,7 +117,7 @@ async def test_missing_browser_flow_is_permanent(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_attempts_are_capped(client, monkeypatch):
-    async def always_down(platform, text, image_url):
+    async def always_down(platform, text, image_url, video_url=""):
         return {"ok": False, "error": "connection reset"}
 
     monkeypatch.setattr(nexus_core, "_publish_one", always_down)
@@ -135,7 +135,7 @@ async def test_attempts_are_capped(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_scheduled_post_waits_for_its_time(client, monkeypatch):
     """Пост на 19:00 не должен уйти в 10:00."""
-    async def ok(platform, text, image_url):
+    async def ok(platform, text, image_url, video_url=""):
         return {"ok": True, "post_id": "x"}
 
     monkeypatch.setattr(nexus_core, "_publish_one", ok)
@@ -162,7 +162,7 @@ async def test_cancel_removes_from_queue(client):
 
 @pytest.mark.asyncio
 async def test_api_shows_queue_and_retries(auth_client, monkeypatch):
-    async def down(platform, text, image_url):
+    async def down(platform, text, image_url, video_url=""):
         return {"ok": False, "error": "timeout"}
 
     monkeypatch.setattr(nexus_core, "_publish_one", down)

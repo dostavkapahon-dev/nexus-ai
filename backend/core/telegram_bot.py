@@ -6,6 +6,8 @@ Commands: /status /analyze /create /publish /plan /trends /pause /resume /report
 import os
 import json
 import asyncio
+import contextvars
+
 import httpx
 from sqlalchemy import select
 from database.db import AsyncSessionLocal
@@ -14,21 +16,60 @@ from database.models import Niche, ContentPlan, UserProfile
 BOT_API = "https://api.telegram.org/bot{token}"
 _offset = 0
 
+# Внутри обработки команды ответы бота автоматически уходят в общую ленту —
+# ту же, что видит сайт. Иначе на сайте видно «пользователь написал /publish»,
+# но не видно, чем это кончилось.
+_in_command = contextvars.ContextVar("tg_in_command", default=False)
+
 def _url(method: str) -> str:
     return f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN', '')}/{method}"
 
-async def send_message(chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None):
+async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
+                       reply_markup: dict = None, feed: bool = False):
+    """Отправка сообщения ботом.
+
+    Длинный текст режется по лимиту Telegram: раньше сообщение свыше 4096
+    символов просто не доходило, а ошибка глушилась — выглядело как молчание.
+    """
+    from publishers.telegram_pub import TEXT_LIMIT, fit
+
+    body, cut = fit(text, TEXT_LIMIT)
     try:
         payload = {
-            "chat_id": chat_id, "text": text,
+            "chat_id": chat_id, "text": body,
             "parse_mode": parse_mode, "disable_web_page_preview": True
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
         async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(_url("sendMessage"), json=payload)
-    except Exception:
-        pass
+            r = await c.post(_url("sendMessage"), json=payload)
+            data = r.json()
+        if not data.get("ok"):
+            desc = str(data.get("description") or "")
+            # Разметка ломается об один символ «<» в тексте модели. Раньше
+            # сообщение в этом случае исчезало совсем; теперь отправляем как
+            # обычный текст — лучше без форматирования, чем никак.
+            if "parse" in desc.lower() and parse_mode:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    await c.post(_url("sendMessage"),
+                                 json={**payload, "parse_mode": None})
+            else:
+                print(f"[NEXUS] Telegram sendMessage: {desc[:150]}", flush=True)
+    except Exception as e:
+        print(f"[NEXUS] Telegram sendMessage: {type(e).__name__}: {str(e)[:120]}",
+              flush=True)
+
+    # Ответы бота должны быть видны на сайте: раньше в общую ленту попадала
+    # только команда пользователя, а результат — нет.
+    if feed or _in_command.get():
+        try:
+            from core.command_center import log_event
+            await log_event("telegram", "agent", text)
+        except Exception:
+            pass
+    if cut:
+        return {"truncated": True}
+    return {}
 
 
 def _main_menu_kb() -> dict:
@@ -65,6 +106,8 @@ async def setup_bot_commands():
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
+        {"command": "channels", "description": "Каналы для публикации"},
+        {"command": "approve", "description": "Подтвердить публикацию"},
         {"command": "errors", "description": "Что сломалось за сутки"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "strategies", "description": "Стратегии: версии и результат"},
@@ -100,6 +143,7 @@ async def _handle_command(chat_id: str, text: str):
         await log_event("telegram", "user", text)
     except Exception:
         pass
+    token = _in_command.set(True)
     try:
         await _dispatch_command(chat_id, text)
     except Exception as e:
@@ -142,6 +186,8 @@ async def _handle_command(chat_id: str, text: str):
             await send_message(chat_id, hint)
         except Exception:
             pass
+    finally:
+        _in_command.reset(token)
 
 
 def _gemini_model_line() -> str:
@@ -157,12 +203,10 @@ async def _refresh_env_from_db():
     """Подтягивает ключи из БД в окружение — чтобы сохранённое в дашборде
     работало сразу, без перезапуска сервера (процесс бота читал env на старте)."""
     try:
-        from database.models import Connection
-        async with AsyncSessionLocal() as db:
-            res = await db.execute(select(Connection))
-            for c in res.scalars():
-                if c.key_value and "****" not in (c.key_value or ""):
-                    os.environ[c.key_name.upper()] = c.key_value
+        # Тот же слой, что и на старте сервера: он расшифровывает значения,
+        # иначе после включения шифрования бот подставлял бы шифротекст.
+        from core.credentials import load_into_env
+        await load_into_env()
     except Exception:
         pass
 
@@ -312,6 +356,62 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
+    if cmd == "channels":
+        # Каналы для постинга — тот же список, что на сайте: система одна.
+        from core import telegram_channels as tch
+        arg = args[0].strip() if args else ""
+        if arg:
+            res = await tch.add_channel(arg)
+            if res.get("ok"):
+                ch = res["channel"]
+                await send_message(chat_id, f"✅ Канал подключён: "
+                                            f"<b>{ch['title'] or ch['chat_id']}</b> "
+                                            f"{ch['username']}")
+            else:
+                await send_message(chat_id, f"⚠️ {res.get('error')}\n{res.get('hint') or ''}")
+            return
+
+        items = await tch.list_channels()
+        if not items:
+            await send_message(chat_id, "📭 Каналы не подключены.\n"
+                                        "Добавьте бота администратором в канал и пришлите: "
+                                        "/channels @имя_канала")
+            return
+        lines = ["📢 <b>Каналы для публикации</b>", ""]
+        for c in items:
+            star = "⭐️ " if c.get("default") else "• "
+            lines.append(f"{star}{c.get('title') or c['chat_id']} "
+                         f"{c.get('username') or c['chat_id']}")
+        lines.append("\nДобавить: /channels &lt;@имя&gt;")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "approve":
+        # Подтверждение поста площадки, которая работает «с подтверждением».
+        from core.publish_queue import pending as pending_pubs, approve as approve_pub
+        arg = args[0].strip() if args else ""
+        items = await pending_pubs()
+        if not arg:
+            if not items:
+                await send_message(chat_id, "✅ Нечего подтверждать.")
+                return
+            lines = ["⏸ <b>Ждут подтверждения</b>", ""]
+            for i in items[:10]:
+                lines.append(f"<code>{i['id']}</code> {i['platform']}\n   {i['text'][:100]}")
+            lines.append("\nОпубликовать: /approve &lt;id&gt;")
+            await send_message(chat_id, "\n".join(lines)[:4000])
+            return
+
+        # Из списка удобно копировать начало id — принимаем и его.
+        match = [i["id"] for i in items if i["id"] == arg or i["id"].startswith(arg)]
+        if not match:
+            await send_message(chat_id, f"⚠️ Публикация {arg} не ждёт подтверждения.")
+            return
+        res = await approve_pub(match[0])
+        mark = "✅" if res.get("ok") else "⚠️"
+        await send_message(chat_id, f"{mark} {res.get('error') or 'Опубликовано.'}")
+        return
+
     if cmd == "queue":
         # Очередь публикаций: что ждёт своего часа, что упало и когда повтор.
         from core.publish_queue import queue as pub_queue, stats as pub_stats, retry_now
@@ -329,7 +429,8 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, "📭 Очередь публикаций пуста.")
             return
         emoji = {"published": "✅", "scheduled": "🕓", "retrying": "🔁",
-                 "failed": "❌", "blocked": "🚫", "cancelled": "⛔"}
+                 "failed": "❌", "blocked": "🚫", "cancelled": "⛔",
+                 "pending_approval": "⏸"}
         lines = ["📤 <b>Очередь публикаций</b>",
                  " · ".join(f"{emoji.get(k, '•')} {k}: {v}" for k, v in st.items()), ""]
         for i in items:
@@ -765,17 +866,22 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, report)
 
     elif cmd == "analyze":
-        niche_name = " ".join(args) if args else None
-        if not niche_name:
-            await send_message(chat_id, "❗ Укажи нишу: /analyze [ниша] [город]")
+        query = " ".join(args).strip()
+        if not query:
+            await send_message(chat_id, "❗ Укажи нишу: /analyze кофейня")
             return
-        city = args[1] if len(args) > 1 else ""
-        await send_message(chat_id, f"🔍 Запускаю анализ ниши: <b>{niche_name}</b> {city}...")
+        await send_message(chat_id, f"🔍 Запускаю анализ: <b>{query}</b>…")
         async with AsyncSessionLocal() as db:
+            # Ищем по всей строке, а если не нашли — по первому слову: раньше
+            # «/analyze кофейня Алматы» искалось целиком вместе с городом и
+            # почти всегда давало «ниша не найдена».
             result = await db.execute(
-                select(Niche).where(Niche.name.ilike(f"%{niche_name}%")).limit(1)
-            )
+                select(Niche).where(Niche.name.ilike(f"%{query}%")).limit(1))
             niche = result.scalar_one_or_none()
+            if not niche and len(args) > 1:
+                result = await db.execute(
+                    select(Niche).where(Niche.name.ilike(f"%{args[0]}%")).limit(1))
+                niche = result.scalar_one_or_none()
             if niche:
                 from core.task_manager import spawn
                 await spawn("pipeline", f"Полный цикл по нише «{niche.name}»",
@@ -783,7 +889,11 @@ async def _dispatch_command(chat_id: str, text: str):
                             source="telegram", ref_id=niche.id)
                 await send_message(chat_id, f"✅ Анализ запущен для ниши <b>{niche.name}</b>")
             else:
-                await send_message(chat_id, f"❌ Ниша '{niche_name}' не найдена. Создай её в дашборде.")
+                r_all = await db.execute(select(Niche).where(Niche.status == "active").limit(10))
+                names = [n.name for n in r_all.scalars()]
+                have = ("\n\nЕсть такие: " + ", ".join(names)) if names else \
+                    "\n\nНи одной ниши пока не заведено — создайте её в дашборде."
+                await send_message(chat_id, f"❌ Ниша «{query}» не найдена.{have}")
 
     elif cmd == "create":
         await send_message(chat_id, "✍️ Создаю контент для всех активных ниш...")
@@ -821,7 +931,7 @@ async def _dispatch_command(chat_id: str, text: str):
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
         await send_message(chat_id, f"✅ Опубликовано: {published} постов")
 
-    elif cmd == "trends":
+    elif cmd in ("trend", "trends"):
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
         from core.task_manager import spawn
@@ -884,13 +994,6 @@ async def _dispatch_command(chat_id: str, text: str):
             msg = "⚙️ Профиль не настроен. Зайди в дашборд."
         await send_message(chat_id, msg)
 
-    elif cmd in ("trend", "trends"):
-        await send_message(chat_id, "📈 Анализирую тренды...")
-        from core.scheduler import run_daily_trends
-        from core.task_manager import spawn
-        await spawn("trends", "Анализ трендов", lambda: run_daily_trends(), source="telegram")
-        await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
-
     elif cmd == "prompt":
         from core.brand import set_brand_voice, get_brand_voice
         if not args:
@@ -939,11 +1042,18 @@ async def _dispatch_command(chat_id: str, text: str):
                     lambda: run_factory(topic=topic, dry_run=not publish), source="telegram")
 
     elif cmd.startswith("set_goal"):
-        try:
-            goal = int(args[0])
-            await send_message(chat_id, f"🎯 Цель установлена: {goal:,} подписчиков")
-        except (IndexError, ValueError):
-            await send_message(chat_id, "❗ Укажи число: /set_goal 100000")
+        # Раньше команда рапортовала об установке цели, ничего не сохраняя.
+        goal_text = " ".join(args).strip()
+        if not goal_text:
+            await send_message(chat_id, "❗ Укажи цель: /set_goal 100000 подписчиков")
+        else:
+            from core.agent_profile import get as get_profile, save as save_profile
+            current = (await get_profile()).get("goals") or ""
+            merged = f"{current}\n{goal_text}".strip() if current else goal_text
+            await save_profile({"goals": merged})
+            await send_message(chat_id,
+                               f"🎯 Цель сохранена в профиле агента:\n<b>{goal_text}</b>\n\n"
+                               f"Она уходит в каждый запрос к модели.")
 
     elif cmd.startswith("set_posts"):
         try:
@@ -1107,55 +1217,115 @@ async def _handle_plain_text(chat_id: str, text: str):
 
 
 async def poll_updates():
-    """Long-polling loop for Telegram updates."""
-    global _offset
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token:
-        return
+    """Цикл получения сообщений (long-polling).
 
+    Три вещи, которых здесь раньше не было и из-за которых бот «молчал»:
+      * токен перечитывается на каждом круге — подключённый через веб бот
+        оживает сразу, а не после перезапуска сервера;
+      * ответ Telegram проверяется: 409 (запущен второй экземпляр) и 401
+        (неверный токен) больше не выглядят как «сообщений нет»;
+      * команды исполняются только от владельца — см. core/telegram_owner.
+    """
+    global _offset
+    from core import telegram_owner as owner_mod
+
+    last_complaint = ""
     while True:
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            # Токена ещё нет — ждём, пока его подключат в панели.
+            await asyncio.sleep(10)
+            continue
         try:
             async with httpx.AsyncClient(timeout=35) as c:
-                r = await c.get(_url("getUpdates"), params={"offset": _offset, "timeout": 30})
-                updates = r.json().get("result", [])
-                for upd in updates:
-                    _offset = upd["update_id"] + 1
+                r = await c.get(_url("getUpdates"),
+                                params={"offset": _offset, "timeout": 30})
+                data = r.json()
 
-                    # Нажатие инлайн-кнопки пульта
-                    cb = upd.get("callback_query")
-                    if cb:
-                        cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
-                        data = cb.get("data", "")
-                        if not chat_id or cb_chat_id == chat_id:
-                            await _answer_callback(cb["id"])
-                            asyncio.create_task(_handle_command(cb_chat_id, "/" + data))
-                        continue
+            if not data.get("ok"):
+                desc = str(data.get("description") or "Telegram отказал")
+                code = data.get("error_code")
+                # Жалуемся один раз на причину, а не на каждом круге:
+                # иначе лог забивается одинаковыми строками раз в секунду.
+                if desc != last_complaint:
+                    print(f"[NEXUS] Telegram getUpdates: {code} {desc}", flush=True)
+                    last_complaint = desc
+                if code == 401:
+                    # Неверный токен: ждать бессмысленно, пока его не заменят.
+                    await asyncio.sleep(60)
+                elif code == 409:
+                    # Работает второй экземпляр бота (или включён webhook).
+                    await asyncio.sleep(15)
+                else:
+                    await asyncio.sleep(5)
+                continue
+            last_complaint = ""
 
-                    msg = upd.get("message", {})
-                    text = msg.get("text", "")
-                    upd_chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if chat_id and upd_chat_id != chat_id:
-                        continue
+            for upd in data.get("result", []):
+                _offset = upd["update_id"] + 1
 
-                    # Голос / фото / видео / шрифт — обрабатываем отдельно.
-                    if not text and any(k in msg for k in
-                                        ("voice", "audio", "photo", "video", "document")):
-                        asyncio.create_task(_handle_media(upd_chat_id, msg))
-                        continue
-                    if not text:
-                        continue
-                    if text.startswith("/"):
-                        asyncio.create_task(_handle_command(upd_chat_id, text))
+                # Каналы, которые видит бот, запоминаем: мастеру подключения
+                # нельзя дёргать getUpdates самому — он отберёт соединение у
+                # этого цикла и получит 409.
+                try:
+                    from core.telegram_channels import remember_chat
+                    for key in ("channel_post", "edited_channel_post", "my_chat_member",
+                                "message"):
+                        chat = ((upd.get(key) or {}).get("chat")) or {}
+                        if chat.get("type") in ("channel", "supergroup", "group"):
+                            remember_chat(chat)
+                except Exception:
+                    pass
+
+                # Нажатие инлайн-кнопки пульта
+                cb = upd.get("callback_query")
+                if cb:
+                    cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                    from_id = str((cb.get("from") or {}).get("id", ""))
+                    data_cb = cb.get("data", "")
+                    if await owner_mod.allowed(from_id, cb_chat_id):
+                        await _answer_callback(cb["id"])
+                        asyncio.create_task(_handle_command(cb_chat_id, "/" + data_cb))
                     else:
-                        # Обычный текст — возможно, это правки к контенту на согласовании.
-                        asyncio.create_task(_handle_plain_text(upd_chat_id, text))
-        except Exception:
+                        await _answer_callback(cb["id"], "Доступ только у владельца")
+                    continue
+
+                msg = upd.get("message", {})
+                text = msg.get("text", "")
+                upd_chat_id = str(msg.get("chat", {}).get("id", ""))
+                from_id = str((msg.get("from") or {}).get("id", ""))
+
+                if not await owner_mod.allowed(from_id, upd_chat_id):
+                    # Первый написавший /start становится владельцем — иначе
+                    # бота пришлось бы настраивать вручную, а до тех пор он
+                    # слушался бы кого угодно.
+                    if text.startswith("/start") and await owner_mod.claim(from_id):
+                        await send_message(upd_chat_id, owner_mod.CLAIMED)
+                        asyncio.create_task(_handle_command(upd_chat_id, "/menu"))
+                    elif text.startswith("/"):
+                        await send_message(upd_chat_id, owner_mod.DENIED)
+                    continue
+
+                # Голос / фото / видео / документ — обрабатываем отдельно.
+                if not text and any(k in msg for k in
+                                    ("voice", "audio", "photo", "video", "document")):
+                    asyncio.create_task(_handle_media(upd_chat_id, msg))
+                    continue
+                if not text:
+                    continue
+                if text.startswith("/"):
+                    asyncio.create_task(_handle_command(upd_chat_id, text))
+                else:
+                    # Обычный текст — возможно, это правки к контенту на согласовании.
+                    asyncio.create_task(_handle_plain_text(upd_chat_id, text))
+        except Exception as e:
+            print(f"[NEXUS] Telegram polling: {type(e).__name__}: {str(e)[:150]}", flush=True)
             await asyncio.sleep(5)
         await asyncio.sleep(1)
 
 def start_polling():
-    """Start the Telegram polling loop as background task."""
+    """Запускает цикл бота фоном. Токен на этот момент может быть ещё не задан —
+    цикл дождётся его сам."""
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         asyncio.create_task(setup_bot_commands())
     asyncio.create_task(poll_updates())

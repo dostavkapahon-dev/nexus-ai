@@ -94,16 +94,28 @@ def parse_events(payload: dict) -> list[dict]:
     return out
 
 
-async def _remember(events: list[dict]):
-    """Складывает события в KV — чтобы их было видно в дашборде и после рестарта."""
+async def _remember(events: list[dict]) -> list[dict]:
+    """Складывает события в KV и отсеивает повторы.
+
+    Meta штатно повторяет доставку одного и того же события: без проверки по id
+    каждый повтор заново запускал разбор комментариев и плодил задачи.
+    Возвращает только новые события.
+    """
     from core.engagement import _load, _save
     try:
         stored = await _load(EVENTS_KEY, [])
+        known = {e.get("id") for e in stored if e.get("id")}
+        fresh = [e for e in events if not (e.get("id") and e["id"] in known)]
+        if not fresh:
+            return []
         now = datetime.utcnow().isoformat()
-        stored += [{**e, "received_at": now} for e in events]
+        stored += [{**e, "received_at": now} for e in fresh]
         await _save(EVENTS_KEY, stored[-MAX_EVENTS:])
-    except Exception:
-        pass
+        return fresh
+    except Exception as e:
+        # Потеря событий не должна быть незаметной: раньше здесь стоял голый pass.
+        print(f"[NEXUS] вебхук: не удалось сохранить события — {str(e)[:150]}", flush=True)
+        return events
 
 
 async def recent_events(limit: int = 20) -> list[dict]:
@@ -121,9 +133,15 @@ async def handle_events(payload: dict) -> dict:
     events = parse_events(payload)
     if not events:
         return {"ok": True, "events": 0}
-    await _remember(events)
 
-    comments = [e for e in events if e["kind"] == "comment" and e.get("text")]
+    fresh = await _remember(events)
+    if not fresh:
+        # Повторная доставка того же события — работа уже сделана.
+        return {"ok": True, "events": len(events), "duplicates": len(events)}
+
+    comments = [e for e in fresh if e["kind"] == "comment" and e.get("text")]
+    mentions = [e for e in fresh if e["kind"] == "mention"]
+
     if comments:
         try:
             # Разбор идёт под задачей: у события появляется id, статус и журнал,
@@ -134,6 +152,17 @@ async def handle_events(payload: dict) -> dict:
                                    source="webhook")
             await run(task_id, lambda: process_comments("instagram", limit=len(comments)))
         except Exception as e:
-            return {"ok": True, "events": len(events), "error": str(e)[:200]}
+            return {"ok": True, "events": len(fresh), "error": str(e)[:200]}
 
-    return {"ok": True, "events": len(events), "comments": len(comments)}
+    if mentions:
+        # Упоминания раньше просто складывались в хранилище и не приводили ни к
+        # чему: о них никто не узнавал.
+        try:
+            from core.notify import notify_owner
+            await notify_owner("📣 Вас упомянули в Instagram: "
+                               + ", ".join(m.get("media_id", "") for m in mentions[:5]))
+        except Exception:
+            pass
+
+    return {"ok": True, "events": len(fresh), "comments": len(comments),
+            "mentions": len(mentions)}

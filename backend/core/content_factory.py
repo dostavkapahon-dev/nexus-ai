@@ -31,21 +31,28 @@ TREND_HELPER_MODEL = "sonar-pro"  # Perplexity; при отсутствии кл
 
 
 async def _research_trends(topic: str | None) -> str:
-    """Помощник ищет тренды — ТОЛЬКО если подключён Perplexity (реальный поиск).
-    Без него не дёргаем лишний AI — мозг (Claude) работает сам.
+    """Свежие тренды из интернета перед созданием контента.
+
+    Раньше это работало только с ключом Perplexity, иначе фабрика придумывала
+    тему вслепую. Теперь идём через общий поиск: с ключом — живой поиск, без
+    ключа — бесплатный источник, и тема опирается хоть на какие-то факты.
     """
-    if not os.getenv("PERPLEXITY_API_KEY"):
-        return ""
-    from core.ai_router import ai_router
-    q = (f"Найди 5 свежих вирусных трендов в нише AI/digital бизнес "
-         f"{'по теме: ' + topic if topic else 'в Instagram Reels и YouTube Shorts на этой неделе'}. "
-         f"Учитывай Казахстан/СНГ. Кратко: тема + почему залетает.")
+    from core.agent_profile import get as get_profile
+    from core.websearch import search
+
+    niche = ""
     try:
-        res = await ai_router.call(TREND_HELPER_MODEL,
-                                   "Ты ассистент-аналитик трендов. Отвечай кратко, по делу.", q)
-        return res.get("text", "")[:1500]
+        niche = (await get_profile()).get("niche") or ""
+    except Exception:
+        pass
+    q = (f"вирусные тренды {niche or 'AI digital бизнес'} "
+         f"{topic or 'Reels Shorts на этой неделе'}").strip()
+    try:
+        found = await search(q, max_results=5)
     except Exception:
         return ""
+    items = found.get("items") or []
+    return "\n".join(f"- {i['title']}: {i.get('snippet', '')}" for i in items)[:1500]
 
 _ANALYSIS_PROMPT = """\
 Ты — AI-маркетолог Pakhon Studio. Придумай ОДНУ тему дня для ниши AI/digital
@@ -86,7 +93,7 @@ async def _analyze(topic: str | None) -> dict:
         hint += f"\n\nСВЕЖИЕ ТРЕНДЫ (от ассистента, учти их):\n{trends}"
     prompt = _ANALYSIS_PROMPT.format(topic_hint=hint)
     try:
-        result = await ai_router.call(BRAIN_MODEL, system_prompt(), prompt)
+        result = await ai_router.call(BRAIN_MODEL, await system_prompt(), prompt)
         raw = result.get("text", "")
     except Exception as e:
         return {"theme": topic or "AI для бизнеса", "hook_type": "тайна",
@@ -239,6 +246,42 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         vid = {"ok": False}
         st = strategy["strategy"]
         first_img = frames[0]["image"] if frames else cover
+
+        # Видео может делать не сервер: если производство отдано внешнему
+        # исполнителю (Claude Code с доступом к Higgsfield), кладём ТЗ в очередь
+        # и на этом останавливаемся. Дальше конвейер продолжится сам, когда
+        # исполнитель вернёт готовый файл, — см. finalize_from_assets.
+        from core.production_queue import producer, CLAUDE, enqueue
+        if await producer() == CLAUDE:
+            job_brief = {
+                "theme": plan.get("theme"), "hook_text": plan.get("hook_text"),
+                "tone": brief.get("tone") or plan.get("tone"),
+                "cover_prompt": brief.get("cover_prompt") or plan.get("image_prompt"),
+                "video_motion_prompt": brief.get("video_motion_prompt"),
+                "avatar_script": brief.get("avatar_script"),
+                "storyboard": brief.get("storyboard", []),
+                "seed_image": first_img, "cover": cover,
+                "platforms": platforms,
+                "caption": _caption_for(platforms[0] if platforms else "instagram", plan),
+                "strategy": st,
+            }
+            from core.cost_tracker import current_task_id
+            job = await enqueue(job_brief, kind="reel", task_id=current_task_id.get() or "")
+            report["production_job"] = job["id"]
+            report["assets"]["video"] = {"ok": False, "awaiting_producer": True,
+                                         "job_id": job["id"]}
+            report["steps"].append({"step": "video", "ok": True,
+                                    "provider": "внешний исполнитель",
+                                    "note": f"ТЗ передано, задание {job['id']}"})
+            report["awaiting_producer"] = True
+            report["published"] = {"status": "awaiting_producer",
+                                   "note": "ждём готовый ролик от исполнителя"}
+            await _flush_steps(report)
+            await _send_report(report, platforms)
+            report.pop("_journaled", None)
+            report["ok"] = True
+            return report
+
         try:
             if st == "heygen_avatar":
                 vid = await generate_clip(script=brief.get("avatar_script", ""), provider="heygen")
@@ -326,6 +369,59 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     # 6. Отчёт в Telegram
     await _send_report(report, platforms)
     return report
+
+
+async def finalize_from_assets(job: dict) -> dict:
+    """Продолжает конвейер после того, как исполнитель вернул готовое медиа.
+
+    Ровно те же шаги, что и во внутреннем пути: монтаж (караоке-субтитры +
+    музыка) и согласование в Telegram. Публикацию сам не делает — её запускает
+    владелец кнопкой, как и для роликов, собранных сервером.
+    """
+    brief = job.get("brief") or {}
+    assets = job.get("assets") or {}
+    video_url = assets.get("video_url") or ""
+    media = video_url or assets.get("cover_url") or assets.get("image_url") or brief.get("cover")
+    platforms = brief.get("platforms") or DEFAULT_PLATFORMS
+    out = {"job_id": job.get("id"), "steps": []}
+
+    # Монтаж: субтитры из сценария и музыка под настроение.
+    if video_url:
+        try:
+            from core.video_editor import edit_reel, ensure_local_video
+            local = await ensure_local_video({"ok": True, "url": video_url})
+            if local:
+                edited = await edit_reel(
+                    local,
+                    script_text=brief.get("avatar_script") or brief.get("hook_text") or "",
+                    mood=brief.get("tone"))
+                if edited.get("ok"):
+                    media = edited.get("url") or media
+                    out["edited"] = True
+                out["steps"].append({"step": "montage", "ok": edited.get("ok", False),
+                                     "error": edited.get("error")})
+        except Exception as e:
+            out["steps"].append({"step": "montage", "ok": False, "error": str(e)[:160]})
+
+    caption = brief.get("caption") or brief.get("hook_text") or ""
+    try:
+        from core.moderation import send_for_approval
+        pid = await send_for_approval(caption, media_url=media, platforms=platforms,
+                                      kind="factory")
+        out["status"] = "awaiting_approval" if pid else "no_telegram"
+        out["pid"] = pid
+        out["steps"].append({"step": "approval_requested", "ok": bool(pid)})
+        if not pid:
+            # Без Telegram согласовывать негде — говорим прямо, а не молчим.
+            out["note"] = ("Telegram не подключён: ролик готов, но показать его "
+                           "на согласование некому. Ссылка: " + str(media))
+    except Exception as e:
+        out["status"] = "error"
+        out["error"] = str(e)[:200]
+        out["steps"].append({"step": "approval_requested", "ok": False,
+                             "error": str(e)[:160]})
+    out["media"] = media
+    return out
 
 
 def _caption_for(platform: str, plan: dict) -> str:

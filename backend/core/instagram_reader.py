@@ -66,11 +66,17 @@ async def my_media(limit: int = 25) -> list[dict]:
 
 
 async def media_insights(media_id: str, is_reel: bool) -> dict:
-    """Инсайты одного поста/Reels (охват, просмотры, сохранения, репосты)."""
-    metrics = ("reach,likes,comments,saved,shares,plays" if is_reel
+    """Инсайты одного поста/Reels (охват, просмотры, сохранения, репосты).
+
+    `views` вместо устаревшего `plays`: Meta переименовала метрику, и по
+    старому имени свежий API отдаёт ошибку — отчёт выходил пустым.
+    """
+    metrics = ("reach,likes,comments,saved,shares,views" if is_reel
                else "reach,likes,comments,saved,shares")
     try:
         data = await _get(f"{media_id}/insights", {"metric": metrics})
+        if data.get("error"):
+            return {"error": str(data["error"].get("message") or "")[:200]}
         out = {}
         for item in data.get("data", []):
             vals = item.get("values") or [{}]
@@ -85,10 +91,17 @@ async def analyze_own(with_insights: bool = True, top: int = 10) -> dict:
     profile = await my_profile()
     media = await my_media(limit=25)
 
+    insights_error = ""
     for m in media:
         if with_insights:
             ins = await media_insights(m["id"], m.get("media_product_type") == "REELS")
-            m["views"] = ins.get("plays") or ins.get("reach")
+            if ins.get("error"):
+                # Пустые метрики выглядят как «охвата не было». Причина обычно
+                # одна — не выдано право instagram_manage_insights, и сказать об
+                # этом надо прямо, а не отдавать нули.
+                insights_error = insights_error or ins["error"]
+                continue
+            m["views"] = ins.get("views") or ins.get("reach")
             m["reach"] = ins.get("reach")
             m["saved"] = ins.get("saved")
             m["shares"] = ins.get("shares")
@@ -100,7 +113,9 @@ async def analyze_own(with_insights: bool = True, top: int = 10) -> dict:
         "handle": profile.get("username"),
         "followers": profile.get("followers_count"),
         "posts_count": profile.get("media_count"),
-        "bio": profile.get("biography"),
+        # У Instagram Login биографии в базовом наборе полей нет — не делаем
+        # вид, что она пустая, а прямо говорим, что её тут не отдают.
+        "bio": profile.get("biography") if not ig_api.is_instagram_login() else None,
         "top_posts": [
             {"title": (m.get("caption") or "")[:120],
              "type": m.get("media_product_type") or m.get("media_type"),
@@ -111,6 +126,10 @@ async def analyze_own(with_insights: bool = True, top: int = 10) -> dict:
             for m in ranked[:top]
         ],
         "source": "graph_api",
+        # Пусто, если метрики собрались: тогда и говорить не о чем.
+        "insights_error": insights_error,
+        "insights_hint": ("метрики недоступны — вероятно, приложению не выдано "
+                          "право instagram_manage_insights") if insights_error else "",
     }
 
 

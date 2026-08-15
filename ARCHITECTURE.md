@@ -5,7 +5,9 @@
 ```
 USER
  ├── Telegram (long-polling)         core/telegram_bot.py
- └── Web Dashboard (React/Vite)      frontend/
+ └── Web (React/Vite)                frontend/  — 7 разделов:
+      Главная · Командный центр · Подключения · Агенты · Контент ·
+      Настройки · API/Credentials
               ↓
    command_center.run_command        core/command_center.py   ← единая точка входа
               ↓ intent.route()       core/intent.py
@@ -28,6 +30,24 @@ USER
                                             server_browser / desktop_agent
               ↓
    SQLite (эфемерная!) + Connection KV + data/*.json
+   доступы: core/credentials.py → core/secrets.py (шифрование NEXUS_SECRET_KEY)
+            → os.environ на старте, весь код читает их через os.getenv
+```
+
+## Производство видео: два пути
+
+`core/production_queue.py::producer` решает, кто делает ролик:
+
+```
+producer=server   content_factory сам зовёт HeyGen / HiggsField / Runway / ffmpeg
+producer=claude   content_factory кладёт ТЗ в очередь production_jobs и ждёт
+                  ↓
+       GET /api/production/next          исполнитель (Claude Code) забирает ТЗ
+       генерация через Higgsfield / HeyGen
+       POST /api/production/{id}/result  возвращает ссылки
+                  ↓
+       content_factory.finalize_from_assets → монтаж (субтитры+музыка)
+                  → moderation.send_for_approval → публикация после подтверждения
 ```
 
 ## Второй конвейер (архитектурная развилка ⚠️)

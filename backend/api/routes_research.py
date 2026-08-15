@@ -72,3 +72,45 @@ async def competitor_dynamics(platform: str, handle: str, limit: int = 30):
 async def competitor_stop(platform: str, handle: str):
     from core.research_store import stop_tracking
     return {"stopped": await stop_tracking(platform, handle)}
+
+
+# ─────────────────────────── исследование интернета ───────────────────────────
+
+class SearchBody(BaseModel):
+    query: str
+    max_results: int = 8
+
+
+@router.post("/search")
+async def web_search(body: SearchBody):
+    """Поиск в интернете — тот же, которым пользуется дирижёр.
+
+    Отдельная точка нужна, чтобы человек мог проверить руками, что именно
+    находит система: «агент ничего не нашёл» и «поиск сломан» — разные беды.
+    """
+    from core.websearch import search
+    return await search(body.query, body.max_results)
+
+
+class FetchBody(BaseModel):
+    url: str
+
+
+@router.post("/fetch")
+async def web_fetch(body: FetchBody):
+    """Прочитать страницу по ссылке."""
+    from core.websearch import fetch
+    return await fetch(body.url)
+
+
+class DeepBody(BaseModel):
+    topic: str
+    pages: int = 3
+    niche_id: str = ""
+
+
+@router.post("/deep")
+async def web_deep(body: DeepBody):
+    """Исследовать тему: поиск, чтение страниц, выжимка. Ложится в историю."""
+    from core.websearch import deep_research
+    return await deep_research(body.topic, body.pages, body.niche_id)

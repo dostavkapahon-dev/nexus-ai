@@ -144,9 +144,10 @@ def test_director_exposes_delegate_tool():
     assert {"run_browser", "make_video", "publish", "done"} <= set(names)
 
 
-def test_director_system_lists_only_available_executors(no_keys, monkeypatch):
+async def test_director_system_lists_only_available_executors(no_keys, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    sysprompt = md._full_system()
+    # Промпт собирается асинхронно: в него подмешивается профиль агента из БД.
+    sysprompt = await md._full_system()
     assert "deepseek" in sysprompt
     assert "perplexity" not in sysprompt
 

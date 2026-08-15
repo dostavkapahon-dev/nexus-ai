@@ -12,8 +12,16 @@ from typing import Optional
 router = APIRouter(tags=["settings"])
 
 def mask(value):
-    if not value or len(value) < 8:
+    """Маска для показа в интерфейсе: видно, что ключ есть, но не видно самого ключа.
+
+    Раньше короткое значение (`vk_group_id`, `ig_handle`) превращалось в пустую
+    строку — и сохранённый ключ в дашборде выглядел как несохранённый. Прятать
+    надо значение, а не факт его наличия.
+    """
+    if not value:
         return ""
+    if len(value) < 8:
+        return "*" * len(value)
     return value[:4] + "****" + value[-4:]
 
 class ConnectionsBody(BaseModel):
@@ -70,6 +78,19 @@ class ConnectionsBody(BaseModel):
     elevenlabs_api_key: Optional[str] = None
     nexus_token: Optional[str] = None
 
+def _plain_map(rows) -> dict:
+    """Ключи из БД в открытом виде. Значения могут быть зашифрованы, а весь
+    код ниже ожидает рабочий ключ: нерасшифруемое просто пропускаем, иначе
+    в провайдера уйдёт шифротекст и ошибка будет выглядеть как «неверный ключ»."""
+    from core import secrets
+    out = {}
+    for c in rows:
+        plain = secrets.decrypt(c.key_value or "")
+        if plain:
+            out[c.key_name] = plain
+    return out
+
+
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
     """Возвращает сохранённые ключи в МАСКИРОВАННОМ виде.
@@ -78,8 +99,18 @@ async def get_connections(db: AsyncSession = Depends(get_db)):
     «сохраняться» даже на бесплатном Render, где файловая БД обнуляется при
     перезапуске: достаточно задать их в Render → Environment.
     """
+    from core import secrets
+
     result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in result.scalars()}
+    rows = list(result.scalars())
+    # Значения в базе могут быть зашифрованы: маскировать надо сам ключ, а не
+    # его шифротекст — иначе в интерфейсе видны обрывки enc:v1:.
+    db_map = {}
+    for c in rows:
+        plain = secrets.decrypt(c.key_value or "")
+        # None означает «зашифровано, а расшифровать нечем» — ключ есть, но
+        # недоступен. Показываем это честно, а не как «не подключено».
+        db_map[c.key_name] = plain if plain is not None else "\u2014"
 
     out = {}
     known = list(ConnectionsBody.model_fields.keys())
@@ -92,6 +123,64 @@ async def get_connections(db: AsyncSession = Depends(get_db)):
         if key not in out and val:
             out[key] = mask(val)
     return out
+
+@router.get("/api/connections/status")
+async def connections_status(db: AsyncSession = Depends(get_db)):
+    """Единый раздел «API / Подключения»: что подключено, когда и в каком состоянии.
+
+    Интерфейс строится по этому ответу, а не по своему списку полей — раньше
+    перечень ключей жил сразу на нескольких страницах и разъезжался.
+    """
+    from core import credentials, secrets
+
+    result = await db.execute(select(Connection))
+    rows = {c.key_name: c for c in result.scalars()}
+
+    items = []
+    for field in credentials.schema():
+        conn = rows.get(field["key"])
+        env_value = os.getenv(field["key"].upper(), "")
+        plain = secrets.decrypt(conn.key_value or "") if conn else None
+        unreadable = bool(conn and conn.key_value) and plain is None
+        value = plain or env_value
+        items.append({
+            **field,
+            "connected": bool(value) or unreadable,
+            "masked": mask(value) if value else "",
+            "source": "db" if conn else ("env" if env_value else ""),
+            "unreadable": unreadable,
+            "connected_at": conn.created_at.isoformat() if conn and conn.created_at else None,
+            "updated_at": conn.updated_at.isoformat() if conn and conn.updated_at else None,
+            "last_check_ok": conn.last_check_ok if conn else None,
+            "last_check_at": conn.last_check_at.isoformat() if conn and conn.last_check_at else None,
+            "last_check_error": conn.last_check_error if conn else None,
+        })
+
+    return {"items": items, "groups": credentials.GROUPS,
+            "storage": await credentials.overview(),
+            "connected": sum(1 for i in items if i["connected"])}
+
+
+@router.post("/api/connections/{key_name}/recheck")
+async def recheck_connection(key_name: str, db: AsyncSession = Depends(get_db)):
+    """Проверить связь по одному ключу и запомнить результат.
+
+    Переиспользует ту же проверку, что и «Проверить все», — иначе появилось бы
+    второе, расходящееся представление о том, что значит «ключ рабочий».
+    """
+    from core import credentials
+
+    key_name = (key_name or "").strip().lower()
+    if key_name not in ConnectionsBody.model_fields:
+        return {"ok": False, "error": f"неизвестный ключ: {key_name}"}
+
+    results = await test_connections(ConnectionsBody(), db)
+    res = results.get(key_name)
+    if res is None:
+        return {"ok": False, "error": "для этого ключа проверка связи не предусмотрена"}
+    await credentials.record_check(key_name, bool(res.get("ok")), res.get("message", ""))
+    return {"ok": bool(res.get("ok")), "message": res.get("message", "")}
+
 
 @router.post("/api/connections")
 async def save_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
@@ -110,25 +199,56 @@ async def save_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
         if "****" not in token:
             data["instagram_token_type"] = "instagram" if token.startswith("IGAA") else "facebook"
 
+    from core import secrets
+
     for key_name, key_value in data.items():
         if not key_value or "****" in key_value:
             continue
         result = await db.execute(select(Connection).where(Connection.key_name == key_name))
         conn = result.scalar_one_or_none()
+        stored = secrets.encrypt(key_value)
         if conn:
-            conn.key_value = key_value
+            conn.key_value = stored
         else:
-            db.add(Connection(key_name=key_name, key_value=key_value))
+            db.add(Connection(key_name=key_name, key_value=stored))
+        # В окружении — всегда открытое значение: весь код читает ключи через
+        # os.getenv и ничего не знает про шифрование.
         os.environ[key_name.upper()] = key_value
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "encrypted": secrets.enabled()}
+
+@router.delete("/api/connections/{key_name}")
+async def delete_connection(key_name: str, db: AsyncSession = Depends(get_db)):
+    """Удаляет ключ насовсем — из БД и из окружения процесса.
+
+    Пустое значение в `save_connections` намеренно игнорируется: дашборд
+    присылает маски, и пустая строка там означает «поле не трогали», а не
+    «сотри ключ». Поэтому удаление — отдельное явное действие.
+    """
+    key_name = (key_name or "").strip().lower()
+    result = await db.execute(select(Connection).where(Connection.key_name == key_name))
+    conn = result.scalar_one_or_none()
+    if conn:
+        await db.delete(conn)
+        await db.commit()
+
+    # Ключ мог прийти и из окружения (Render env) — тогда в БД его нет, но код
+    # по-прежнему видит его через os.getenv, и «удалил, а он работает».
+    from_env = os.environ.pop(key_name.upper(), None)
+    if not conn and from_env is None:
+        return {"ok": False, "error": "ключ не найден"}
+    return {"ok": True, "removed": key_name,
+            "note": ("значение было задано и в переменных окружения — после "
+                     "перезапуска сервера оно вернётся, уберите его в настройках хостинга")
+                    if from_env is not None and not conn else ""}
+
 
 @router.post("/api/connections/test")
 async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
     results = {}
     data = body.model_dump(exclude_none=True)
     db_result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    db_map = _plain_map(db_result.scalars())
 
     def resolve(key):
         val = data.get(key, "")
@@ -330,9 +450,9 @@ async def ai_providers(db: AsyncSession = Depends(get_db)):
     """
     # Подтягиваем ключи из БД: сохранённые через дашборд должны учитываться сразу.
     result = await db.execute(select(Connection))
-    for c in result.scalars():
-        if c.key_value and "****" not in (c.key_value or ""):
-            os.environ.setdefault(c.key_name.upper(), c.key_value)
+    for key_name, value in _plain_map(result.scalars()).items():
+        if value and "****" not in value:
+            os.environ.setdefault(key_name.upper(), value)
 
     from core.ai_router import (FREE_PROVIDERS, resolve_free_model,
                                 resolve_gemini_model)
@@ -489,7 +609,7 @@ async def agent_config_save(body: AgentConfigBody):
 async def bot_status(db: AsyncSession = Depends(get_db)):
     """Статус Telegram-бота: имя, задан ли админ-чат и группа постов."""
     db_result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    db_map = _plain_map(db_result.scalars())
     token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
     admin = db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
     group = db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "")
@@ -517,7 +637,7 @@ class BotTestBody(BaseModel):
 async def bot_test_post(body: BotTestBody, db: AsyncSession = Depends(get_db)):
     """Отправляет тестовое сообщение в группу постов (или указанный chat_id)."""
     db_result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    db_map = _plain_map(db_result.scalars())
     token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
     chat = body.chat_id or db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "") \
         or db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")

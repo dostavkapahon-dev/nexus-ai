@@ -261,3 +261,50 @@ async def test_no_public_url_says_what_to_do(auth_client, monkeypatch):
     d = (await auth_client.get("/api/social/webhook/config")).json()
 
     assert d["ok"] is False and "публичный адрес" in d["error"]
+
+
+@pytest.mark.asyncio
+async def test_repeated_delivery_is_not_processed_twice(client, monkeypatch):
+    """Meta штатно повторяет доставку — второй раз работать не надо."""
+    from core import webhooks
+
+    runs = []
+
+    async def fake_process(platform, limit=1):
+        runs.append(limit)
+        return {"ok": True}
+
+    monkeypatch.setattr("core.engagement.process_comments", fake_process)
+
+    payload = {"entry": [{"id": "acc", "changes": [
+        {"field": "comments", "value": {"id": "c-42", "text": "вопрос",
+                                        "from": {"username": "user"},
+                                        "media": {"id": "m1"}}}]}]}
+
+    first = await webhooks.handle_events(payload)
+    assert first["comments"] == 1 and len(runs) == 1
+
+    second = await webhooks.handle_events(payload)
+    assert second.get("duplicates") == 1
+    assert len(runs) == 1, "повторная доставка не должна запускать разбор снова"
+
+
+@pytest.mark.asyncio
+async def test_mention_reaches_the_owner(client, monkeypatch):
+    """Упоминания раньше складывались в хранилище и не приводили ни к чему."""
+    from core import webhooks
+
+    told = []
+
+    async def fake_notify(text):
+        told.append(text)
+        return True
+
+    monkeypatch.setattr("core.notify.notify_owner", fake_notify)
+
+    payload = {"entry": [{"id": "acc", "changes": [
+        {"field": "mentions", "value": {"media_id": "m-77", "comment_id": "c-77"}}]}]}
+    res = await webhooks.handle_events(payload)
+
+    assert res["mentions"] == 1
+    assert told and "упомянули" in told[0]

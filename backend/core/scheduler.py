@@ -114,9 +114,27 @@ async def run_daily_publish():
 
                 # Единый диспетчер публикации (тот же, что в оркестраторе):
                 # официальный API площадки → браузерный агент.
+                awaiting = 0
                 from core.orchestrator import nexus_core
+                from core.autopublish import may_autopublish
+                from core.publish_queue import enqueue
                 for platform in platforms:
                     try:
+                        # Площадка на подтверждении не выходит в свет по расписанию:
+                        # пост готовится и ложится в очередь ждать человека.
+                        if not await may_autopublish(platform):
+                            awaiting += 1
+                            pub_id = await enqueue(
+                                platform, text, image_url or "", plan_id=plan.id,
+                                niche_id=plan.niche_id, topic=plan.topic or "",
+                                hook=plan.hook or "", content_format=plan.format or "",
+                                strategy_id=strategy_id, approved=False)
+                            if chat_id:
+                                await send_message(
+                                    chat_id,
+                                    f"⏸ {platform}: пост готов и ждёт подтверждения "
+                                    f"(<code>{pub_id}</code>)")
+                            continue
                         res = await nexus_core._publish_one(platform, text, image_url or "")
                         status = "published" if res.get("ok") else "failed"
                         db.add(Publication(
@@ -132,8 +150,13 @@ async def run_daily_publish():
                         if chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(e)[:80]}")
 
-                plan.status = "published"
-                published += 1
+                # План считается опубликованным, только если хоть что-то ушло.
+                # Иначе «опубликовано» скрывало бы посты, застрявшие на подтверждении.
+                if awaiting and awaiting == len(platforms):
+                    plan.status = "awaiting_approval"
+                else:
+                    plan.status = "published"
+                    published += 1
             except Exception as e:
                 if chat_id:
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
@@ -244,6 +267,28 @@ async def run_competitor_tracking():
     return res
 
 
+# Токен Instagram Login живёт 60 дней; обновляем заметно раньше, чтобы одна
+# пропущенная ночь не стоила подключения.
+TOKEN_MAX_AGE_DAYS = 45
+
+
+async def _token_is_aging(platform: str) -> bool:
+    """Давно ли сохранён ключ площадки. Для токенов без срока это единственный
+    доступный признак того, что пора продлевать."""
+    if platform != "instagram":
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection)
+                             .where(Connection.key_name == "instagram_access_token"))
+        c = r.scalar_one_or_none()
+    if not c or not c.updated_at:
+        return False
+    return (datetime.utcnow() - c.updated_at).days >= TOKEN_MAX_AGE_DAYS
+
+
 async def run_token_maintenance():
     """Следит за токенами площадок: продлевает Instagram и предупреждает о протухании.
 
@@ -260,6 +305,19 @@ async def run_token_maintenance():
         if not st.get("configured"):
             continue
         days = st.get("days_left")
+
+        # Токен Instagram Login срока не сообщает: days_left у него всегда None,
+        # и условие «меньше 14 дней» не срабатывало никогда — токен тихо умирал
+        # через 60 дней. Для таких продлеваем по возрасту самого ключа.
+        if days is None and st.get("ok") and await _token_is_aging(platform):
+            res = await get_connector(platform).refresh_token()
+            if res.get("refreshed"):
+                problems.append(f"🔄 {platform}: токен продлён (плановое обновление)")
+            else:
+                problems.append(f"⚠️ {platform}: продлить токен не удалось — "
+                                f"{str(res.get('error', ''))[:80]}")
+            continue
+
         # Меньше двух недель — пробуем продлить заранее, не дожидаясь падения.
         if days is not None and days < 14:
             res = await get_connector(platform).refresh_token()

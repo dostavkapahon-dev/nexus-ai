@@ -26,6 +26,10 @@ from api.routes_control import router as control_router
 from api.routes_tasks import router as tasks_router
 from api.routes_cost import router as cost_router
 from api.routes_publish import router as publish_router
+from api.routes_telegram import router as telegram_router
+from api.routes_agent_profile import router as agent_profile_router
+from api.routes_agents import router as agents_router
+from api.routes_production import router as production_router
 from api.routes_health import router as system_router
 from api.routes_social import router as social_router, public_router as social_public_router
 from api.routes_analytics import router as performance_router
@@ -77,10 +81,17 @@ async def lifespan(app: FastAPI):
         pass
 
     await init_db()
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Connection))
-        for conn in result.scalars():
-            os.environ[conn.key_name.upper()] = conn.key_value or ""
+    # Доступы едут в окружение через один слой: он же расшифровывает их и, если
+    # шифрование только что включили, дошифровывает старые записи.
+    from core.credentials import load_into_env
+    await load_into_env()
+    # Профиль агента наполняется из прежних настроек один раз — чтобы включение
+    # новой формы не выглядело как «мои настройки пропали».
+    try:
+        from core.agent_profile import bootstrap
+        await bootstrap()
+    except Exception as e:
+        print(f"[NEXUS] профиль агента не заполнен из старых настроек: {e}", flush=True)
     set_broadcast(manager.broadcast)
     # Задачи, зависшие в RUNNING с прошлого запуска, помечаем потерянными —
     # иначе они висят вечно и врут о состоянии системы.
@@ -136,6 +147,10 @@ app.include_router(control_router,    dependencies=[Depends(require_auth)])
 app.include_router(tasks_router,      dependencies=[Depends(require_auth)])
 app.include_router(cost_router,       dependencies=[Depends(require_auth)])
 app.include_router(publish_router,    dependencies=[Depends(require_auth)])
+app.include_router(telegram_router,   dependencies=[Depends(require_auth)])
+app.include_router(agent_profile_router, dependencies=[Depends(require_auth)])
+app.include_router(agents_router,     dependencies=[Depends(require_auth)])
+app.include_router(production_router, dependencies=[Depends(require_auth)])
 app.include_router(system_router,     dependencies=[Depends(require_auth)])
 app.include_router(social_router,     dependencies=[Depends(require_auth)])
 app.include_router(performance_router, dependencies=[Depends(require_auth)])

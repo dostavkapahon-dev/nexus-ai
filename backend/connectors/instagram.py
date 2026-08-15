@@ -152,17 +152,25 @@ class InstagramConnector(SocialConnector):
                 msg = (data["error"].get("message") or "")[:200]
                 return {**out, "ok": False, "error": msg,
                         "hint": "токен недействителен или истёк — вставьте новый"}
+            # Публиковать может только профессиональный аккаунт. Раньше здесь
+            # стояло безусловное «да», и панель обещала публикацию тому, кому
+            # Meta откажет.
+            account_type = (data.get("account_type") or "").upper()
+            can_publish = account_type in ("BUSINESS", "MEDIA_CREATOR", "CREATOR")
             return {**out, "ok": True,
                     "account": data.get("username", ""),
                     "followers": data.get("followers_count"),
                     "media_count": data.get("media_count"),
                     "token_type": "instagram_login",
+                    "account_type": account_type or "неизвестен",
                     # Срок не отдаётся в этом ответе; продление идёт джобом в 08:00.
                     "expires_at": "около 60 дней с момента выдачи",
                     "days_left": None,
                     "permissions": [], "missing_permissions": [],
-                    "can_publish": True,
-                    "warning": ""}
+                    "can_publish": can_publish,
+                    "warning": "" if can_publish else
+                               (f"аккаунт {account_type or 'личный'} — Instagram разрешает "
+                                f"публикацию через API только бизнес-аккаунтам и авторам")}
         except Exception as e:
             return {**out, "ok": False, "error": str(e)[:200]}
 
@@ -270,17 +278,29 @@ class InstagramConnector(SocialConnector):
             return {"ok": False, "error": str(e)[:200]}
 
     # ── публикация ─────────────────────────────────────────────────────────
-    async def publish(self, text: str, image_url: str = "", video_url: str = "") -> dict:
+    async def publish(self, text: str, image_url: str = "", video_url: str = "",
+                      images: list[str] | None = None, as_story: bool = False) -> dict:
+        """Публикация: Reels, карусель, сторис или обычный пост.
+
+        Видео раньше молча терялось на этом уровне — в Instagram уходила
+        картинка, а наверх возвращался успех.
+        """
         if not self.configured():
             return {"ok": False, "error": "не задан токен Instagram",
                     "missing_env": self.missing_env()}
         from publishers.instagram_pub import publish_instagram
         try:
             await self.limiter.acquire()
-            res = await publish_instagram(text, image_url or None)
+            res = await publish_instagram(text, image_url or None, video_url or None,
+                                          images=images, as_story=as_story)
             return {"ok": True, "via": "graph_api", **res}
         except Exception as e:
-            return {"ok": False, "via": "graph_api", "error": str(e)[:300]}
+            msg = str(e)[:300]
+            # Квота и «нет медиа» — не сбой связи: повторять их бессмысленно,
+            # иначе очередь пять раз получит тот же отказ.
+            permanent = ("квота" in msg or "без медиа" in msg)
+            return {"ok": False, "via": "graph_api", "error": msg,
+                    "blocked_by_api": permanent}
 
 
 async def _save_key(key_name: str, value: str):

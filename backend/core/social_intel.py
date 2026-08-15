@@ -40,7 +40,8 @@ async def _conn(key: str) -> str:
             r = await db.execute(select(Connection).where(Connection.key_name == key))
             c = r.scalar_one_or_none()
             if c and c.key_value:
-                return c.key_value.strip()
+                from core import secrets
+                return (secrets.decrypt(c.key_value) or "").strip()
     except Exception:
         pass
     return os.getenv(key.upper(), "").strip()

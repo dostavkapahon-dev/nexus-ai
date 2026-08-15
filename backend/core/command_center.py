@@ -10,6 +10,7 @@ Claude-дирижёра (core.marketing_director.run_director), а резуль�
 Хранилище ленты — таблица Connection (ключ control_feed, JSON-список), без
 миграций схемы. Лента ограничена по размеру, чтобы не разрастаться.
 """
+import asyncio
 import json
 import time
 
@@ -19,6 +20,12 @@ from database.models import Connection
 
 FEED_KEY = "control_feed"
 FEED_MAX = 60
+
+# Лента — одна JSON-строка, которую читают и переписывают целиком. Телеграм
+# обрабатывает сообщения параллельными задачами, поэтому без замка две записи,
+# начатые одновременно, затирали друг друга: побеждала та, что коммитилась
+# последней, а вторая исчезала бесследно.
+_feed_lock = asyncio.Lock()
 
 
 async def _get_conn(db, key: str):
@@ -30,7 +37,7 @@ async def log_event(source: str, role: str, text: str):
     """Добавляет запись в общую ленту. source: dashboard|telegram|system; role: user|agent."""
     entry = {"ts": int(time.time()), "source": source, "role": role,
              "text": (text or "")[:1500]}
-    async with AsyncSessionLocal() as db:
+    async with _feed_lock, AsyncSessionLocal() as db:
         c = await _get_conn(db, FEED_KEY)
         feed = []
         if c and c.key_value:

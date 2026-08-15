@@ -34,7 +34,7 @@ SocialConnector (ABC)
 
 | Платформа | Публикация | Чтение | Rate | Статус |
 |---|---|---|---|---|
-| Instagram | Graph API v19 | профиль + посты с инсайтами | 20/мин | 🟢 |
+| Instagram | Graph API: пост, **Reels**, **карусель**, **сторис** | профиль + посты с инсайтами | 20/мин | 🟢 |
 | Threads | Threads API v1.0 | профиль + посты (**добавлено**) | 20/мин | 🟢 |
 | Telegram | свой бот | — | 30/мин | 🟢 |
 | TikTok | Content Posting API (фото) | yt-dlp/браузер | 10/мин | 🟡 видео 🔵 |
@@ -50,6 +50,50 @@ NEXUS_PUBLISH_MODE=api      только API, без браузерного фо
 NEXUS_PUBLISH_MODE=browser  всё через браузер (Telegram остаётся своим ботом)
 ```
 
+## Подключение Telegram-канала (мастер)
+Раньше канал задавался переменной `TELEGRAM_POST_CHAT_ID`: ошибку в правах бота
+пользователь узнавал только по потерянному посту. Теперь подключение по шагам —
+`core/telegram_channels.py`, страница «Telegram-канал» в вебе, `/api/telegram/*`:
+
+```
+1. бот          POST /api/telegram/bot/connect      токен принят Telegram → сохраняем
+2. канал        GET  /api/telegram/channels/discover  каналы из свежих апдейтов бота
+3. права        POST /api/telegram/channels/check     getChat + getChatMember(бот)
+4. публикация   ←    там же: can_publish + причина отказа и что включить
+5. тест         POST /api/telegram/channels/test      сообщение уходит и удаляется
+   подключение  POST /api/telegram/channels/add       только если can_publish
+```
+
+Канал по умолчанию (⭐) — то, куда публикует `TelegramConnector`. Публикация:
+`POST /api/telegram/publish` (текст / `image_url` / `video_url`, `when` — в очередь),
+`POST /api/telegram/message` — служебное сообщение,
+`GET /api/telegram/publication/{id}` — статус.
+
+## Публикация в Instagram
+
+Meta принимает медиа в два шага: контейнер (`/media`) → публикация
+(`/media_publish`). Между ними **обязательна** проверка готовности
+(`status_code=FINISHED`) — для видео иначе публикация невозможна.
+
+| Что публикуем | Как | Ограничение |
+|---|---|---|
+| Пост с картинкой | `image_url` + `caption` | — |
+| Reels | `media_type=REELS`, `video_url` | ожидание обработки до 3 минут |
+| Карусель | дети `is_carousel_item=true` → `media_type=CAROUSEL` | до 10 элементов |
+| Сторис | `media_type=STORIES` | без подписи |
+| Текст без медиа | **невозможно** — отвечаем отказом | — |
+
+Суточная квота (25 публикаций) проверяется до отправки через
+`content_publishing_limit`; исчерпана — отказ помечается `blocked_by_api`,
+и очередь не повторяет заведомо безнадёжную публикацию.
+
+## Режимы автопубликации
+`core/autopublish.py` — общий выключатель и режим каждой площадки:
+`manual` (только вручную), `confirm` (готовим и ждём человека), `auto` (по расписанию).
+Выключенная автопубликация сильнее площадки: `auto` трактуется как `confirm`.
+Ожидающие лежат в очереди со статусом `pending_approval`
+(`GET /api/publish/pending`, `POST /api/publish/{id}/approve`, в боте — `/approve`).
+
 ## OAuth: подключение Instagram
 Раньше токен добывался руками в Graph API Explorer. Теперь обычный OAuth:
 
@@ -60,6 +104,9 @@ NEXUS_PUBLISH_MODE=browser  всё через браузер (Telegram оста�
    аккаунт у Facebook-страниц и сохраняет `instagram_access_token` + `instagram_account_id`.
 
 Callback (`/api/social/oauth/callback`) публичный — его вызывает Meta в браузере пользователя.
+Подключение начинается только из дашборда: `/oauth/start` выдаёт одноразовый `state`, и
+callback без него отказывает. Без этого публичный адрес принимал любой код, и подключённый
+аккаунт можно было подменить чужим.
 
 ## Продление токенов — главная закрытая проблема
 Токен Instagram умирал через ~60 дней **молча**, и система узнавала об этом только когда
@@ -68,7 +115,10 @@ Callback (`/api/social/oauth/callback`) публичный — его вызыв
 - `health()` показывает срок и число оставшихся дней;
 - `refresh_token()` меняет токен на долгоживущий;
 - **джоб `tokens` в 08:00** (`scheduler.run_token_maintenance`) проверяет все площадки,
-  продлевает всё, чему осталось меньше 14 дней, и пишет в Telegram, если продлить не вышло.
+  продлевает всё, чему осталось меньше 14 дней, и пишет в Telegram, если продлить не вышло;
+- у токена Instagram Login срока в ответе Meta нет (`days_left` всегда пуст), поэтому
+  условие «меньше 14 дней» для него не срабатывало никогда и токен всё равно умирал молча.
+  Такие продлеваются по возрасту сохранённого ключа (`TOKEN_MAX_AGE_DAYS = 45`).
 
 ## Ограничения платформ (BLOCKED_BY_API)
 Помечаются отдельным флагом и **не выдаются за ошибку кода** — см. `API_LIMITATIONS.md`:

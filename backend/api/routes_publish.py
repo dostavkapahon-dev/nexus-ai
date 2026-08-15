@@ -42,6 +42,40 @@ async def schedule(body: ScheduleBody):
     return {"ok": True, "publication_id": pub_id}
 
 
+@router.get("/pending")
+async def pending_list(limit: int = 50):
+    """Что ждёт подтверждения — площадки в режиме «с подтверждением»."""
+    from core.publish_queue import pending
+    return {"items": await pending(limit)}
+
+
+@router.post("/{pub_id}/approve")
+async def approve(pub_id: str):
+    """Подтвердить публикацию: она уходит в очередь и публикуется."""
+    from core.publish_queue import approve as approve_pub
+    return await approve_pub(pub_id)
+
+
+# ─────────────────── режимы автопубликации по площадкам ───────────────────
+
+class AutoBody(BaseModel):
+    enabled: bool | None = None
+    platforms: dict[str, str] | None = None   # {"telegram": "auto", "instagram": "confirm"}
+
+
+@router.get("/auto")
+async def auto_get():
+    from core.autopublish import get_settings, MODES
+    return {**await get_settings(), "modes": list(MODES)}
+
+
+@router.post("/auto")
+async def auto_set(body: AutoBody):
+    """Общий выключатель и режим каждой площадки: manual | confirm | auto."""
+    from core.autopublish import set_settings
+    return await set_settings(body.enabled, body.platforms)
+
+
 @router.post("/{pub_id}/retry")
 async def retry(pub_id: str):
     """Повторить сейчас, не дожидаясь паузы. Работает и для FAILED/BLOCKED."""

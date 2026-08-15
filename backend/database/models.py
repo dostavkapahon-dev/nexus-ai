@@ -87,6 +87,9 @@ class Publication(Base):
     last_error = Column(Text)
     text = Column(Text)                           # что публикуем — иначе повтор невозможен
     image_url = Column(Text)
+    # Видео публикуется тем же путём, что и картинка: без своего поля повтор
+    # упавшего ролика превращался в повтор голого текста.
+    video_url = Column(Text)
     task_id = Column(String, index=True)
 
 class AgentLog(Base):
@@ -116,7 +119,15 @@ class Connection(Base):
     id = Column(String, primary_key=True, default=gen_id)
     key_name = Column(String, unique=True, nullable=False)
     key_value = Column(Text)
-    updated_at = Column(DateTime, default=datetime.utcnow)
+    # Когда подключение появилось и когда его меняли — без этого в интерфейсе
+    # нельзя ответить на вопрос «когда я это подключал».
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Результат последней проверки связи: чтобы страница подключений показывала
+    # состояние сразу, а не дёргала провайдера при каждом открытии.
+    last_check_at = Column(DateTime)
+    last_check_ok = Column(Boolean)
+    last_check_error = Column(String)
 
 class UserProfile(Base):
     """Global user profile — product description, brand style, strategy settings."""
@@ -132,6 +143,36 @@ class UserProfile(Base):
     google_drive_folder_id = Column(String, default='')
     google_drive_access_token = Column(Text, default='')     # OAuth token from Google Sign-In
     updated_at = Column(DateTime, default=datetime.utcnow)
+
+class AgentProfile(Base):
+    """Настройки Главного агента — «дирижёра»: кто мы, для кого и по каким правилам.
+
+    Раньше это знание было размазано: бренд и площадки захардкожены в
+    `core/brand.py` под одну студию, ниша и tone of voice лежали в `Niche`,
+    продукт — в `UserProfile`, и ни одно из этих полей не доходило до промпта
+    дирижёра. Здесь оно собрано в одном месте и попадает в каждый запрос к модели.
+
+    Строка одна на систему (singleton): агент у пользователя один.
+    """
+    __tablename__ = 'agent_profile'
+    id = Column(String, primary_key=True, default=gen_id)
+    niche = Column(String, default='')
+    brand_name = Column(String, default='')
+    brand_location = Column(String, default='')
+    goals = Column(Text, default='')                 # чего добиваемся
+    audience = Column(Text, default='')              # для кого
+    style = Column(Text, default='')                 # визуальный стиль
+    tone_of_voice = Column(String, default='')
+    platforms = Column(JSON, default=list)
+    posts_per_day = Column(Integer, default=1)
+    rules = Column(Text, default='')                 # что делать всегда
+    constraints = Column(Text, default='')           # чего не делать никогда
+    tasks = Column(Text, default='')                 # постоянные задачи агента
+    strategy = Column(Text, default='')
+    timezone = Column(String, default='')
+    brand_voice = Column(Text, default='')
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 class NicheAnalysisCache(Base):
     """Cached niche analysis stored on Google Drive — avoid re-analysis."""
@@ -168,6 +209,32 @@ class Task(Base):
     started_at = Column(DateTime)
     finished_at = Column(DateTime)
     duration_sec = Column(Float, default=0.0)
+
+
+class ProductionJob(Base):
+    """Задание на производство медиа — ТЗ, которое выполняет внешний исполнитель.
+
+    Зачем. Видео умеет делать не только сервер: рабочий доступ к Higgsfield есть
+    у Claude Code, и логичнее отдать ему готовое ТЗ (раскадровка, промпты кадров,
+    промпт движения, сценарий озвучки), а обратно принять ссылки на файлы.
+    Между «отдали» и «приняли» проходит время и перезапуск инстанса, поэтому
+    задание живёт в БД, а не в памяти процесса.
+
+    status: queued → taken → done | failed | cancelled
+    """
+    __tablename__ = 'production_jobs'
+    id = Column(String, primary_key=True, default=gen_id)
+    kind = Column(String, default='reel')          # reel | photo | voice
+    status = Column(String, default='queued', index=True)
+    brief = Column(JSON, default=dict)             # ТЗ: раскадровка, промпты, сценарий
+    assets = Column(JSON, default=dict)            # что вернул исполнитель: ссылки
+    note = Column(Text, default='')                # комментарий исполнителя
+    error = Column(Text)
+    plan_id = Column(String, default='')
+    task_id = Column(String, index=True, default='')
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    taken_at = Column(DateTime)
+    done_at = Column(DateTime)
 
 
 class Research(Base):

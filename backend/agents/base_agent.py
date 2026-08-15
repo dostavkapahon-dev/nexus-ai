@@ -20,6 +20,16 @@ class BaseAgent(ABC):
             from core.ai_router import pick_model
             model = await pick_model(self.name, default=model)
 
+        # Профиль главного агента — одной точкой на всех агентов: иначе его
+        # пришлось бы вписывать в одиннадцать промптов и держать их синхронными.
+        try:
+            from core.agent_profile import as_prompt
+            profile = await as_prompt()
+            if profile:
+                system = profile + "\n" + system
+        except Exception:
+            pass
+
         user_prompt = template
         for k, v in variables.items():
             user_prompt = user_prompt.replace("{" + k + "}", str(v))

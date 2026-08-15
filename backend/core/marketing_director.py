@@ -24,6 +24,10 @@ SYSTEM = """\
   ролика по ссылке. ВСЕГДА вызывай analyze ПЕРЕД созданием контента — решения по теме, хуку
   и формату должны идти от реальных цифр аккаунта и того, что уже заходило, а не вслепую.
 - delegate: отдать текстовую подзадачу другой нейросети (см. список ниже).
+- web_search / open_url / research: искать в интернете. Ты не ограничен списком
+  сайтов — сам решай, где искать: тренды, темы, конкуренты, референсы, ниша,
+  новости, популярные форматы, проверка фактов, идеи. Если данных не хватает,
+  сперва ищи, а не выдумывай.
 - run_browser: автономный браузерный агент на ПК пользователя (живые сессии
   Instagram/OLX/VK/YouTube). Используй для действий, у которых нет API.
 - make_video: генерация короткого видео (аватар-озвучка или кинематографичный клип).
@@ -44,15 +48,34 @@ SYSTEM = """\
 """
 
 
-def _full_system() -> str:
-    """Бренд-мозг Pakhon Studio + инструкции директора по инструментам."""
+async def _full_system() -> str:
+    """Профиль пользователя + бренд-мозг + инструкции директора по инструментам.
+
+    Профиль идёт первым: заданные пользователем ниша, цели и ограничения важнее
+    общих правил, зашитых в код. Без него дирижёр работал по чужому брифу.
+    """
     from core.dispatch import executors_doc
     base = SYSTEM + "\n\n--- ИСПОЛНИТЕЛИ ДЛЯ delegate (только эти доступны) ---\n" + executors_doc()
     try:
-        from core.brand import system_prompt
-        return system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + base
+        from agents.registry import agents_doc
+        doc = agents_doc()
+        if doc:
+            base += "\n\n" + doc
     except Exception:
-        return base
+        pass
+    try:
+        from core.brand import system_prompt
+        base = await system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + base
+    except Exception:
+        pass
+    try:
+        from core.agent_profile import as_prompt
+        profile = await as_prompt()
+        if profile:
+            return profile + "\n" + base
+    except Exception:
+        pass
+    return base
 
 TOOLS = [
     {
@@ -63,12 +86,50 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "executor": {"type": "string",
-                             "description": "Имя исполнителя из списка доступных в системном промпте."},
+                             "description": ("Имя исполнителя-модели ИЛИ ключ агента "
+                                             "из списка в системном промпте (research, "
+                                             "copywriter, content_strategist и т.д.).")},
                 "task": {"type": "string", "description": "Что именно сделать — конкретно и полно."},
                 "system": {"type": "string", "description": "Роль исполнителя, если нужна особая."},
                 "context": {"type": "string", "description": "Данные, на которые опираться."},
             },
             "required": ["executor", "task"],
+        },
+    },
+    {
+        "name": "web_search",
+        "description": ("Найти информацию в интернете. Любые сайты и темы: тренды, "
+                        "конкуренты, референсы, новости, форматы, проверка фактов. "
+                        "Возвращает список ссылок с кратким описанием."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Поисковый запрос словами."},
+                "max_results": {"type": "integer", "description": "Сколько результатов (по умолчанию 8)."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "open_url",
+        "description": "Открыть страницу и прочитать её текст. Используй после web_search.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
+    },
+    {
+        "name": "research",
+        "description": ("Исследовать тему целиком: поиск, чтение нескольких страниц и "
+                        "выжимка. Результат сохраняется в историю исследований."),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "Что исследуем."},
+                "pages": {"type": "integer", "description": "Сколько страниц прочитать (1–5)."},
+            },
+            "required": ["topic"],
         },
     },
     {
@@ -140,9 +201,30 @@ TOOLS = [
 
 async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "delegate":
+        executor = (inp.get("executor") or "").strip().lower()
+        # Сначала роль агента, потом модель: имена не пересекаются, а роль несёт
+        # свою специализацию и своего исполнителя.
+        from agents.registry import get as get_agent, run as run_agent_role
+        if get_agent(executor):
+            return await run_agent_role(executor, inp.get("task", ""),
+                                        inp.get("context", ""))
         from core.dispatch import delegate
-        return await delegate(executor=inp.get("executor", ""), task=inp.get("task", ""),
+        return await delegate(executor=executor, task=inp.get("task", ""),
                               system=inp.get("system", ""), context=inp.get("context", ""))
+    if name == "web_search":
+        from core.websearch import search
+        return await search(inp.get("query", ""), int(inp.get("max_results") or 8))
+    if name == "open_url":
+        from core.websearch import fetch
+        res = await fetch(inp.get("url", ""))
+        # Полный текст страницы в контекст модели не отдаём: это тысячи токенов
+        # на каждый шаг, а решения принимаются по сути, а не по вёрстке.
+        if res.get("ok"):
+            res = {**res, "text": res["text"][:6000]}
+        return res
+    if name == "research":
+        from core.websearch import deep_research
+        return await deep_research(inp.get("topic", ""), int(inp.get("pages") or 3))
     if name == "run_browser":
         from core.browser_agent import run_agent
         return await run_agent(task=inp["task"], start_url=inp.get("start_url"), max_steps=20)
@@ -189,7 +271,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
     steps = []
     for _ in range(max_steps):
         resp = await client.messages.create(
-            model=DIRECTOR_MODEL, max_tokens=1500, system=_full_system(), tools=TOOLS, messages=messages,
+            model=DIRECTOR_MODEL, max_tokens=1500, system=await _full_system(), tools=TOOLS, messages=messages,
         )
         messages.append({"role": "assistant", "content": resp.content})
         tool_use = next((b for b in resp.content if b.type == "tool_use"), None)
@@ -229,6 +311,9 @@ _GEMINI_DIRECTOR_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
 {"tool":"analyze","args":{"target":"instagram|tiktok|youtube|url","handle":"ник или ссылка (опц.)"}}
 {"tool":"delegate","args":{"executor":"deepseek","task":"...","system":"...","context":"..."}}
+{"tool":"web_search","args":{"query":"что ищем","max_results":8}}
+{"tool":"open_url","args":{"url":"https://..."}}
+{"tool":"research","args":{"topic":"тема исследования","pages":3}}
 {"tool":"run_browser","args":{"task":"...","start_url":"..."}}
 {"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
 {"tool":"publish","args":{"platform":"instagram","text":"...","image_url":"..."}}
@@ -242,7 +327,7 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     model = genai.GenerativeModel(
         GEMINI_DIRECTOR_MODEL,
-        system_instruction=_full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC,
+        system_instruction=await _full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC,
         generation_config={"response_mime_type": "application/json"},
     )
     history = ""

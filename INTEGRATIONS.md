@@ -23,7 +23,7 @@
 
 | Сервис | Модуль | Переменные | Назначение |
 |---|---|---|---|
-| Telegram Bot API | `core/telegram_bot.py` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_POST_CHAT_ID` | управление и публикация |
+| Telegram Bot API | `core/telegram_bot.py` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_POST_CHAT_ID` | управление и публикация. Владелец — из `TELEGRAM_CHAT_ID`, иначе первый написавший `/start` (`core/telegram_owner.py`); команды принимаются только от него. Токен перечитывается на ходу — бот оживает без перезапуска |
 | Google Drive | `core/google_drive.py` | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | кэш анализа ниш |
 | Google Sign-In | `api/routes_auth.py` | `GOOGLE_CLIENT_ID` | вход в дашборд |
 | Bright Data | `core/social_intel.py:139` | `BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE` | Web Unlocker для Instagram |
@@ -33,6 +33,19 @@
 | Playwright | `core/server_browser.py` | `NEXUS_SERVER_BROWSER`, `NEXUS_BROWSER_PROFILE` | браузер на сервере |
 | Desktop Agent | `desktop_agent.py` + `api/routes_desktop.py` | `NEXUS_TOKEN` | браузер на ПК пользователя (WebSocket) |
 | ffmpeg | `imageio-ffmpeg` | — | монтаж, субтитры |
+
+## Хранение доступов
+
+Ключи площадок и AI лежат в таблице `connections`. `core/secrets.py` шифрует
+значения ключом из `NEXUS_SECRET_KEY` (Fernet), `core/credentials.py` — единая
+точка чтения/записи и выгрузки в окружение процесса.
+
+| Переменная | Смысл |
+|---|---|
+| `NEXUS_SECRET_KEY` | ключ шифрования. Не задан — ключи хранятся открытым текстом (интерфейс об этом предупреждает). Появился — сохранённые записи дошифровываются при старте. Потерян — зашифрованные значения прочитать нельзя, их нужно ввести заново |
+
+Весь остальной код читает доступы через `os.getenv`: расшифровка происходит один
+раз на старте (`main.py` → `credentials.load_into_env`) и при сохранении ключа.
 
 ## Режимы работы
 

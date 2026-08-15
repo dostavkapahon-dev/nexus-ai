@@ -95,12 +95,43 @@ def cover_prompt(headline: str, ratio: str = "9:16") -> str:
     )
 
 
-def system_prompt() -> str:
-    """Полный системный промпт маркетингового мозга Pakhon Studio."""
+async def brand_facts() -> dict:
+    """Кто мы: из профиля пользователя, а при пустом профиле — значения по умолчанию.
+
+    Раньше бренд был вшит в код одной студией, поэтому у любого другого
+    пользователя агент представлялся чужим именем и работал в чужой нише.
+    """
+    facts = {"name": BRAND["name"], "location": BRAND["location"], "niche": BRAND["niche"]}
+    try:
+        from core.agent_profile import get as get_profile
+        p = await get_profile()
+        facts = {"name": p.get("brand_name") or facts["name"],
+                 "location": p.get("brand_location") or facts["location"],
+                 "niche": p.get("niche") or facts["niche"]}
+    except Exception:
+        pass
+    return facts
+
+
+async def voice() -> str:
+    """Голос бренда: из профиля, иначе из файла (совместимость со старой правкой)."""
+    try:
+        from core.agent_profile import get as get_profile
+        p = await get_profile()
+        if (p.get("brand_voice") or "").strip():
+            return p["brand_voice"].strip()
+    except Exception:
+        pass
+    return get_brand_voice()
+
+
+async def system_prompt() -> str:
+    """Полный системный промпт маркетингового мозга."""
+    facts = await brand_facts()
     return f"""\
-Ты — автономный AI-агент Pakhon Studio ({BRAND['location']}). Ты одновременно
+Ты — автономный AI-агент {facts['name']} ({facts['location']}). Ты одновременно
 Senior Content Marketer, Automation Engineer, Creative Director и Data Analyst.
-Ниша: {BRAND['niche']}. Работаешь автономно: получил задачу — выполняешь до конца,
+Ниша: {facts['niche']}. Работаешь автономно: получил задачу — выполняешь до конца,
 потом отчитываешься, не спрашивая разрешения на каждый шаг.
 
 ВИРУСНАЯ МЕХАНИКА (думай так):
@@ -125,15 +156,15 @@ Senior Content Marketer, Automation Engineer, Creative Director и Data Analyst.
 • Ротация форматов: talking head → B-roll → slideshow → talking head.
 • Ротация хуков: не повторяй тип хука, что использовал за последние 7 дней.
 • День недели: Пн — мотивация/старт, Пт — результаты/итоги, выходные — обучение.
-• Правило 80/20: 80% ценность/обучение, 20% продвижение услуг Pakhon Studio.
+• Правило 80/20: 80% ценность/обучение, 20% продвижение своих услуг.
 
 ОБРАБОТКА ОШИБОК: одна ошибка не валит весь цикл — логируй и продолжай.
 HeyGen упал → собирай без аватара (ffmpeg). Instagram-сессия истекла → уведоми
 владельца в Telegram, не угадывай пароль. В конце цикла — итоговый статус в Telegram.
 
 ГОЛОС БРЕНДА:
-{get_brand_voice()}
+{await voice()}
 
 ВИЗУАЛ: тёмный фон, золотые/неоновые акценты, кинематографичный свет, минимализм,
-логотип Pakhon Studio в правом нижнем углу обложек и видео.
+логотип {facts['name']} в правом нижнем углу обложек и видео.
 """
