@@ -160,6 +160,26 @@ export const publishing = {
   retry: (id) => api.post(`/publish/${id}/retry`),
   cancel: (id) => api.post(`/publish/${id}/cancel`),
   process: () => api.post('/publish/process'),
+  pending: (limit = 50) => api.get('/publish/pending', { params: { limit } }),
+  approve: (id) => api.post(`/publish/${id}/approve`),
+  autoGet: () => api.get('/publish/auto'),
+  autoSet: (body) => api.post('/publish/auto', body),
+}
+
+export const telegram = {
+  status: () => api.get('/telegram/status'),
+  botCheck: (token) => api.post('/telegram/bot/check', { token }),
+  botConnect: (token) => api.post('/telegram/bot/connect', { token }),
+  channels: () => api.get('/telegram/channels'),
+  discover: () => api.get('/telegram/channels/discover'),
+  check: (chat_id) => api.post('/telegram/channels/check', { chat_id }),
+  test: (chat_id, keep = false) => api.post('/telegram/channels/test', { chat_id, keep }),
+  add: (chat_id) => api.post('/telegram/channels/add', { chat_id }),
+  setDefault: (chat_id) => api.post('/telegram/channels/default', { chat_id }),
+  remove: (chat_id) => api.post('/telegram/channels/remove', { chat_id }),
+  publish: (body) => api.post('/telegram/publish', body),
+  message: (text, chat_id) => api.post('/telegram/message', { text, chat_id }),
+  publicationStatus: (id) => api.get(`/telegram/publication/${id}`),
 }
 
 export const control = {

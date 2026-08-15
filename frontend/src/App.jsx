@@ -7,6 +7,7 @@ import NewNiche from './pages/NewNiche'
 import Queue from './pages/Queue'
 import PromptStudio from './pages/PromptStudio'
 import Connections from './pages/Connections'
+import TelegramConnect from './pages/TelegramConnect'
 import BotSetup from './pages/BotSetup'
 import CommandCenter from './pages/CommandCenter'
 import AgentSetup from './pages/AgentSetup'
@@ -39,6 +40,7 @@ const NAV = [
   { to: '/cost',        icon: DollarSign,      label: 'Расходы' },
   { to: '/social',      icon: Share2,          label: 'Площадки' },
   { to: '/connections', icon: Plug,            label: 'Ключи API' },
+  { to: '/telegram',    icon: Send,            label: 'Telegram-канал' },
   { to: '/bot',         icon: Bot,             label: 'Telegram-бот' },
   { to: '/dash',        icon: LayoutDashboard, label: 'Ниши' },
 ]
@@ -113,6 +115,7 @@ function Layout() {
           <Route path="/analytics"   element={<Analytics />} />
           <Route path="/prompts"     element={<PromptStudio />} />
           <Route path="/connections" element={<Connections />} />
+          <Route path="/telegram"    element={<TelegramConnect />} />
           <Route path="/bot"         element={<BotSetup />} />
           <Route path="/hq"          element={<CommandCenter />} />
           <Route path="/agent"       element={<AgentSetup />} />

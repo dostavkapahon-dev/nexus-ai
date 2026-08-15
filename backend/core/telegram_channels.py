@@ -1,0 +1,271 @@
+"""
+Подключение Telegram-каналов для постинга: бот → канал → права → тест.
+
+Зачем отдельный модуль. Раньше канал задавался переменной окружения
+TELEGRAM_POST_CHAT_ID: пользователь вписывал строку и узнавал о том, что бот
+не админ или не может писать, только когда терялся первый настоящий пост.
+Здесь подключение проходит по шагам, и каждый шаг отвечает на свой вопрос:
+
+  1. `bot_info`        — жив ли токен и что это за бот;
+  2. `discover`        — какие каналы бот уже видит (по свежим апдейтам);
+  3. `check_channel`   — админ ли бот в канале и есть ли право публиковать;
+  4. `test_publish`    — реально ли уходит сообщение (тестовое удаляется);
+  5. `add_channel`     — сохранение канала в список подключённых.
+
+Список каналов лежит в таблице Connection (ключ `telegram_channels`, JSON) —
+так же, как другие настройки системы, без миграций схемы.
+"""
+import json
+import os
+import time
+
+from sqlalchemy import select
+
+from database.db import AsyncSessionLocal
+from database.models import Connection
+from publishers import telegram_pub as tg
+
+CHANNELS_KEY = "telegram_channels"
+# Право писать в канал; в супергруппе роль админа устроена иначе — там смотрим
+# на сам факт членства со статусом administrator/creator.
+POST_RIGHT = "can_post_messages"
+
+
+# ─────────────────────────── хранилище ───────────────────────────
+
+async def _load(db) -> list[dict]:
+    r = await db.execute(select(Connection).where(Connection.key_name == CHANNELS_KEY))
+    c = r.scalar_one_or_none()
+    if not (c and c.key_value):
+        return []
+    try:
+        data = json.loads(c.key_value)
+        return data if isinstance(data, list) else []
+    except ValueError:
+        return []
+
+
+async def _save(db, items: list[dict]):
+    r = await db.execute(select(Connection).where(Connection.key_name == CHANNELS_KEY))
+    c = r.scalar_one_or_none()
+    payload = json.dumps(items, ensure_ascii=False)
+    if c:
+        c.key_value = payload
+    else:
+        db.add(Connection(key_name=CHANNELS_KEY, key_value=payload))
+    await db.commit()
+
+
+async def list_channels() -> list[dict]:
+    async with AsyncSessionLocal() as db:
+        return await _load(db)
+
+
+async def default_channel() -> str:
+    """chat_id канала по умолчанию: помеченный default, иначе первый подключённый,
+    иначе — старые переменные окружения (совместимость с прежними установками)."""
+    items = await list_channels()
+    for it in items:
+        if it.get("default"):
+            return str(it.get("chat_id") or "")
+    if items:
+        return str(items[0].get("chat_id") or "")
+    return (os.getenv("TELEGRAM_POST_CHAT_ID", "") or os.getenv("TELEGRAM_CHAT_ID", "")).strip()
+
+
+# ─────────────────────────── шаги подключения ───────────────────────────
+
+async def bot_info(token: str = "") -> dict:
+    """Шаг 1: подключение бота. Токен можно проверить до сохранения."""
+    res = await tg.call("getMe", {}, token=token)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error") or "токен не принят Telegram"}
+    me = res.get("result") or {}
+    return {"ok": True, "id": me.get("id"), "username": "@" + (me.get("username") or ""),
+            "name": me.get("first_name") or "", "can_join_groups": me.get("can_join_groups"),
+            "saved": bool(tg.bot_token())}
+
+
+async def discover(token: str = "") -> dict:
+    """Шаг 2: выбор канала. Telegram не даёт списка чатов бота, но в свежих
+    апдейтах видны каналы, куда его добавили или где он уже писал. Этого хватает,
+    чтобы пользователь выбрал канал из списка, а не искал chat_id руками.
+    """
+    res = await tg.call("getUpdates", {"limit": 100, "timeout": 0,
+                                       "allowed_updates": ["channel_post", "my_chat_member",
+                                                           "message"]}, token=token)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error"), "items": []}
+
+    found: dict[str, dict] = {}
+    for upd in res.get("result") or []:
+        for key in ("channel_post", "edited_channel_post", "message", "my_chat_member"):
+            chat = ((upd.get(key) or {}).get("chat")) or {}
+            if chat.get("type") in ("channel", "supergroup", "group"):
+                found[str(chat["id"])] = {
+                    "chat_id": str(chat["id"]), "title": chat.get("title") or "",
+                    "username": ("@" + chat["username"]) if chat.get("username") else "",
+                    "type": chat.get("type")}
+
+    connected = {c.get("chat_id") for c in await list_channels()}
+    items = [{**v, "connected": v["chat_id"] in connected} for v in found.values()]
+    # Пустой список — не ошибка: бота могли добавить в канал до последних апдейтов.
+    return {"ok": True, "items": items,
+            "hint": "" if items else ("Добавьте бота администратором в канал и "
+                                      "опубликуйте там любое сообщение — канал появится в списке. "
+                                      "Либо укажите @имя канала вручную.")}
+
+
+async def check_channel(chat_id: str, token: str = "") -> dict:
+    """Шаги 3–4: проверка прав и возможности публикации.
+
+    Отвечает на два разных вопроса. «Права» — что говорит Telegram про роль бота
+    (`getChatMember`). «Можно ли публиковать» — вывод из этих прав: для канала
+    нужен can_post_messages, для группы достаточно быть админом.
+    """
+    chat_id = (chat_id or "").strip()
+    if not chat_id:
+        return {"ok": False, "error": "не указан канал"}
+
+    chat = await tg.call("getChat", {"chat_id": chat_id}, token=token)
+    if not chat.get("ok"):
+        return {"ok": False, "error": chat.get("error") or "канал не найден",
+                "hint": "Проверьте @имя канала и что бот добавлен в него администратором."}
+    info = chat.get("result") or {}
+
+    me = await tg.call("getMe", {}, token=token)
+    if not me.get("ok"):
+        return {"ok": False, "error": me.get("error") or "токен бота не принят"}
+    bot_id = (me.get("result") or {}).get("id")
+
+    member = await tg.call("getChatMember", {"chat_id": info.get("id", chat_id),
+                                             "user_id": bot_id}, token=token)
+    if not member.get("ok"):
+        return {"ok": False, "error": member.get("error") or "не удалось узнать права бота",
+                "chat": _chat_brief(info)}
+    m = member.get("result") or {}
+    status = m.get("status") or ""
+    is_admin = status in ("administrator", "creator")
+    chat_type = info.get("type") or ""
+
+    if chat_type == "channel":
+        can_publish = bool(m.get(POST_RIGHT)) or status == "creator"
+    else:
+        can_publish = is_admin or status == "member"
+
+    rights = sorted(k for k, v in m.items() if k.startswith("can_") and v is True)
+    if not is_admin:
+        reason = "бот не администратор канала"
+    elif not can_publish:
+        reason = "у бота нет права «Публикация сообщений»"
+    else:
+        reason = ""
+
+    return {"ok": True, "chat": _chat_brief(info), "status": status,
+            "is_admin": is_admin, "can_publish": can_publish, "rights": rights,
+            "reason": reason,
+            "hint": "" if can_publish else
+                    "Откройте канал → Администраторы → добавьте бота и включите "
+                    "«Публикация сообщений»."}
+
+
+def _chat_brief(info: dict) -> dict:
+    return {"chat_id": str(info.get("id") or ""), "title": info.get("title") or "",
+            "username": ("@" + info["username"]) if info.get("username") else "",
+            "type": info.get("type") or ""}
+
+
+async def test_publish(chat_id: str, token: str = "", *, keep: bool = False) -> dict:
+    """Шаг 5: тестовая публикация. По умолчанию сообщение удаляется — канал
+    пользователя не должен превращаться в свалку проверок."""
+    text = ("✅ <b>NEXUS AI</b> — тестовая публикация.\n"
+            "Канал подключён и готов принимать посты.")
+    res = await tg.send_message(chat_id, text, token=token, silent=True)
+    if not res.get("ok"):
+        return {"ok": False, "error": res.get("error"),
+                "hint": "Публикация не прошла: проверьте права бота в канале."}
+    deleted = False
+    if not keep and res.get("message_id"):
+        d = await tg.delete_message(chat_id, res["message_id"], token=token)
+        deleted = bool(d.get("ok"))
+    return {"ok": True, "message_id": res.get("message_id"), "post_url": res.get("post_url"),
+            "deleted": deleted}
+
+
+# ─────────────────────────── список подключённых ───────────────────────────
+
+async def add_channel(chat_id: str, *, make_default: bool = True,
+                      token: str = "") -> dict:
+    """Сохраняет канал, но только если он реально пригоден для публикации.
+    Иначе в списке заведётся «подключение», которое молча не работает."""
+    check = await check_channel(chat_id, token=token)
+    if not check.get("ok"):
+        return check
+    if not check.get("can_publish"):
+        return {"ok": False, "error": check.get("reason") or "публикация недоступна",
+                "hint": check.get("hint"), "check": check}
+
+    chat = check["chat"]
+    entry = {**chat, "connected_at": int(time.time()),
+             "rights": check.get("rights", []), "default": False}
+
+    async with AsyncSessionLocal() as db:
+        items = [c for c in await _load(db) if c.get("chat_id") != chat["chat_id"]]
+        items.append(entry)
+        if make_default or len(items) == 1:
+            for c in items:
+                c["default"] = c["chat_id"] == chat["chat_id"]
+        await _save(db, items)
+
+    # Совместимость: остальной код (коннектор, планировщик) читает переменную.
+    os.environ["TELEGRAM_POST_CHAT_ID"] = chat["chat_id"]
+    await _persist_env("telegram_post_chat_id", chat["chat_id"])
+    return {"ok": True, "channel": entry, "check": check}
+
+
+async def remove_channel(chat_id: str) -> dict:
+    async with AsyncSessionLocal() as db:
+        items = await _load(db)
+        rest = [c for c in items if str(c.get("chat_id")) != str(chat_id)]
+        if len(rest) == len(items):
+            return {"ok": False, "error": "канал не подключён"}
+        if rest and not any(c.get("default") for c in rest):
+            rest[0]["default"] = True
+        await _save(db, rest)
+    os.environ["TELEGRAM_POST_CHAT_ID"] = await default_channel()
+    await _persist_env("telegram_post_chat_id", os.environ["TELEGRAM_POST_CHAT_ID"])
+    return {"ok": True, "removed": str(chat_id)}
+
+
+async def set_default(chat_id: str) -> dict:
+    async with AsyncSessionLocal() as db:
+        items = await _load(db)
+        if not any(str(c.get("chat_id")) == str(chat_id) for c in items):
+            return {"ok": False, "error": "канал не подключён"}
+        for c in items:
+            c["default"] = str(c.get("chat_id")) == str(chat_id)
+        await _save(db, items)
+    os.environ["TELEGRAM_POST_CHAT_ID"] = str(chat_id)
+    await _persist_env("telegram_post_chat_id", str(chat_id))
+    return {"ok": True, "default": str(chat_id)}
+
+
+async def _persist_env(key_name: str, value: str):
+    """Настройки переживают рестарт только в БД: на Render процесс поднимается
+    с чистым окружением и подтягивает ключи из таблицы Connection."""
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key_name))
+        c = r.scalar_one_or_none()
+        if c:
+            c.key_value = value
+        else:
+            db.add(Connection(key_name=key_name, key_value=value))
+        await db.commit()
+
+
+async def status() -> dict:
+    """Сводка для страницы подключения: бот, каналы, готовность публиковать."""
+    info = await bot_info()
+    items = await list_channels()
+    return {"bot": info, "channels": items, "default": await default_channel(),
+            "ready": bool(info.get("ok") and (items or await default_channel()))}

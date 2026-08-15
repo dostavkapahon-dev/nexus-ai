@@ -82,7 +82,7 @@ async def test_publishing_works_without_ai(client, no_ai, monkeypatch):
     from core import publish_queue as pq
     from core.orchestrator import nexus_core
 
-    async def ok(platform, text, image_url):
+    async def ok(platform, text, image_url, video_url=""):
         return {"ok": True, "post_id": "p1", "post_url": "https://x/p1"}
 
     monkeypatch.setattr(nexus_core, "_publish_one", ok)

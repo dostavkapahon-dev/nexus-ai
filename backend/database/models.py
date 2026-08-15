@@ -87,6 +87,9 @@ class Publication(Base):
     last_error = Column(Text)
     text = Column(Text)                           # что публикуем — иначе повтор невозможен
     image_url = Column(Text)
+    # Видео публикуется тем же путём, что и картинка: без своего поля повтор
+    # упавшего ролика превращался в повтор голого текста.
+    video_url = Column(Text)
     task_id = Column(String, index=True)
 
 class AgentLog(Base):

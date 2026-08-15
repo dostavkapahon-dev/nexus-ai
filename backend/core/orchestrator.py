@@ -303,7 +303,8 @@ class NexusCore:
             await db.commit()
             return {"ok": True, "report": report}
 
-    async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
+    async def _publish_one(self, platform: str, text: str, image_url: str,
+                           video_url: str = "") -> dict:
         """Публикация одной площадки через её коннектор.
 
         Раньше здесь была лестница if-ов по каждой площадке. Теперь все площадки
@@ -325,7 +326,8 @@ class NexusCore:
         connector = get_connector(platform)
         if connector and connector.configured():
             try:
-                res = await connector.publish(text, image_url=image_url or "")
+                res = await connector.publish(text, image_url=image_url or "",
+                                              video_url=video_url or "")
             except Exception as e:
                 res = {"ok": False, "error": str(e)[:300]}
 

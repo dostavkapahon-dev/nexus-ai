@@ -114,9 +114,27 @@ async def run_daily_publish():
 
                 # Единый диспетчер публикации (тот же, что в оркестраторе):
                 # официальный API площадки → браузерный агент.
+                awaiting = 0
                 from core.orchestrator import nexus_core
+                from core.autopublish import may_autopublish
+                from core.publish_queue import enqueue
                 for platform in platforms:
                     try:
+                        # Площадка на подтверждении не выходит в свет по расписанию:
+                        # пост готовится и ложится в очередь ждать человека.
+                        if not await may_autopublish(platform):
+                            awaiting += 1
+                            pub_id = await enqueue(
+                                platform, text, image_url or "", plan_id=plan.id,
+                                niche_id=plan.niche_id, topic=plan.topic or "",
+                                hook=plan.hook or "", content_format=plan.format or "",
+                                strategy_id=strategy_id, approved=False)
+                            if chat_id:
+                                await send_message(
+                                    chat_id,
+                                    f"⏸ {platform}: пост готов и ждёт подтверждения "
+                                    f"(<code>{pub_id}</code>)")
+                            continue
                         res = await nexus_core._publish_one(platform, text, image_url or "")
                         status = "published" if res.get("ok") else "failed"
                         db.add(Publication(
@@ -132,8 +150,13 @@ async def run_daily_publish():
                         if chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(e)[:80]}")
 
-                plan.status = "published"
-                published += 1
+                # План считается опубликованным, только если хоть что-то ушло.
+                # Иначе «опубликовано» скрывало бы посты, застрявшие на подтверждении.
+                if awaiting and awaiting == len(platforms):
+                    plan.status = "awaiting_approval"
+                else:
+                    plan.status = "published"
+                    published += 1
             except Exception as e:
                 if chat_id:
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")

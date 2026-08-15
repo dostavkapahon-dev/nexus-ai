@@ -23,6 +23,9 @@ from database.models import Publication
 SCHEDULED, RETRYING = "scheduled", "retrying"
 PUBLISHED, FAILED = "published", "failed"
 BLOCKED, CANCELLED = "blocked", "cancelled"
+# Пост подготовлен, но площадка стоит в режиме «с подтверждением»: он ждёт
+# человека и не уходит наружу сам по себе.
+PENDING = "pending_approval"
 
 ACTIVE = (SCHEDULED, RETRYING)
 
@@ -55,13 +58,22 @@ def _backoff(attempts: int) -> timedelta:
 async def enqueue(platform: str, text: str, image_url: str = "", *,
                   when: datetime | None = None, plan_id: str = "", niche_id: str = "",
                   topic: str = "", hook: str = "", content_format: str = "",
-                  strategy_id: str = "", task_id: str = "") -> str:
-    """Ставит публикацию в очередь. `when=None` — как можно скорее."""
+                  strategy_id: str = "", task_id: str = "", approved: bool = True,
+                  video_url: str = "") -> str:
+    """Ставит публикацию в очередь. `when=None` — как можно скорее.
+
+    `approved` по умолчанию True: постановка в очередь — это обычно прямое
+    решение человека (ручная публикация или подтверждение), и режим площадки её
+    не задерживает. Автоматика (планировщик) ставит `approved=False`, и тогда
+    площадка в режиме `confirm`/`manual` попадает в PENDING и ждёт человека.
+    """
+    from core.autopublish import may_autopublish
+    status = SCHEDULED if approved or await may_autopublish(platform) else PENDING
     async with AsyncSessionLocal() as db:
         pub = Publication(
-            plan_id=plan_id, niche_id=niche_id, platform=platform, status=SCHEDULED,
+            plan_id=plan_id, niche_id=niche_id, platform=platform, status=status,
             scheduled_at=when or datetime.utcnow(), attempts=0,
-            text=text or "", image_url=image_url or "",
+            text=text or "", image_url=image_url or "", video_url=video_url or "",
             topic=(topic or "")[:300], hook=hook or "", content_format=content_format or "",
             strategy_id=strategy_id, task_id=task_id)
         db.add(pub)
@@ -81,11 +93,12 @@ async def attempt(pub_id: str) -> dict:
         if pub.status not in ACTIVE:
             return {"ok": False, "error": f"статус {pub.status} — публиковать нечего"}
         platform, text, image_url = pub.platform, pub.text or "", pub.image_url or ""
+        video_url = pub.video_url or ""
         attempts = int(pub.attempts or 0) + 1
 
     from core.orchestrator import nexus_core
     try:
-        res = await nexus_core._publish_one(platform, text, image_url)
+        res = await nexus_core._publish_one(platform, text, image_url, video_url)
     except Exception as e:
         res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
@@ -145,6 +158,31 @@ async def process_due(limit: int = 20) -> dict:
         else:
             failed += 1
     return {"picked": len(ids), "published": ok, "not_published": failed}
+
+
+async def approve(pub_id: str) -> dict:
+    """Подтверждение поста, ждавшего человека: запись возвращается в очередь.
+    Публикуем сразу, если её время уже наступило."""
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Publication).where(Publication.id == pub_id))
+        pub = r.scalar_one_or_none()
+        if not pub:
+            return {"ok": False, "error": "запись не найдена"}
+        if pub.status != PENDING:
+            return {"ok": False, "error": f"статус {pub.status} — подтверждать нечего"}
+        pub.status = SCHEDULED
+        when = pub.scheduled_at
+        await db.commit()
+    if when and when > datetime.utcnow():
+        # Запланировано на будущее — подтверждение не должно ломать расписание.
+        return {"ok": True, "publication_id": pub_id, "status": SCHEDULED,
+                "scheduled_at": when.isoformat()}
+    return await attempt(pub_id)
+
+
+async def pending(limit: int = 50) -> list[dict]:
+    """Что ждёт подтверждения — площадки в режиме «с подтверждением»."""
+    return await queue(PENDING, limit)
 
 
 async def retry_now(pub_id: str) -> dict:

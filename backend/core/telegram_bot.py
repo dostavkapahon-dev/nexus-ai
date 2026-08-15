@@ -65,6 +65,8 @@ async def setup_bot_commands():
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
+        {"command": "channels", "description": "Каналы для публикации"},
+        {"command": "approve", "description": "Подтвердить публикацию"},
         {"command": "errors", "description": "Что сломалось за сутки"},
         {"command": "rivals", "description": "Конкуренты: метрики и динамика"},
         {"command": "strategies", "description": "Стратегии: версии и результат"},
@@ -312,6 +314,62 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
+    if cmd == "channels":
+        # Каналы для постинга — тот же список, что на сайте: система одна.
+        from core import telegram_channels as tch
+        arg = args[0].strip() if args else ""
+        if arg:
+            res = await tch.add_channel(arg)
+            if res.get("ok"):
+                ch = res["channel"]
+                await send_message(chat_id, f"✅ Канал подключён: "
+                                            f"<b>{ch['title'] or ch['chat_id']}</b> "
+                                            f"{ch['username']}")
+            else:
+                await send_message(chat_id, f"⚠️ {res.get('error')}\n{res.get('hint') or ''}")
+            return
+
+        items = await tch.list_channels()
+        if not items:
+            await send_message(chat_id, "📭 Каналы не подключены.\n"
+                                        "Добавьте бота администратором в канал и пришлите: "
+                                        "/channels @имя_канала")
+            return
+        lines = ["📢 <b>Каналы для публикации</b>", ""]
+        for c in items:
+            star = "⭐️ " if c.get("default") else "• "
+            lines.append(f"{star}{c.get('title') or c['chat_id']} "
+                         f"{c.get('username') or c['chat_id']}")
+        lines.append("\nДобавить: /channels &lt;@имя&gt;")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+        return
+
+    if cmd == "approve":
+        # Подтверждение поста площадки, которая работает «с подтверждением».
+        from core.publish_queue import pending as pending_pubs, approve as approve_pub
+        arg = args[0].strip() if args else ""
+        items = await pending_pubs()
+        if not arg:
+            if not items:
+                await send_message(chat_id, "✅ Нечего подтверждать.")
+                return
+            lines = ["⏸ <b>Ждут подтверждения</b>", ""]
+            for i in items[:10]:
+                lines.append(f"<code>{i['id']}</code> {i['platform']}\n   {i['text'][:100]}")
+            lines.append("\nОпубликовать: /approve &lt;id&gt;")
+            await send_message(chat_id, "\n".join(lines)[:4000])
+            return
+
+        # Из списка удобно копировать начало id — принимаем и его.
+        match = [i["id"] for i in items if i["id"] == arg or i["id"].startswith(arg)]
+        if not match:
+            await send_message(chat_id, f"⚠️ Публикация {arg} не ждёт подтверждения.")
+            return
+        res = await approve_pub(match[0])
+        mark = "✅" if res.get("ok") else "⚠️"
+        await send_message(chat_id, f"{mark} {res.get('error') or 'Опубликовано.'}")
+        return
+
     if cmd == "queue":
         # Очередь публикаций: что ждёт своего часа, что упало и когда повтор.
         from core.publish_queue import queue as pub_queue, stats as pub_stats, retry_now
@@ -329,7 +387,8 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, "📭 Очередь публикаций пуста.")
             return
         emoji = {"published": "✅", "scheduled": "🕓", "retrying": "🔁",
-                 "failed": "❌", "blocked": "🚫", "cancelled": "⛔"}
+                 "failed": "❌", "blocked": "🚫", "cancelled": "⛔",
+                 "pending_approval": "⏸"}
         lines = ["📤 <b>Очередь публикаций</b>",
                  " · ".join(f"{emoji.get(k, '•')} {k}: {v}" for k, v in st.items()), ""]
         for i in items:

@@ -50,6 +50,32 @@ NEXUS_PUBLISH_MODE=api      только API, без браузерного фо
 NEXUS_PUBLISH_MODE=browser  всё через браузер (Telegram остаётся своим ботом)
 ```
 
+## Подключение Telegram-канала (мастер)
+Раньше канал задавался переменной `TELEGRAM_POST_CHAT_ID`: ошибку в правах бота
+пользователь узнавал только по потерянному посту. Теперь подключение по шагам —
+`core/telegram_channels.py`, страница «Telegram-канал» в вебе, `/api/telegram/*`:
+
+```
+1. бот          POST /api/telegram/bot/connect      токен принят Telegram → сохраняем
+2. канал        GET  /api/telegram/channels/discover  каналы из свежих апдейтов бота
+3. права        POST /api/telegram/channels/check     getChat + getChatMember(бот)
+4. публикация   ←    там же: can_publish + причина отказа и что включить
+5. тест         POST /api/telegram/channels/test      сообщение уходит и удаляется
+   подключение  POST /api/telegram/channels/add       только если can_publish
+```
+
+Канал по умолчанию (⭐) — то, куда публикует `TelegramConnector`. Публикация:
+`POST /api/telegram/publish` (текст / `image_url` / `video_url`, `when` — в очередь),
+`POST /api/telegram/message` — служебное сообщение,
+`GET /api/telegram/publication/{id}` — статус.
+
+## Режимы автопубликации
+`core/autopublish.py` — общий выключатель и режим каждой площадки:
+`manual` (только вручную), `confirm` (готовим и ждём человека), `auto` (по расписанию).
+Выключенная автопубликация сильнее площадки: `auto` трактуется как `confirm`.
+Ожидающие лежат в очереди со статусом `pending_approval`
+(`GET /api/publish/pending`, `POST /api/publish/{id}/approve`, в боте — `/approve`).
+
 ## OAuth: подключение Instagram
 Раньше токен добывался руками в Graph API Explorer. Теперь обычный OAuth:
 
