@@ -29,6 +29,7 @@ from api.routes_publish import router as publish_router
 from api.routes_telegram import router as telegram_router
 from api.routes_agent_profile import router as agent_profile_router
 from api.routes_agents import router as agents_router
+from api.routes_production import router as production_router
 from api.routes_health import router as system_router
 from api.routes_social import router as social_router, public_router as social_public_router
 from api.routes_analytics import router as performance_router
@@ -149,6 +150,7 @@ app.include_router(publish_router,    dependencies=[Depends(require_auth)])
 app.include_router(telegram_router,   dependencies=[Depends(require_auth)])
 app.include_router(agent_profile_router, dependencies=[Depends(require_auth)])
 app.include_router(agents_router,     dependencies=[Depends(require_auth)])
+app.include_router(production_router, dependencies=[Depends(require_auth)])
 app.include_router(system_router,     dependencies=[Depends(require_auth)])
 app.include_router(social_router,     dependencies=[Depends(require_auth)])
 app.include_router(performance_router, dependencies=[Depends(require_auth)])

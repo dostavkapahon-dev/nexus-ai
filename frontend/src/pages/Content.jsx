@@ -4,6 +4,7 @@ import { Calendar } from 'lucide-react'
 import Queue from './Queue'
 import Publishing from './Publishing'
 import Tasks from './Tasks'
+import Production from './Production'
 
 // Три очереди — контент-план, публикации и фоновые задачи — для пользователя
 // одна сущность «что в работе». Раньше это были три пункта меню, между которыми
@@ -12,6 +13,7 @@ const TABS = [
   { id: 'plan', label: 'Контент-план', El: Queue },
   { id: 'publications', label: 'Публикации', El: Publishing },
   { id: 'tasks', label: 'Задачи', El: Tasks },
+  { id: 'production', label: 'Производство', El: Production },
 ]
 
 export default function Content() {

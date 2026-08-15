@@ -86,6 +86,17 @@ export const agent = {
   deleteSkill: (id) => api.delete(`/agent/skills/${id}`),
 }
 
+export const production = {
+  jobs: (status = '', limit = 50) => api.get('/production/jobs', { params: { status, limit } }),
+  next: () => api.get('/production/next'),
+  create: (brief, kind = 'reel') => api.post('/production/jobs', { brief, kind }),
+  result: (id, body) => api.post(`/production/${id}/result`, body),
+  fail: (id, error) => api.post(`/production/${id}/fail`, { error }),
+  retry: (id) => api.post(`/production/${id}/retry`),
+  cancel: (id) => api.post(`/production/${id}/cancel`),
+  setProducer: (producer) => api.post('/production/producer', { producer }),
+}
+
 export const agents = {
   list: () => api.get('/agents'),
   run: (key, task, context = '') => api.post(`/agents/${key}/run`, { task, context }),

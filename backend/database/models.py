@@ -211,6 +211,32 @@ class Task(Base):
     duration_sec = Column(Float, default=0.0)
 
 
+class ProductionJob(Base):
+    """Задание на производство медиа — ТЗ, которое выполняет внешний исполнитель.
+
+    Зачем. Видео умеет делать не только сервер: рабочий доступ к Higgsfield есть
+    у Claude Code, и логичнее отдать ему готовое ТЗ (раскадровка, промпты кадров,
+    промпт движения, сценарий озвучки), а обратно принять ссылки на файлы.
+    Между «отдали» и «приняли» проходит время и перезапуск инстанса, поэтому
+    задание живёт в БД, а не в памяти процесса.
+
+    status: queued → taken → done | failed | cancelled
+    """
+    __tablename__ = 'production_jobs'
+    id = Column(String, primary_key=True, default=gen_id)
+    kind = Column(String, default='reel')          # reel | photo | voice
+    status = Column(String, default='queued', index=True)
+    brief = Column(JSON, default=dict)             # ТЗ: раскадровка, промпты, сценарий
+    assets = Column(JSON, default=dict)            # что вернул исполнитель: ссылки
+    note = Column(Text, default='')                # комментарий исполнителя
+    error = Column(Text)
+    plan_id = Column(String, default='')
+    task_id = Column(String, index=True, default='')
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    taken_at = Column(DateTime)
+    done_at = Column(DateTime)
+
+
 class Research(Base):
     """История исследований: тренды, разбор чужих роликов, анализ конкурентов.
 
