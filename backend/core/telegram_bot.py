@@ -6,6 +6,8 @@ Commands: /status /analyze /create /publish /plan /trends /pause /resume /report
 import os
 import json
 import asyncio
+import contextvars
+
 import httpx
 from sqlalchemy import select
 from database.db import AsyncSessionLocal
@@ -14,21 +16,60 @@ from database.models import Niche, ContentPlan, UserProfile
 BOT_API = "https://api.telegram.org/bot{token}"
 _offset = 0
 
+# Внутри обработки команды ответы бота автоматически уходят в общую ленту —
+# ту же, что видит сайт. Иначе на сайте видно «пользователь написал /publish»,
+# но не видно, чем это кончилось.
+_in_command = contextvars.ContextVar("tg_in_command", default=False)
+
 def _url(method: str) -> str:
     return f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN', '')}/{method}"
 
-async def send_message(chat_id: str, text: str, parse_mode: str = "HTML", reply_markup: dict = None):
+async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
+                       reply_markup: dict = None, feed: bool = False):
+    """Отправка сообщения ботом.
+
+    Длинный текст режется по лимиту Telegram: раньше сообщение свыше 4096
+    символов просто не доходило, а ошибка глушилась — выглядело как молчание.
+    """
+    from publishers.telegram_pub import TEXT_LIMIT, fit
+
+    body, cut = fit(text, TEXT_LIMIT)
     try:
         payload = {
-            "chat_id": chat_id, "text": text,
+            "chat_id": chat_id, "text": body,
             "parse_mode": parse_mode, "disable_web_page_preview": True
         }
         if reply_markup:
             payload["reply_markup"] = reply_markup
         async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(_url("sendMessage"), json=payload)
-    except Exception:
-        pass
+            r = await c.post(_url("sendMessage"), json=payload)
+            data = r.json()
+        if not data.get("ok"):
+            desc = str(data.get("description") or "")
+            # Разметка ломается об один символ «<» в тексте модели. Раньше
+            # сообщение в этом случае исчезало совсем; теперь отправляем как
+            # обычный текст — лучше без форматирования, чем никак.
+            if "parse" in desc.lower() and parse_mode:
+                async with httpx.AsyncClient(timeout=10) as c:
+                    await c.post(_url("sendMessage"),
+                                 json={**payload, "parse_mode": None})
+            else:
+                print(f"[NEXUS] Telegram sendMessage: {desc[:150]}", flush=True)
+    except Exception as e:
+        print(f"[NEXUS] Telegram sendMessage: {type(e).__name__}: {str(e)[:120]}",
+              flush=True)
+
+    # Ответы бота должны быть видны на сайте: раньше в общую ленту попадала
+    # только команда пользователя, а результат — нет.
+    if feed or _in_command.get():
+        try:
+            from core.command_center import log_event
+            await log_event("telegram", "agent", text)
+        except Exception:
+            pass
+    if cut:
+        return {"truncated": True}
+    return {}
 
 
 def _main_menu_kb() -> dict:
@@ -102,6 +143,7 @@ async def _handle_command(chat_id: str, text: str):
         await log_event("telegram", "user", text)
     except Exception:
         pass
+    token = _in_command.set(True)
     try:
         await _dispatch_command(chat_id, text)
     except Exception as e:
@@ -144,6 +186,8 @@ async def _handle_command(chat_id: str, text: str):
             await send_message(chat_id, hint)
         except Exception:
             pass
+    finally:
+        _in_command.reset(token)
 
 
 def _gemini_model_line() -> str:
@@ -822,17 +866,22 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, report)
 
     elif cmd == "analyze":
-        niche_name = " ".join(args) if args else None
-        if not niche_name:
-            await send_message(chat_id, "❗ Укажи нишу: /analyze [ниша] [город]")
+        query = " ".join(args).strip()
+        if not query:
+            await send_message(chat_id, "❗ Укажи нишу: /analyze кофейня")
             return
-        city = args[1] if len(args) > 1 else ""
-        await send_message(chat_id, f"🔍 Запускаю анализ ниши: <b>{niche_name}</b> {city}...")
+        await send_message(chat_id, f"🔍 Запускаю анализ: <b>{query}</b>…")
         async with AsyncSessionLocal() as db:
+            # Ищем по всей строке, а если не нашли — по первому слову: раньше
+            # «/analyze кофейня Алматы» искалось целиком вместе с городом и
+            # почти всегда давало «ниша не найдена».
             result = await db.execute(
-                select(Niche).where(Niche.name.ilike(f"%{niche_name}%")).limit(1)
-            )
+                select(Niche).where(Niche.name.ilike(f"%{query}%")).limit(1))
             niche = result.scalar_one_or_none()
+            if not niche and len(args) > 1:
+                result = await db.execute(
+                    select(Niche).where(Niche.name.ilike(f"%{args[0]}%")).limit(1))
+                niche = result.scalar_one_or_none()
             if niche:
                 from core.task_manager import spawn
                 await spawn("pipeline", f"Полный цикл по нише «{niche.name}»",
@@ -840,7 +889,11 @@ async def _dispatch_command(chat_id: str, text: str):
                             source="telegram", ref_id=niche.id)
                 await send_message(chat_id, f"✅ Анализ запущен для ниши <b>{niche.name}</b>")
             else:
-                await send_message(chat_id, f"❌ Ниша '{niche_name}' не найдена. Создай её в дашборде.")
+                r_all = await db.execute(select(Niche).where(Niche.status == "active").limit(10))
+                names = [n.name for n in r_all.scalars()]
+                have = ("\n\nЕсть такие: " + ", ".join(names)) if names else \
+                    "\n\nНи одной ниши пока не заведено — создайте её в дашборде."
+                await send_message(chat_id, f"❌ Ниша «{query}» не найдена.{have}")
 
     elif cmd == "create":
         await send_message(chat_id, "✍️ Создаю контент для всех активных ниш...")
@@ -878,7 +931,7 @@ async def _dispatch_command(chat_id: str, text: str):
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
         await send_message(chat_id, f"✅ Опубликовано: {published} постов")
 
-    elif cmd == "trends":
+    elif cmd in ("trend", "trends"):
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
         from core.task_manager import spawn
@@ -940,13 +993,6 @@ async def _dispatch_command(chat_id: str, text: str):
         else:
             msg = "⚙️ Профиль не настроен. Зайди в дашборд."
         await send_message(chat_id, msg)
-
-    elif cmd in ("trend", "trends"):
-        await send_message(chat_id, "📈 Анализирую тренды...")
-        from core.scheduler import run_daily_trends
-        from core.task_manager import spawn
-        await spawn("trends", "Анализ трендов", lambda: run_daily_trends(), source="telegram")
-        await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
 
     elif cmd == "prompt":
         from core.brand import set_brand_voice, get_brand_voice

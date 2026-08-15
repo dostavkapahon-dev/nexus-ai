@@ -32,6 +32,27 @@ def _chat_id() -> str:
     return os.getenv("TELEGRAM_CHAT_ID", "")
 
 
+async def notify_owner(text: str) -> bool:
+    """Сообщение владельцу системы. Единственная точка «сказать человеку».
+
+    Владелец берётся оттуда же, откуда его знает бот: из настроек либо из
+    закрепления первым `/start` — иначе уведомления молча уходили в никуда,
+    пока не задан TELEGRAM_CHAT_ID.
+    """
+    try:
+        if not os.getenv("TELEGRAM_BOT_TOKEN"):
+            return False
+        from core.telegram_owner import owner_id
+        chat_id = _chat_id() or await owner_id()
+        if not chat_id:
+            return False
+        from core.telegram_bot import send_message
+        await send_message(chat_id, text)
+        return True
+    except Exception:
+        return False
+
+
 def should_report(task: dict) -> bool:
     """Стоит ли писать в Telegram про эту задачу."""
     if task.get("source") in _SELF_REPORTING_SOURCES:

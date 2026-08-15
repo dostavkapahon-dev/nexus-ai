@@ -136,38 +136,93 @@ def safe(text: str) -> str:
 
 
 async def send_message(chat_id: str, text: str, *, token: str = "",
-                       silent: bool = False, escape: bool = False) -> dict:
+                       silent: bool = False, escape: bool = False,
+                       buttons: list[dict] | None = None) -> dict:
     body, cut = fit(safe(text) if escape else text, TEXT_LIMIT)
-    res = await call("sendMessage", {
-        "chat_id": chat_id, "text": body,
-        "parse_mode": "HTML", "disable_notification": silent}, token=token)
+    payload = {"chat_id": chat_id, "text": body,
+               "parse_mode": "HTML", "disable_notification": silent}
+    kb = link_buttons(buttons)
+    if kb:
+        payload["reply_markup"] = kb
+    res = await call("sendMessage", payload, token=token)
     return _msg(res, chat_id, truncated=cut)
 
 
 async def send_photo(chat_id: str, photo: str, caption: str = "", *, token: str = "",
-                     silent: bool = False) -> dict:
+                     silent: bool = False, buttons: list[dict] | None = None) -> dict:
     body, cut = fit(caption, CAPTION_LIMIT)
-    res = await call("sendPhoto", {
-        "chat_id": chat_id, "photo": photo, "caption": body,
-        "parse_mode": "HTML", "disable_notification": silent}, token=token)
+    payload = {"chat_id": chat_id, "photo": photo, "caption": body,
+               "parse_mode": "HTML", "disable_notification": silent}
+    kb = link_buttons(buttons)
+    if kb:
+        payload["reply_markup"] = kb
+    res = await call("sendPhoto", payload, token=token)
     return _msg(res, chat_id, truncated=cut)
 
 
 async def send_video(chat_id: str, video: str, caption: str = "", *, token: str = "",
-                     silent: bool = False) -> dict:
+                     silent: bool = False, buttons: list[dict] | None = None) -> dict:
     # Загрузка видео по ссылке у Telegram дольше картинки — таймаут отдельный,
     # иначе нормальный ролик обрывается на середине и выглядит как отказ канала.
     body, cut = fit(caption, CAPTION_LIMIT)
-    res = await call("sendVideo", {
-        "chat_id": chat_id, "video": video, "caption": body,
-        "parse_mode": "HTML", "supports_streaming": True,
-        "disable_notification": silent}, token=token, timeout=120)
+    payload = {"chat_id": chat_id, "video": video, "caption": body,
+               "parse_mode": "HTML", "supports_streaming": True,
+               "disable_notification": silent}
+    kb = link_buttons(buttons)
+    if kb:
+        payload["reply_markup"] = kb
+    res = await call("sendVideo", payload, token=token, timeout=120)
     if not res.get("ok") and "file" in str(res.get("error", "")).lower():
         # Бот загружает по ссылке не больше 50 МБ — самая частая причина отказа,
         # и без пояснения она выглядит как «Telegram сломался».
         res["hint"] = ("Telegram принимает по ссылке видео до 50 МБ — "
                        "сожмите ролик или дайте прямую ссылку меньшего размера")
     return _msg(res, chat_id, truncated=cut)
+
+
+async def send_album(chat_id: str, media: list[str], caption: str = "", *,
+                     token: str = "", silent: bool = False,
+                     kind: str = "photo") -> dict:
+    """Альбом — несколько файлов одним сообщением.
+
+    Без него набор картинок уходил отдельными постами и в канале выглядел как
+    спам. Подпись Telegram берёт только у первого элемента.
+    """
+    media = [m for m in (media or []) if m][:10]     # больше десяти Telegram не примет
+    if not media:
+        return {"ok": False, "error": "нечего отправлять: список медиа пуст"}
+    if len(media) == 1:
+        sender = send_video if kind == "video" else send_photo
+        return await sender(chat_id, media[0], caption, token=token, silent=silent)
+
+    body, cut = fit(caption, CAPTION_LIMIT)
+    items = []
+    for i, url in enumerate(media):
+        item = {"type": kind, "media": url}
+        if i == 0 and body:
+            item.update({"caption": body, "parse_mode": "HTML"})
+        items.append(item)
+
+    res = await call("sendMediaGroup", {"chat_id": chat_id, "media": items,
+                                        "disable_notification": silent},
+                     token=token, timeout=120)
+    if not res.get("ok"):
+        return res
+    # Ответ — список сообщений; ссылку и id берём у первого.
+    first = (res.get("result") or [{}])[0]
+    return _msg({"ok": True, "result": first}, chat_id, truncated=cut) | {
+        "items": len(items)}
+
+
+def link_buttons(buttons: list[dict]) -> dict | None:
+    """Кнопки-ссылки под постом: [{"text": "Заказать", "url": "https://…"}].
+
+    Только ссылки: кнопки с обратным вызовом под постом в канале обрабатывать
+    некому, и нажатие выглядело бы как зависание.
+    """
+    rows = [[{"text": str(b["text"])[:64], "url": b["url"]}]
+            for b in (buttons or []) if b.get("text") and b.get("url")]
+    return {"inline_keyboard": rows} if rows else None
 
 
 async def delete_message(chat_id: str, message_id: int, *, token: str = "") -> dict:

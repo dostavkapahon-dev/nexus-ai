@@ -122,8 +122,10 @@ class PublishBody(BaseModel):
     text: str = ""
     image_url: str | None = None
     video_url: str | None = None
-    chat_id: str | None = None       # пусто — канал по умолчанию
-    when: str | None = None          # ISO-время UTC: пусто — сразу
+    images: list[str] | None = None          # несколько картинок — уйдут альбомом
+    buttons: list[dict] | None = None        # [{"text": "...", "url": "https://..."}]
+    chat_id: str | None = None               # пусто — канал по умолчанию
+    when: str | None = None                  # ISO-время UTC: пусто — сразу
     silent: bool = False
 
 
@@ -159,12 +161,20 @@ async def publish(body: PublishBody):
         return {"ok": True, "publication_id": pub_id, "status": "scheduled",
                 "scheduled_at": when.isoformat()}
 
-    if body.video_url:
-        res = await tg.send_video(chat, body.video_url, body.text or "", silent=body.silent)
-    elif body.image_url:
-        res = await tg.send_photo(chat, body.image_url, body.text or "", silent=body.silent)
+    images = [u for u in (body.images or []) if u]
+    if len(images) > 1:
+        # Набор картинок одним сообщением: раньше их пришлось бы слать по одной,
+        # и в канале это выглядело как несколько отдельных постов.
+        res = await tg.send_album(chat, images, body.text or "", silent=body.silent)
+    elif body.video_url:
+        res = await tg.send_video(chat, body.video_url, body.text or "",
+                                  silent=body.silent, buttons=body.buttons)
+    elif body.image_url or images:
+        res = await tg.send_photo(chat, body.image_url or images[0], body.text or "",
+                                  silent=body.silent, buttons=body.buttons)
     else:
-        res = await tg.send_message(chat, body.text or "", silent=body.silent)
+        res = await tg.send_message(chat, body.text or "", silent=body.silent,
+                                    buttons=body.buttons)
 
     # Публикация видна и на сайте, и в ленте бота — обе «головы» смотрят в одну
     # ленту. Провал записывается тоже: раньше неудачная публикация из веба

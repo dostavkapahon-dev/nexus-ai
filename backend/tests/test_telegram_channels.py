@@ -333,3 +333,50 @@ def test_escaping_protects_html_mode():
     assert tg.safe("цена < 100 & выгодно") == "цена &lt; 100 &amp; выгодно"
     short, cut = tg.fit("текст", 4096)
     assert short == "текст" and cut is False
+
+
+# ─────────────── альбомы, кнопки и лента ───────────────
+
+@pytest.mark.asyncio
+async def test_album_sends_one_message_with_caption_on_first(client, monkeypatch):
+    """Набор картинок должен уходить одним постом, а не пачкой отдельных."""
+    sent = {}
+    monkeypatch.setattr(tg, "call", lambda method, payload, **kw: _record(method, payload, sent))
+
+    res = await tg.send_album("-1001", ["https://a/1.jpg", "https://a/2.jpg"], "подпись")
+    assert res["ok"] and res["items"] == 2
+    assert sent["method"] == "sendMediaGroup"
+    media = sent["payload"]["media"]
+    assert media[0]["caption"] == "подпись" and "caption" not in media[1]
+
+
+async def _record(method, payload, box):
+    box["method"], box["payload"] = method, payload
+    return {"ok": True, "result": [{"message_id": 11, "chat": {"id": -1001}}]}
+
+
+@pytest.mark.asyncio
+async def test_album_of_one_falls_back_to_photo(client, monkeypatch):
+    calls = []
+
+    async def fake_photo(chat_id, photo, caption="", **kw):
+        calls.append(photo)
+        return {"ok": True, "message_id": 1}
+
+    monkeypatch.setattr(tg, "send_photo", fake_photo)
+    res = await tg.send_album("-1001", ["https://a/1.jpg"], "подпись")
+    assert res["ok"] and calls == ["https://a/1.jpg"]
+
+
+@pytest.mark.asyncio
+async def test_album_refuses_empty_list(client):
+    res = await tg.send_album("-1001", [])
+    assert res["ok"] is False
+
+
+def test_link_buttons_keeps_only_links():
+    kb = tg.link_buttons([{"text": "Заказать", "url": "https://shop"},
+                          {"text": "без ссылки"},
+                          {"url": "https://x"}])
+    assert kb == {"inline_keyboard": [[{"text": "Заказать", "url": "https://shop"}]]}
+    assert tg.link_buttons([]) is None
