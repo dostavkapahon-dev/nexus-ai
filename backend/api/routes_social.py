@@ -217,6 +217,32 @@ async def webhook_config():
     }
 
 
+# Одноразовые ключи запросов OAuth. Без них публичный callback принимал любой
+# код: злоумышленник мог подсунуть владельцу ссылку и подменить подключённый
+# аккаунт на свой.
+_OAUTH_STATES: dict[str, float] = {}
+_STATE_TTL = 900          # 15 минут — дольше подключение не длится
+
+
+def _issue_state() -> str:
+    import secrets as pysecrets
+    import time
+    now = time.time()
+    for key, born in list(_OAUTH_STATES.items()):
+        if now - born > _STATE_TTL:
+            _OAUTH_STATES.pop(key, None)
+    state = pysecrets.token_urlsafe(24)
+    _OAUTH_STATES[state] = now
+    return state
+
+
+def _take_state(state: str) -> bool:
+    """Ключ одноразовый: второй раз тот же код принять нельзя."""
+    import time
+    born = _OAUTH_STATES.pop((state or "").strip(), None)
+    return bool(born) and (time.time() - born) <= _STATE_TTL
+
+
 @router.get("/oauth/start")
 async def oauth_start():
     """Ссылка на подключение Instagram через Facebook.
@@ -232,14 +258,18 @@ async def oauth_start():
     if not redirect:
         return {"ok": False,
                 "error": "не определён публичный адрес сервиса: задайте NEXUS_PUBLIC_URL"}
-    url = (f"https://www.facebook.com/v19.0/dialog/oauth?client_id={app_id}"
-           f"&redirect_uri={redirect}&scope={META_SCOPES}&response_type=code")
+    from urllib.parse import urlencode
+    state = _issue_state()
+    url = ("https://www.facebook.com/v19.0/dialog/oauth?" + urlencode({
+        "client_id": app_id, "redirect_uri": redirect, "scope": META_SCOPES,
+        "response_type": "code", "state": state}))
     return {"ok": True, "url": url, "redirect_uri": redirect,
             "note": "Этот же redirect_uri должен быть указан в настройках приложения Meta."}
 
 
 @public_router.get("/oauth/callback", response_class=HTMLResponse)
-async def oauth_callback(code: str = "", error: str = "", error_description: str = ""):
+async def oauth_callback(code: str = "", error: str = "", error_description: str = "",
+                         state: str = ""):
     """Принимает код от Meta, меняет его на long-lived токен и сохраняет.
 
     Открывается в браузере пользователя, поэтому отвечаем страницей, а не JSON.
@@ -248,6 +278,11 @@ async def oauth_callback(code: str = "", error: str = "", error_description: str
         return _page("Подключение отменено", error_description or error, ok=False)
     if not code:
         return _page("Нет кода авторизации", "Meta не передала параметр code.", ok=False)
+    if not _take_state(state):
+        # Подключение начинают в дашборде — только там выдаётся ключ запроса.
+        return _page("Запрос не распознан",
+                     "Ссылка устарела или открыта не из дашборда. "
+                     "Начните подключение заново на странице «Подключения».", ok=False)
 
     app_id = os.getenv("FACEBOOK_APP_ID", "").strip()
     app_secret = os.getenv("FACEBOOK_APP_SECRET", "").strip()
@@ -272,12 +307,22 @@ async def oauth_callback(code: str = "", error: str = "", error_description: str
                 "grant_type": "fb_exchange_token", "client_id": app_id,
                 "client_secret": app_secret, "fb_exchange_token": short})
             d2 = r2.json()
-            long_token = d2.get("access_token", short)
+            if d2.get("error") or not d2.get("access_token"):
+                # Короткоживущий токен живёт час-два. Сохранить его и написать
+                # «60 дней» — значит гарантированно сломать публикацию завтра.
+                return _page("Не удалось получить долгий токен",
+                             str((d2.get("error") or {}).get("message")
+                                 or "Meta не вернула long-lived токен")[:300], ok=False)
+            long_token = d2["access_token"]
 
             # 3. находим Instagram Business аккаунт у страниц пользователя
             r3 = await c.get(f"{GRAPH}/me/accounts", params={
                 "fields": "name,instagram_business_account", "access_token": long_token})
-            pages = (r3.json() or {}).get("data") or []
+            d3 = r3.json() or {}
+            if d3.get("error"):
+                return _page("Не удалось прочитать страницы",
+                             str(d3["error"].get("message"))[:300], ok=False)
+            pages = d3.get("data") or []
             ig_id = ""
             page_name = ""
             for p in pages:
@@ -290,6 +335,9 @@ async def oauth_callback(code: str = "", error: str = "", error_description: str
 
     from connectors.instagram import _save_key
     await _save_key("instagram_access_token", long_token)
+    # Тип токена определяет и адрес API, и способ продления: без него он потом
+    # угадывается по префиксу, и ошибка вскрывается на первой публикации.
+    await _save_key("instagram_token_type", "facebook")
     if ig_id:
         await _save_key("instagram_account_id", ig_id)
 
@@ -303,6 +351,11 @@ async def oauth_callback(code: str = "", error: str = "", error_description: str
 
 
 def _page(title: str, message: str, ok: bool) -> str:
+    # Роут публичный, а в сообщение попадает текст из query-параметров и от Meta:
+    # без экранирования это отражённый XSS.
+    import html as _html
+    title = _html.escape(str(title or ""))
+    message = _html.escape(str(message or ""))
     color = "#22c55e" if ok else "#ef4444"
     icon = "✅" if ok else "⚠️"
     return f"""<!doctype html><html lang="ru"><head><meta charset="utf-8">

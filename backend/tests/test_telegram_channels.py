@@ -97,14 +97,32 @@ async def test_test_publish_reports_refusal(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_discover_lists_channels_from_updates(client, monkeypatch):
-    monkeypatch.setattr(tg, "call", _fake_api({"getUpdates": [
-        {"channel_post": {"chat": {"id": -1001, "title": "Канал", "username": "ch",
-                                   "type": "channel"}}},
-        {"message": {"chat": {"id": 555, "type": "private"}}},          # личку не берём
-    ]}))
+async def test_discover_lists_channels_seen_by_bot(client, monkeypatch):
+    """Каналы приходят из цикла бота, а не отдельным запросом: своё соединение
+    мастер открыть не может — Telegram отдаёт токену только одно."""
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    tc._seen_chats.clear()
+    tc.remember_chat({"id": -1001, "title": "Канал", "username": "ch", "type": "channel"})
+
     res = await tc.discover()
     assert [i["chat_id"] for i in res["items"]] == ["-1001"]
+    assert res["items"][0]["username"] == "@ch"
+
+
+@pytest.mark.asyncio
+async def test_discover_without_seen_channels_explains_what_to_do(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    tc._seen_chats.clear()
+    res = await tc.discover()
+    assert res["ok"] and res["items"] == [] and "администратором" in res["hint"]
+
+
+@pytest.mark.asyncio
+async def test_discover_without_bot_says_so(client, monkeypatch):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    tc._seen_chats.clear()
+    res = await tc.discover()
+    assert res["ok"] is False and "не подключён" in res["error"]
 
 
 # ─────────────────────────── автопубликация ───────────────────────────
@@ -222,3 +240,96 @@ async def test_scheduled_telegram_publish_goes_to_shared_queue(auth_client, monk
     assert st.json()["status"] == pq.SCHEDULED
 
     await tc.remove_channel("-1001")
+
+
+# ─────────────── честные отказы и лимиты Telegram ───────────────
+
+@pytest.mark.asyncio
+async def test_no_rights_is_permanent_refusal(client, monkeypatch):
+    """Бота выгнали из канала — повторять пять раз бессмысленно."""
+    async def deny(method, payload, *, token="", timeout=30, retries=2):
+        return await tg.call.__wrapped__(method, payload) if False else None
+
+    def fake_post(*a, **kw):
+        raise AssertionError("до сети доходить не должно")
+
+    class _R:
+        @staticmethod
+        def json():
+            return {"ok": False, "error_code": 403,
+                    "description": "Forbidden: bot is not a member of the channel chat"}
+
+    class _C:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None): return _R()
+
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    monkeypatch.setattr(tg.httpx, "AsyncClient", lambda *a, **kw: _C())
+
+    res = await tg.send_message("-1001", "привет")
+    assert res["ok"] is False and res["blocked_by_api"] is True
+    assert "удалили из канала" in res["error"]
+
+    # Очередь обязана признать это окончательным отказом, а не сетевым сбоем.
+    from core.publish_queue import _is_permanent
+    assert _is_permanent(res) is True
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_waits_and_retries(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    answers = [
+        {"ok": False, "error_code": 429, "description": "Too Many Requests",
+         "parameters": {"retry_after": 1}},
+        {"ok": True, "result": {"message_id": 5, "chat": {"id": -1001}}},
+    ]
+    slept = []
+
+    class _R:
+        def __init__(self, payload): self._p = payload
+        def json(self): return self._p
+
+    class _C:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None): return _R(answers.pop(0))
+
+    async def fake_sleep(sec): slept.append(sec)
+
+    monkeypatch.setattr(tg.httpx, "AsyncClient", lambda *a, **kw: _C())
+    monkeypatch.setattr(tg.asyncio, "sleep", fake_sleep)
+
+    res = await tg.send_message("-1001", "привет")
+    assert res["ok"] and res["message_id"] == 5
+    assert slept == [1], "ждать надо ровно столько, сколько просит Telegram"
+
+
+@pytest.mark.asyncio
+async def test_long_text_is_cut_but_reported(client, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    sent = {}
+
+    class _R:
+        @staticmethod
+        def json(): return {"ok": True, "result": {"message_id": 7, "chat": {"id": -1001}}}
+
+    class _C:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, json=None):
+            sent.update(json)
+            return _R()
+
+    monkeypatch.setattr(tg.httpx, "AsyncClient", lambda *a, **kw: _C())
+
+    res = await tg.send_photo("-1001", "https://img/1.png", "х" * 2000)
+    assert res["ok"] and res["truncated"] is True and "сокращённым" in res["note"]
+    assert len(sent["caption"]) <= tg.CAPTION_LIMIT
+
+
+def test_escaping_protects_html_mode():
+    """Символ < в тексте модели ломал отправку целиком."""
+    assert tg.safe("цена < 100 & выгодно") == "цена &lt; 100 &amp; выгодно"
+    short, cut = tg.fit("текст", 4096)
+    assert short == "текст" and cut is False

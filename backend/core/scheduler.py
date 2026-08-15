@@ -267,6 +267,28 @@ async def run_competitor_tracking():
     return res
 
 
+# Токен Instagram Login живёт 60 дней; обновляем заметно раньше, чтобы одна
+# пропущенная ночь не стоила подключения.
+TOKEN_MAX_AGE_DAYS = 45
+
+
+async def _token_is_aging(platform: str) -> bool:
+    """Давно ли сохранён ключ площадки. Для токенов без срока это единственный
+    доступный признак того, что пора продлевать."""
+    if platform != "instagram":
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection)
+                             .where(Connection.key_name == "instagram_access_token"))
+        c = r.scalar_one_or_none()
+    if not c or not c.updated_at:
+        return False
+    return (datetime.utcnow() - c.updated_at).days >= TOKEN_MAX_AGE_DAYS
+
+
 async def run_token_maintenance():
     """Следит за токенами площадок: продлевает Instagram и предупреждает о протухании.
 
@@ -283,6 +305,19 @@ async def run_token_maintenance():
         if not st.get("configured"):
             continue
         days = st.get("days_left")
+
+        # Токен Instagram Login срока не сообщает: days_left у него всегда None,
+        # и условие «меньше 14 дней» не срабатывало никогда — токен тихо умирал
+        # через 60 дней. Для таких продлеваем по возрасту самого ключа.
+        if days is None and st.get("ok") and await _token_is_aging(platform):
+            res = await get_connector(platform).refresh_token()
+            if res.get("refreshed"):
+                problems.append(f"🔄 {platform}: токен продлён (плановое обновление)")
+            else:
+                problems.append(f"⚠️ {platform}: продлить токен не удалось — "
+                                f"{str(res.get('error', ''))[:80]}")
+            continue
+
         # Меньше двух недель — пробуем продлить заранее, не дожидаясь падения.
         if days is not None and days < 14:
             res = await get_connector(platform).refresh_token()

@@ -23,7 +23,7 @@
 
 | Сервис | Модуль | Переменные | Назначение |
 |---|---|---|---|
-| Telegram Bot API | `core/telegram_bot.py` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_POST_CHAT_ID` | управление и публикация |
+| Telegram Bot API | `core/telegram_bot.py` | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TELEGRAM_POST_CHAT_ID` | управление и публикация. Владелец — из `TELEGRAM_CHAT_ID`, иначе первый написавший `/start` (`core/telegram_owner.py`); команды принимаются только от него. Токен перечитывается на ходу — бот оживает без перезапуска |
 | Google Drive | `core/google_drive.py` | `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_DRIVE_FOLDER_ID` | кэш анализа ниш |
 | Google Sign-In | `api/routes_auth.py` | `GOOGLE_CLIENT_ID` | вход в дашборд |
 | Bright Data | `core/social_intel.py:139` | `BRIGHTDATA_API_KEY`, `BRIGHTDATA_ZONE` | Web Unlocker для Instagram |

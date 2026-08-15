@@ -113,12 +113,15 @@ async def test_health_uses_me_not_debug_token(client, calls, ig_login):
     calls["routes"] = {"graph.instagram.com": {"id": "17841400999",
                                                "username": "pahon_ai",
                                                "followers_count": 1200,
+                                               "account_type": "BUSINESS",
                                                "media_count": 48}}
     res = await InstagramConnector().health()
 
     assert res["ok"] is True
     assert res["account"] == "pahon_ai"
     assert res["followers"] == 1200
+    # Публиковать через API может только профессиональный аккаунт — и это
+    # теперь вывод из ответа Meta, а не безусловное «да».
     assert res["can_publish"] is True
     assert all("debug_token" not in u for u in calls["seen"])
     assert any("graph.instagram.com" in u for u in calls["seen"])
@@ -169,10 +172,18 @@ async def test_comments_read_goes_to_instagram_api(client, calls, ig_login):
 @pytest.mark.asyncio
 async def test_publish_uses_me_media_endpoints(client, calls, ig_login):
     """Главное: публикация обязана идти на graph.instagram.com/me/media."""
-    calls["routes"] = {"me/media_publish": {"id": "post_1"},
-                       "me/media": {"id": "container_1"}}
-    from publishers.instagram_pub import publish_instagram
-    res = await publish_instagram("текст поста", "https://img/1.png")
+    calls["routes"] = {"content_publishing_limit": {"data": [
+                           {"quota_usage": 0, "config": {"quota_total": 25}}]},
+                       "me/media_publish": {"id": "post_1"},
+                       "me/media": {"id": "container_1"},
+                       "container_1": {"status_code": "FINISHED"}}
+    from publishers import instagram_pub
+    monkeypatch_step = getattr(instagram_pub, "READY_STEP", 5)
+    instagram_pub.READY_STEP = 0
+    try:
+        res = await instagram_pub.publish_instagram("текст поста", "https://img/1.png")
+    finally:
+        instagram_pub.READY_STEP = monkeypatch_step
 
     assert res.get("id") == "post_1" or res.get("post_id") == "post_1"
     assert any("graph.instagram.com/v21.0/me/media" in u for u in calls["seen"])
@@ -183,9 +194,9 @@ async def test_publish_uses_me_media_endpoints(client, calls, ig_login):
 async def test_publish_without_token_says_what_is_missing(client, monkeypatch):
     monkeypatch.delenv("INSTAGRAM_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("INSTAGRAM_ACCOUNT_ID", raising=False)
-    from publishers.instagram_pub import publish_instagram
-    with pytest.raises(ValueError) as e:
-        await publish_instagram("текст")
+    from publishers.instagram_pub import publish_instagram, InstagramError
+    with pytest.raises(InstagramError) as e:
+        await publish_instagram("текст", "https://img/1.png")
     assert "INSTAGRAM_ACCESS_TOKEN" in str(e.value)
 
 

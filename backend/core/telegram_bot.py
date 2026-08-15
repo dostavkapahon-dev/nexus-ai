@@ -996,11 +996,18 @@ async def _dispatch_command(chat_id: str, text: str):
                     lambda: run_factory(topic=topic, dry_run=not publish), source="telegram")
 
     elif cmd.startswith("set_goal"):
-        try:
-            goal = int(args[0])
-            await send_message(chat_id, f"🎯 Цель установлена: {goal:,} подписчиков")
-        except (IndexError, ValueError):
-            await send_message(chat_id, "❗ Укажи число: /set_goal 100000")
+        # Раньше команда рапортовала об установке цели, ничего не сохраняя.
+        goal_text = " ".join(args).strip()
+        if not goal_text:
+            await send_message(chat_id, "❗ Укажи цель: /set_goal 100000 подписчиков")
+        else:
+            from core.agent_profile import get as get_profile, save as save_profile
+            current = (await get_profile()).get("goals") or ""
+            merged = f"{current}\n{goal_text}".strip() if current else goal_text
+            await save_profile({"goals": merged})
+            await send_message(chat_id,
+                               f"🎯 Цель сохранена в профиле агента:\n<b>{goal_text}</b>\n\n"
+                               f"Она уходит в каждый запрос к модели.")
 
     elif cmd.startswith("set_posts"):
         try:
@@ -1164,55 +1171,115 @@ async def _handle_plain_text(chat_id: str, text: str):
 
 
 async def poll_updates():
-    """Long-polling loop for Telegram updates."""
-    global _offset
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not token:
-        return
+    """Цикл получения сообщений (long-polling).
 
+    Три вещи, которых здесь раньше не было и из-за которых бот «молчал»:
+      * токен перечитывается на каждом круге — подключённый через веб бот
+        оживает сразу, а не после перезапуска сервера;
+      * ответ Telegram проверяется: 409 (запущен второй экземпляр) и 401
+        (неверный токен) больше не выглядят как «сообщений нет»;
+      * команды исполняются только от владельца — см. core/telegram_owner.
+    """
+    global _offset
+    from core import telegram_owner as owner_mod
+
+    last_complaint = ""
     while True:
+        token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        if not token:
+            # Токена ещё нет — ждём, пока его подключат в панели.
+            await asyncio.sleep(10)
+            continue
         try:
             async with httpx.AsyncClient(timeout=35) as c:
-                r = await c.get(_url("getUpdates"), params={"offset": _offset, "timeout": 30})
-                updates = r.json().get("result", [])
-                for upd in updates:
-                    _offset = upd["update_id"] + 1
+                r = await c.get(_url("getUpdates"),
+                                params={"offset": _offset, "timeout": 30})
+                data = r.json()
 
-                    # Нажатие инлайн-кнопки пульта
-                    cb = upd.get("callback_query")
-                    if cb:
-                        cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
-                        data = cb.get("data", "")
-                        if not chat_id or cb_chat_id == chat_id:
-                            await _answer_callback(cb["id"])
-                            asyncio.create_task(_handle_command(cb_chat_id, "/" + data))
-                        continue
+            if not data.get("ok"):
+                desc = str(data.get("description") or "Telegram отказал")
+                code = data.get("error_code")
+                # Жалуемся один раз на причину, а не на каждом круге:
+                # иначе лог забивается одинаковыми строками раз в секунду.
+                if desc != last_complaint:
+                    print(f"[NEXUS] Telegram getUpdates: {code} {desc}", flush=True)
+                    last_complaint = desc
+                if code == 401:
+                    # Неверный токен: ждать бессмысленно, пока его не заменят.
+                    await asyncio.sleep(60)
+                elif code == 409:
+                    # Работает второй экземпляр бота (или включён webhook).
+                    await asyncio.sleep(15)
+                else:
+                    await asyncio.sleep(5)
+                continue
+            last_complaint = ""
 
-                    msg = upd.get("message", {})
-                    text = msg.get("text", "")
-                    upd_chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if chat_id and upd_chat_id != chat_id:
-                        continue
+            for upd in data.get("result", []):
+                _offset = upd["update_id"] + 1
 
-                    # Голос / фото / видео / шрифт — обрабатываем отдельно.
-                    if not text and any(k in msg for k in
-                                        ("voice", "audio", "photo", "video", "document")):
-                        asyncio.create_task(_handle_media(upd_chat_id, msg))
-                        continue
-                    if not text:
-                        continue
-                    if text.startswith("/"):
-                        asyncio.create_task(_handle_command(upd_chat_id, text))
+                # Каналы, которые видит бот, запоминаем: мастеру подключения
+                # нельзя дёргать getUpdates самому — он отберёт соединение у
+                # этого цикла и получит 409.
+                try:
+                    from core.telegram_channels import remember_chat
+                    for key in ("channel_post", "edited_channel_post", "my_chat_member",
+                                "message"):
+                        chat = ((upd.get(key) or {}).get("chat")) or {}
+                        if chat.get("type") in ("channel", "supergroup", "group"):
+                            remember_chat(chat)
+                except Exception:
+                    pass
+
+                # Нажатие инлайн-кнопки пульта
+                cb = upd.get("callback_query")
+                if cb:
+                    cb_chat_id = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                    from_id = str((cb.get("from") or {}).get("id", ""))
+                    data_cb = cb.get("data", "")
+                    if await owner_mod.allowed(from_id, cb_chat_id):
+                        await _answer_callback(cb["id"])
+                        asyncio.create_task(_handle_command(cb_chat_id, "/" + data_cb))
                     else:
-                        # Обычный текст — возможно, это правки к контенту на согласовании.
-                        asyncio.create_task(_handle_plain_text(upd_chat_id, text))
-        except Exception:
+                        await _answer_callback(cb["id"], "Доступ только у владельца")
+                    continue
+
+                msg = upd.get("message", {})
+                text = msg.get("text", "")
+                upd_chat_id = str(msg.get("chat", {}).get("id", ""))
+                from_id = str((msg.get("from") or {}).get("id", ""))
+
+                if not await owner_mod.allowed(from_id, upd_chat_id):
+                    # Первый написавший /start становится владельцем — иначе
+                    # бота пришлось бы настраивать вручную, а до тех пор он
+                    # слушался бы кого угодно.
+                    if text.startswith("/start") and await owner_mod.claim(from_id):
+                        await send_message(upd_chat_id, owner_mod.CLAIMED)
+                        asyncio.create_task(_handle_command(upd_chat_id, "/menu"))
+                    elif text.startswith("/"):
+                        await send_message(upd_chat_id, owner_mod.DENIED)
+                    continue
+
+                # Голос / фото / видео / документ — обрабатываем отдельно.
+                if not text and any(k in msg for k in
+                                    ("voice", "audio", "photo", "video", "document")):
+                    asyncio.create_task(_handle_media(upd_chat_id, msg))
+                    continue
+                if not text:
+                    continue
+                if text.startswith("/"):
+                    asyncio.create_task(_handle_command(upd_chat_id, text))
+                else:
+                    # Обычный текст — возможно, это правки к контенту на согласовании.
+                    asyncio.create_task(_handle_plain_text(upd_chat_id, text))
+        except Exception as e:
+            print(f"[NEXUS] Telegram polling: {type(e).__name__}: {str(e)[:150]}", flush=True)
             await asyncio.sleep(5)
         await asyncio.sleep(1)
 
 def start_polling():
-    """Start the Telegram polling loop as background task."""
+    """Запускает цикл бота фоном. Токен на этот момент может быть ещё не задан —
+    цикл дождётся его сам."""
     if os.getenv("TELEGRAM_BOT_TOKEN"):
         asyncio.create_task(setup_bot_commands())
     asyncio.create_task(poll_updates())

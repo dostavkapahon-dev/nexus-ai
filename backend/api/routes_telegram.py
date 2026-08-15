@@ -51,7 +51,14 @@ async def bot_connect(body: SaveBotBody):
         return info
     os.environ["TELEGRAM_BOT_TOKEN"] = token
     await _persist_env("telegram_bot_token", token)
-    return {**info, "saved": True}
+    # Цикл бота перечитывает токен сам, но список команд и снятие вебхука —
+    # разовые действия: без них меню в клиенте пустое, а polling ловит 409.
+    try:
+        from core.telegram_bot import setup_bot_commands
+        await setup_bot_commands()
+    except Exception:
+        pass
+    return {**info, "saved": True, "polling": "запустится в течение 10 секунд"}
 
 
 @router.get("/channels")
@@ -159,24 +166,40 @@ async def publish(body: PublishBody):
     else:
         res = await tg.send_message(chat, body.text or "", silent=body.silent)
 
-    # Публикация видна и на сайте, и в ленте бота — обе «головы» смотрят в одну ленту.
+    # Публикация видна и на сайте, и в ленте бота — обе «головы» смотрят в одну
+    # ленту. Провал записывается тоже: раньше неудачная публикация из веба
+    # нигде не оставляла следа, и на сайте её просто не существовало.
+    await _record(chat, body, res)
     if res.get("ok"):
-        await _record(chat, body, res)
-        await log_event("web", "agent", f"📢 Telegram: опубликовано ({res.get('message_id')})")
+        note = " (текст сокращён)" if res.get("truncated") else ""
+        await log_event("web", "agent",
+                        f"📢 Telegram: опубликовано ({res.get('message_id')}){note}")
+    else:
+        await log_event("web", "agent",
+                        f"⚠️ Telegram: публикация не прошла — {res.get('error')}")
     return res
 
 
 async def _record(chat: str, body: PublishBody, res: dict):
-    """Запись факта публикации — без неё сайт не покажет, что ушло через бота."""
+    """Запись факта публикации — и удачной, и нет: сайт должен показывать обе."""
     from datetime import datetime
     from database.db import AsyncSessionLocal
     from database.models import Publication
+    from core.publish_queue import PUBLISHED, BLOCKED, FAILED
+
+    ok = bool(res.get("ok"))
+    if ok:
+        status = PUBLISHED
+    else:
+        status = BLOCKED if res.get("blocked_by_api") else FAILED
     async with AsyncSessionLocal() as db:
         db.add(Publication(
-            platform="telegram", status="published", published_at=datetime.utcnow(),
+            platform="telegram", status=status,
+            published_at=datetime.utcnow() if ok else None,
             external_id=str(res.get("message_id") or ""), post_url=res.get("post_url") or "",
             text=body.text or "", image_url=body.image_url or "",
             video_url=body.video_url or "", topic=(body.text or "")[:300],
+            last_error=None if ok else str(res.get("error") or "")[:500],
             attempts=1, scheduled_at=datetime.utcnow()))
         await db.commit()
 

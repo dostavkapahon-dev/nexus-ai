@@ -26,6 +26,10 @@ from database.models import Connection
 from publishers import telegram_pub as tg
 
 CHANNELS_KEY = "telegram_channels"
+
+# Каналы, которые бот увидел в своих обновлениях. Заполняется циклом бота
+# (core/telegram_bot.poll_updates), читается мастером подключения.
+_seen_chats: dict[str, dict] = {}
 # Право писать в канал; в супергруппе роль админа устроена иначе — там смотрим
 # на сам факт членства со статусом administrator/creator.
 POST_RIGHT = "can_post_messages"
@@ -86,34 +90,42 @@ async def bot_info(token: str = "") -> dict:
             "saved": bool(tg.bot_token())}
 
 
-async def discover(token: str = "") -> dict:
-    """Шаг 2: выбор канала. Telegram не даёт списка чатов бота, но в свежих
-    апдейтах видны каналы, куда его добавили или где он уже писал. Этого хватает,
-    чтобы пользователь выбрал канал из списка, а не искал chat_id руками.
+def remember_chat(chat: dict):
+    """Запомнить канал, который бот увидел в обновлениях.
+
+    Вызывается из цикла бота. Своего `getUpdates` мастер больше не делает:
+    Telegram допускает только одно активное соединение на токен, и запрос из
+    веба отбирал его у бота — тот получал 409 и замолкал, а мастер видел пустой
+    список и объяснял это тем, что бота «нет в канале».
     """
-    res = await tg.call("getUpdates", {"limit": 100, "timeout": 0,
-                                       "allowed_updates": ["channel_post", "my_chat_member",
-                                                           "message"]}, token=token)
-    if not res.get("ok"):
-        return {"ok": False, "error": res.get("error"), "items": []}
+    chat_id = str(chat.get("id") or "")
+    if not chat_id:
+        return
+    _seen_chats[chat_id] = {
+        "chat_id": chat_id, "title": chat.get("title") or "",
+        "username": ("@" + chat["username"]) if chat.get("username") else "",
+        "type": chat.get("type") or ""}
 
-    found: dict[str, dict] = {}
-    for upd in res.get("result") or []:
-        for key in ("channel_post", "edited_channel_post", "message", "my_chat_member"):
-            chat = ((upd.get(key) or {}).get("chat")) or {}
-            if chat.get("type") in ("channel", "supergroup", "group"):
-                found[str(chat["id"])] = {
-                    "chat_id": str(chat["id"]), "title": chat.get("title") or "",
-                    "username": ("@" + chat["username"]) if chat.get("username") else "",
-                    "type": chat.get("type")}
 
+async def discover(token: str = "") -> dict:
+    """Шаг 2: выбор канала — из того, что бот уже видел.
+
+    Telegram не отдаёт списка чатов бота, поэтому единственный источник —
+    обновления, которые проходят через цикл бота.
+    """
     connected = {c.get("chat_id") for c in await list_channels()}
-    items = [{**v, "connected": v["chat_id"] in connected} for v in found.values()]
-    # Пустой список — не ошибка: бота могли добавить в канал до последних апдейтов.
-    return {"ok": True, "items": items,
-            "hint": "" if items else ("Добавьте бота администратором в канал и "
-                                      "опубликуйте там любое сообщение — канал появится в списке. "
-                                      "Либо укажите @имя канала вручную.")}
+    items = [{**v, "connected": v["chat_id"] in connected} for v in _seen_chats.values()]
+    if items:
+        return {"ok": True, "items": items, "hint": ""}
+
+    from publishers.telegram_pub import bot_token
+    if not (token or bot_token()):
+        return {"ok": False, "items": [],
+                "error": "бот не подключён — начните с первого шага"}
+    return {"ok": True, "items": [],
+            "hint": ("Добавьте бота администратором в канал и опубликуйте там любое "
+                     "сообщение — канал появится в списке в течение нескольких секунд. "
+                     "Либо укажите @имя канала вручную ниже.")}
 
 
 async def check_channel(chat_id: str, token: str = "") -> dict:
@@ -151,22 +163,31 @@ async def check_channel(chat_id: str, token: str = "") -> dict:
     if chat_type == "channel":
         can_publish = bool(m.get(POST_RIGHT)) or status == "creator"
     else:
-        can_publish = is_admin or status == "member"
+        # В группе обычный участник обычно писать может, но право могут отобрать
+        # настройками группы. Раньше любой `member` считался пригодным — и канал
+        # сохранялся как рабочий, а посты в него не уходили.
+        restricted = status == "restricted"
+        can_publish = is_admin or (status == "member" and not restricted)
+        if restricted:
+            can_publish = bool(m.get("can_send_messages"))
 
     rights = sorted(k for k, v in m.items() if k.startswith("can_") and v is True)
-    if not is_admin:
+    if can_publish:
+        reason = ""
+    elif chat_type == "channel" and not is_admin:
         reason = "бот не администратор канала"
-    elif not can_publish:
+    elif chat_type == "channel":
         reason = "у бота нет права «Публикация сообщений»"
     else:
-        reason = ""
+        reason = "боту запрещено писать в этой группе"
 
     return {"ok": True, "chat": _chat_brief(info), "status": status,
             "is_admin": is_admin, "can_publish": can_publish, "rights": rights,
             "reason": reason,
             "hint": "" if can_publish else
-                    "Откройте канал → Администраторы → добавьте бота и включите "
-                    "«Публикация сообщений»."}
+                    ("Откройте канал → Администраторы → добавьте бота и включите "
+                     "«Публикация сообщений»." if chat_type == "channel" else
+                     "Проверьте разрешения группы: боту нужно право отправлять сообщения.")}
 
 
 def _chat_brief(info: dict) -> dict:
