@@ -353,6 +353,10 @@ def _tracked(kind: str, goal: str, fn):
     """Оборачивает джоб в задачу: у ночного запуска тоже есть id, статус и текст ошибки."""
     async def job():
         from core.task_manager import create, run
+        from core import ai_escrow
+        # Ночной запуск никто не ждёт у экрана: его сбой должен честно упасть в
+        # журнал, а не встать в очередь вопросов к Клоду.
+        ai_escrow.reset()
         task_id = await create(kind, goal, source="scheduler")
         await run(task_id, fn)
     return job
@@ -399,6 +403,12 @@ def start_scheduler():
                        CronTrigger(hour=8, minute=0), id="tokens", replace_existing=True)
     # Каждые 10 минут — очередь публикаций: отложенные посты и повторы после сбоя.
     # Без этого джоба упавшая публикация оставалась бы висеть в RETRYING навсегда.
+    # Сторож зависших задач. Без него потерянный worker висел до следующего
+    # перезапуска сервиса, а человек ждал результат, которого уже не будет.
+    from core.task_manager import watchdog
+    _scheduler.add_job(watchdog, CronTrigger(minute="*/5"),
+                       id="watchdog", replace_existing=True)
+
     _scheduler.add_job(run_publish_queue, CronTrigger(minute="*/10"),
                        id="publish_queue", replace_existing=True, max_instances=1)
     _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),

@@ -38,12 +38,27 @@ def _reset_rate_limit():
     auth_mod._rate.clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_escrow():
+    """«Этого запроса ждёт человек» — пометка одного запроса, а не режим системы.
+    Без сброса она протекала в следующий тест, и фоновый сбой уходил в очередь к
+    Клоду вместо честного падения."""
+    from core import ai_escrow
+    ai_escrow.reset()
+    yield
+    ai_escrow.reset()
+
+
 @pytest_asyncio.fixture
 async def client():
     await init_db()
     transport = ASGITransport(app=main.app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+    # У каждого теста свой цикл событий, а движок один на весь прогон. Соединение,
+    # пережившее свой цикл, остаётся с незакрытой транзакцией, и следующий тест
+    # получает «database is locked». Закрываем соединения вместе с циклом.
+    await engine.dispose()
 
 
 @pytest_asyncio.fixture

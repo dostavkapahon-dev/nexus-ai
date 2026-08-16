@@ -71,14 +71,26 @@ async def history(chat_id: str, n: int = KEEP) -> str:
     return out[-MAX_CHARS:]
 
 
-async def expect(chat_id: str, what: str):
-    """Отметить, чего ждём от следующего сообщения (или снять ожидание)."""
+async def expect(chat_id: str, what: str, data: dict | None = None):
+    """Отметить, чего ждём от следующего сообщения (или снять ожидание).
+
+    `data` — контекст ожидания: например, что человек уже выбрал «видео» и
+    «Instagram», осталось назвать тему. Без него выбор кнопками терялся бы к
+    моменту, когда придёт текст.
+    """
     st = await _load(chat_id)
     if what:
         st["awaiting"] = what
+        st["pending"] = data or {}
     else:
         st.pop("awaiting", None)
+        st.pop("pending", None)
     await _save(chat_id, st)
+
+
+async def pending(chat_id: str) -> dict:
+    """Контекст текущего ожидания."""
+    return (await _load(chat_id)).get("pending") or {}
 
 
 async def awaiting(chat_id: str) -> str:

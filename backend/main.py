@@ -80,6 +80,15 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
+    # Про эфемерное хранилище надо кричать первым делом: без внешней БД всё
+    # остальное — ключи, память, проекты — исчезнет при следующем деплое.
+    from database.db import storage_info
+    _st = storage_info()
+    print(f"[NEXUS] хранилище: {_st['kind']} · "
+          f"{'постоянное' if _st['persistent'] else 'ВРЕМЕННОЕ'}", flush=True)
+    if not _st["persistent"]:
+        print(f"[NEXUS] ⚠️ {_st['warning']}", flush=True)
+
     await init_db()
     # Доступы едут в окружение через один слой: он же расшифровывает их и, если
     # шифрование только что включили, дошифровывает старые записи.
@@ -171,7 +180,9 @@ async def health():
     от «исправление ещё не задеплоено», и починка уходит в гадание.
     """
     from core.version import build_info
-    return {"ok": True, "service": "nexus-ai", "build": build_info()}
+    from database.db import storage_info
+    return {"ok": True, "service": "nexus-ai", "build": build_info(),
+            "storage": storage_info()}
 
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):

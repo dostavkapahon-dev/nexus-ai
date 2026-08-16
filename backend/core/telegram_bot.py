@@ -77,19 +77,38 @@ async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
 
 
 def _main_menu_kb() -> dict:
-    """Инлайн-кнопки пульта управления."""
+    """Главное меню. Восемь кнопок вместо россыпи: по ТЗ человек управляет
+    результатом, а не выбирает, какую из четырнадцати команд нажать. Остальные
+    команды продолжают работать текстом — просто не занимают экран."""
     return {"inline_keyboard": [
+        [{"text": "✍️ СОЗДАТЬ", "callback_data": "create"}],
         [{"text": "📊 Статус", "callback_data": "status"},
-         {"text": "📋 План", "callback_data": "plan"}],
-        [{"text": "✍️ Создать", "callback_data": "create"},
-         {"text": "📤 Опубликовать", "callback_data": "publish"}],
-        [{"text": "🚀 Автопилот (полный цикл)", "callback_data": "auto"}],
+         {"text": "📋 Контент", "callback_data": "queue"}],
         [{"text": "🧠 Стратегия", "callback_data": "strategy"},
          {"text": "📈 Тренды", "callback_data": "trend"}],
-        [{"text": "🏭 Сделать ролик", "callback_data": "factory"}],
-        [{"text": "⏸ Пауза", "callback_data": "pause"},
-         {"text": "▶️ Возобновить", "callback_data": "resume"}],
-        [{"text": "⚙️ Настройки", "callback_data": "config"}],
+        [{"text": "📤 Публикация", "callback_data": "publish"},
+         {"text": "⚙️ Настройки", "callback_data": "config"}],
+    ]}
+
+
+def _create_kb() -> dict:
+    """Шаг 1 сценария CREATE: что именно создаём."""
+    return {"inline_keyboard": [
+        [{"text": "🎬 Видео", "callback_data": "mk_video"},
+         {"text": "🖼 Изображение", "callback_data": "mk_image"}],
+        [{"text": "📝 Пост", "callback_data": "mk_post"},
+         {"text": "🎠 Карусель", "callback_data": "mk_carousel"}],
+        [{"text": "📅 Контент-план", "callback_data": "mk_plan"}],
+    ]}
+
+
+def _platform_kb(kind: str) -> dict:
+    """Шаг 2: для какой площадки."""
+    return {"inline_keyboard": [
+        [{"text": "Instagram", "callback_data": f"pf_{kind}_instagram"},
+         {"text": "TikTok", "callback_data": f"pf_{kind}_tiktok"}],
+        [{"text": "Telegram", "callback_data": f"pf_{kind}_telegram"},
+         {"text": "YouTube", "callback_data": f"pf_{kind}_youtube"}],
     ]}
 
 
@@ -871,6 +890,12 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd == "status":
         async with AsyncSessionLocal() as db:
             report = await reporter.build_status_report(db)
+        # Про временное хранилище говорим в каждом отчёте: это единственная
+        # поломка, которая тихо стирает всё остальное.
+        from database.db import storage_info
+        st = storage_info()
+        if not st["persistent"]:
+            report += f"\n\n⚠️ <b>Данные временные.</b> {st['warning']}"
         await send_message(chat_id, report)
 
     elif cmd == "analyze":
@@ -902,6 +927,34 @@ async def _dispatch_command(chat_id: str, text: str):
                 have = ("\n\nЕсть такие: " + ", ".join(names)) if names else \
                     "\n\nНи одной ниши пока не заведено — создайте её в дашборде."
                 await send_message(chat_id, f"❌ Ниша «{query}» не найдена.{have}")
+
+    elif cmd == "create" and not args:
+        # Главная команда системы: человек говорит, ЧТО он хочет, остальное
+        # решает система. Раньше «Создать» сразу лезло в контент-план и упиралось
+        # в «запусти /analyze».
+        await send_message(chat_id, "✍️ <b>Что создать?</b>", reply_markup=_create_kb())
+
+    elif cmd.startswith("mk_"):
+        kind = cmd[3:]
+        if kind == "plan":
+            await _dispatch_command(chat_id, "/plan7")
+            return
+        await send_message(chat_id, "📱 <b>Для какой площадки?</b>",
+                           reply_markup=_platform_kb(kind))
+
+    elif cmd.startswith("pf_"):
+        # pf_<вид>_<площадка> — вид и площадка выбраны, осталась тема.
+        parts = cmd.split("_")
+        kind, platform = (parts + ["video", "instagram"])[1:3]
+        from core import dialog
+        await dialog.expect(chat_id, dialog.AWAIT_TOPIC,
+                            {"kind": kind, "platform": platform})
+        titles = {"video": "ролика", "image": "изображения", "post": "поста",
+                  "carousel": "карусели"}
+        await send_message(chat_id,
+                           f"🎯 <b>О чём {titles.get(kind, 'контент')}?</b>\n"
+                           f"Напишите тему одной строкой — или ответьте "
+                           f"«по трендам», и я выберу сам.")
 
     elif cmd == "create":
         await send_message(chat_id, "✍️ Создаю контент...")
@@ -1070,12 +1123,14 @@ async def _dispatch_command(chat_id: str, text: str):
                                "«по трендам», и я выберу сам.")
             return
 
-        await send_message(chat_id, f"🏭 Фабрика контента запущена: "
-                                    f"<b>{topic or 'тема по трендам'}</b>\n"
-                                    f"Пришлю готовый ролик на согласование.")
         from core.task_manager import spawn
-        await spawn("factory", f"Фабрика: {topic or 'тема по трендам'}",
-                    lambda: run_factory(topic=topic, dry_run=preview), source="telegram")
+        from core import task_feed
+        goal = f"Фабрика: {topic or 'тема по трендам'}"
+        task_id = await spawn("factory", goal,
+                              lambda: run_factory(topic=topic, dry_run=preview),
+                              source="telegram")
+        # Одно живое сообщение вместо тишины на минуты: шаги дописываются в него.
+        await task_feed.start(task_id, chat_id, goal)
 
     elif cmd.startswith("set_goal"):
         # Раньше команда рапортовала об установке цели, ничего не сохраняя.
@@ -1189,6 +1244,40 @@ async def _handle_media(chat_id: str, msg: dict):
         await send_message(chat_id, f"💾 Сохранил как референс. Разбор не удался: {str(e)[:120]}")
 
 
+async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
+    """Запускает создание выбранного вида контента и показывает живой статус.
+
+    Один вход для всех форматов: человек выбрал «что» и «где», тему назвал —
+    дальше система сама решает, чем и как это делать.
+    """
+    from core.content_factory import run_factory
+    from core.task_manager import spawn
+    from core import task_feed
+
+    real_topic = None if topic.lower() in ("авто", "auto", "") else topic
+    platforms = [platform] if platform else None
+    want_video = kind == "video"
+    content_type = {"video": "auto", "image": "photo", "post": "post",
+                    "carousel": "carousel"}.get(kind, "auto")
+
+    titles = {"video": "Ролик", "image": "Изображение", "post": "Пост",
+              "carousel": "Карусель"}
+    goal = f"{titles.get(kind, 'Контент')}: {real_topic or 'тема по трендам'}"
+
+    await send_message(chat_id,
+                       f"🎬 <b>План готов</b>\n"
+                       f"{titles.get(kind, 'Контент')} · {platform or 'все площадки'} · "
+                       f"{real_topic or 'тема по трендам'}\n"
+                       f"Запускаю. Готовое пришлю на согласование.")
+
+    task_id = await spawn(kind if kind != "video" else "factory", goal,
+                          lambda: run_factory(topic=real_topic, platforms=platforms,
+                                              dry_run=False, want_video=want_video,
+                                              content_type=content_type),
+                          source="telegram")
+    await task_feed.start(task_id, chat_id, goal)
+
+
 async def _handle_plain_text(chat_id: str, text: str):
     """Неубиваемая обёртка: ошибка разбора текста уходит в чат, а не в тишину.
 
@@ -1248,13 +1337,17 @@ async def _plain_text(chat_id: str, text: str):
     # 1б) Ждём тему ролика — следующее сообщение и есть тема. Без этого «ИИ ролик»
     # → «какая тема?» → ответ уходил в общий разбор и терялся.
     if await dialog.awaiting(chat_id) == dialog.AWAIT_TOPIC:
+        ctx = await dialog.pending(chat_id)
         await dialog.expect(chat_id, "")
         # «авто» — служебное слово: тему выберет сам конвейер, спрашивать
         # второй раз нельзя, иначе разговор зациклится.
         topic = "авто" if text.strip().lower() in (
             "сам", "сама", "сам придумай", "по трендам", "любая", "на твой выбор",
             "не знаю", "давай", "напиши", "1") else text.strip()
-        await _handle_command(chat_id, f"/factory {topic}")
+        if ctx.get("kind"):
+            await _start_creation(chat_id, ctx["kind"], ctx.get("platform", ""), topic)
+        else:
+            await _handle_command(chat_id, f"/factory {topic}")
         return
 
     # 2) Правки к контенту на согласовании.

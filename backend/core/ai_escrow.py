@@ -31,6 +31,13 @@ def interactive(source: str = "web", chat_id: str = ""):
     _where.set({"source": source, "chat_id": str(chat_id or "")})
 
 
+def reset():
+    """Снять пометку. Нужно там, где один процесс обслуживает и запросы людей,
+    и фоновую работу: иначе фоновый сбой уедет в очередь к Клоду как «его ждут»."""
+    _interactive.set(False)
+    _where.set({})
+
+
 def wanted() -> bool:
     return bool(_interactive.get())
 

@@ -64,10 +64,22 @@ async def test_silent_agent_is_visible_not_missing(client):
 
 
 @pytest.mark.asyncio
-async def test_verdict_ok_when_everything_works(client):
+async def test_verdict_ok_when_everything_works(client, monkeypatch):
     await _log("copywriter")
+    # «Всё работает» включает постоянную базу: с временным хранилищем зелёный
+    # светофор обещал бы сохранность ключей, которой нет.
+    monkeypatch.setattr("database.db.PERSISTENT", True)
     ov = await health.overview()
     assert ov["verdict"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_verdict_not_ok_on_temporary_storage(client):
+    """В тестах база файловая — значит непостоянная, и это должно быть видно."""
+    await _log("copywriter")
+    ov = await health.overview()
+    assert ov["storage"]["persistent"] is False
+    assert ov["verdict"] == "degraded"
 
 
 @pytest.mark.asyncio
