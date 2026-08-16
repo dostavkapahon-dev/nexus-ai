@@ -25,6 +25,10 @@ RULES = [
     (("продолжи", "возобнови"), "/resume"),
 ]
 
+# Слова, после которых человек ждёт ролик, а не рассказ о том, как его сделать.
+# Глагол при этом не обязателен: «ИИ ролик» — такая же заявка, как «сделай рилс».
+REEL_WORDS = ("ролик", "рилс", "reels", "reel", "shorts", "шортс", "клип", "видео")
+
 INTENT_SYSTEM = (
     "Ты — маршрутизатор команд для SMM-агента. По сообщению пользователя определи, "
     "что он хочет, и верни ОДНУ команду из списка. Отвечай ТОЛЬКО командой, без пояснений.\n"
@@ -64,11 +68,24 @@ def quick_route(text: str) -> str | None:
     if m:
         topic = m.group(1).strip(" .!?")  # регистр исходного текста сохраняем
         return f"/factory {topic}" if topic else "/factory"
+
+    # Короткая заявка без глагола: «ИИ ролик», «нужен reels», «видео про доставку».
+    # Остаток фразы после слова-маркера — это и есть тема.
+    for w in REEL_WORDS:
+        if re.search(rf"(?<!\w){w}", low):
+            rest = re.sub(rf"(?<!\w){w}\w*", " ", t, flags=re.IGNORECASE)
+            rest = re.sub(r"^\s*(?:про|о|об|на тему)\s+", "", rest.strip(" .,!?—-"),
+                          flags=re.IGNORECASE).strip(" .,!?—-")
+            return f"/factory {rest}" if len(rest) > 2 else "/factory"
     return None
 
 
-async def route(text: str) -> str:
-    """Определяет команду для свободного текста (правила → дешёвая модель)."""
+async def route(text: str, history: str = "") -> str:
+    """Определяет команду для свободного текста (правила → дешёвая модель).
+
+    История нужна для коротких ответов: «1» или «Напиши» сами по себе ничего не
+    значат — смысл им придаёт предыдущая реплика бота.
+    """
     quick = quick_route(text)
     if quick:
         return quick
@@ -79,7 +96,9 @@ async def route(text: str) -> str:
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
         model = ECONOMY_MODELS.get("adapter", "gemini-2.0-flash")
-        res = await ai_router.call(model, INTENT_SYSTEM, text[:800])
+        prompt = (f"Предыдущий разговор:\n{history}\n\nНовое сообщение: {text[:800]}"
+                  if history else text[:800])
+        res = await ai_router.call(model, INTENT_SYSTEM, prompt)
         out = (res.get("text") or "").strip().split("\n")[0].strip()
         if out.startswith("/"):
             return out
@@ -89,9 +108,26 @@ async def route(text: str) -> str:
 
 
 CHAT_SYSTEM = (
-    "Ты — ассистент SMM-агента NEXUS AI. Отвечай кратко, по-русски, по делу. "
-    "Если у тебя спрашивают, что ты умеешь — расскажи: анализ аккаунта, поиск трендов, "
-    "разбор чужих роликов, создание Reels, монтаж, публикация, управление браузером на ПК."
+    "Ты — ассистент SMM-агента NEXUS AI. Отвечай кратко, по-русски, по делу.\n"
+    "ГЛАВНОЕ ПРАВИЛО: ты только говоришь, работу выполняет система по команде. "
+    "Поэтому НИКОГДА не обещай действие от первого лица — ни «сейчас сгенерирую», "
+    "ни «смонтирую», ни «опубликую», ни «начинаю». Такое обещание никто не "
+    "исполнит, и человек останется ждать впустую.\n"
+    "Если человек хочет ролик — не расписывай план работ, а задай ОДИН вопрос: "
+    "какая тема. Если он хочет что-то другое из умений системы (анализ аккаунта, "
+    "тренды, разбор чужого ролика, контент-план, публикация) — назови команду, "
+    "которую надо отправить, например /trend или /strategy."
+)
+
+# Что отвечаем, когда модель вернула пустоту. Раньше пустая строка уходила в
+# Telegram, тот отвечал «message text is empty», и для человека это выглядело
+# как молчание бота.
+EMPTY_REPLY = (
+    "🤔 Не понял запрос. Скажите словами, что нужно, например:\n"
+    "• «ролик про доставку еды» — сделаю ролик\n"
+    "• «тренды» — что сейчас залетает\n"
+    "• «разбери аккаунт» — анализ и стратегия\n"
+    "• /help — все команды"
 )
 
 
@@ -108,7 +144,7 @@ NO_AI_REPLY = (
 )
 
 
-async def chat_reply(text: str) -> str:
+async def chat_reply(text: str, history: str = "") -> str:
     """Свободный ответ, когда это просто вопрос/разговор.
 
     Без единого ключа отвечаем понятным текстом со списком рабочих команд:
@@ -121,7 +157,9 @@ async def chat_reply(text: str) -> str:
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
         model = ECONOMY_MODELS.get("copywriter", "gemini-2.0-flash")
-        res = await ai_router.call(model, CHAT_SYSTEM, text[:1500])
-        return (res.get("text") or "").strip()[:3000]
+        prompt = (f"Предыдущий разговор:\n{history}\n\nНовое сообщение: {text[:1500]}"
+                  if history else text[:1500])
+        res = await ai_router.call(model, CHAT_SYSTEM, prompt)
+        return (res.get("text") or "").strip()[:3000] or EMPTY_REPLY
     except Exception as e:
         return f"⚠️ Не смог ответить: {str(e)[:150]}"
