@@ -89,7 +89,8 @@ async def route(text: str, history: str = "") -> str:
     quick = quick_route(text)
     if quick:
         return quick
-    # Без ключей уточнять намерение нечем — не жжём время на заведомый сбой.
+    # Без ключей уточнять намерение нечем — отвечаем разговором, а тот при
+    # необходимости отдаст вопрос Клоду.
     from core.ai_router import ai_available
     if not ai_available():
         return "/chat"
@@ -152,6 +153,14 @@ async def chat_reply(text: str, history: str = "") -> str:
     """
     from core.ai_router import ai_available, FREE_SIGNUP_HINT
     if not ai_available():
+        # Ключей нет — но вопрос не пропадает: его получит Клод. Подсказку про
+        # бесплатный ключ оставляем: это по-прежнему самый быстрый способ
+        # избавиться от ожидания.
+        from core import ai_escrow
+        if ai_escrow.wanted():
+            answer = await ai_escrow.ask(CHAT_SYSTEM, text, role="chat",
+                                         errors="нет ни одного ключа ИИ")
+            return f"{answer}\n\n{FREE_SIGNUP_HINT}"
         return NO_AI_REPLY + FREE_SIGNUP_HINT
 
     try:

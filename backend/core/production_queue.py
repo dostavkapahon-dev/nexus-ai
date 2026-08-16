@@ -208,6 +208,11 @@ def brief_as_text(brief: dict) -> str:
     нужны именно кадры и промпты, а не служебные поля.
     """
     brief = brief or {}
+    # Текстовое задание для Клода описывается иначе, чем ролик: у него вопрос,
+    # а не раскадровка.
+    if brief.get("prompt") and not brief.get("storyboard"):
+        from core.ai_escrow import as_text
+        return as_text(brief)
     lines = []
     if brief.get("theme"):
         lines.append(f"Тема: {brief['theme']}")

@@ -18,12 +18,17 @@ const fmt = (iso) => (iso ? iso.slice(0, 16).replace('T', ' ') : '—')
 const NEXT_NOTE = {
   awaiting_approval: 'Ролик ушёл вам в Telegram на согласование.',
   no_telegram: 'Ролик принят, но согласовать некому — Telegram не подключён.',
+  delivered: 'Ответ доставлен тому, кто спрашивал.',
+  empty: 'Ответ пустой — доставлять нечего.',
 }
 
 // Форма приёма готового медиа. Ссылки приносит внешний исполнитель, сервер
 // сам их не достанет — без этой формы задание висит в очереди навсегда.
 function Handover({ job, onDone }) {
-  const [form, setForm] = useState({ video_url: '', image_url: '', audio_url: '', note: '' })
+  const isText = job.kind === 'ai_task'
+  const [form, setForm] = useState(
+    isText ? { text: '', note: '' }
+           : { video_url: '', image_url: '', audio_url: '', note: '' })
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const set = (k) => (e) => setForm(f => ({ ...f, [k]: e.target.value }))
@@ -47,9 +52,18 @@ function Handover({ job, onDone }) {
 
   return (
     <div className="mt-3 space-y-2 bg-[#09091a] rounded-lg p-3">
-      {field('video_url', 'ссылка на готовый ролик (mp4)')}
-      {field('image_url', 'ссылка на обложку или фото')}
-      {field('audio_url', 'ссылка на озвучку')}
+      {isText ? (
+        <textarea value={form.text} onChange={set('text')} rows={6}
+          placeholder="ответ Клода — придёт туда, откуда пришёл вопрос"
+          className="w-full bg-[#09091a] border border-[#1c1c30] rounded-lg px-3 py-2 text-xs
+                     text-[#c0c0e0] placeholder-[#4a4a68] focus:outline-none focus:border-violet-500/40" />
+      ) : (
+        <>
+          {field('video_url', 'ссылка на готовый ролик (mp4)')}
+          {field('image_url', 'ссылка на обложку или фото')}
+          {field('audio_url', 'ссылка на озвучку')}
+        </>
+      )}
       {field('note', 'заметка: чем и как сделано')}
       {err && <div className="text-xs text-red-300">{err}</div>}
       <button onClick={send} disabled={busy}
@@ -58,7 +72,9 @@ function Handover({ job, onDone }) {
         {busy ? 'Отправляю…' : 'Отправить в конвейер'}
       </button>
       <p className="text-[11px] text-[#5a5a7a]">
-        Дальше система смонтирует ролик и пришлёт вам на согласование.
+        {isText
+          ? 'Ответ уйдёт в тот чат, откуда пришёл вопрос, и в ленту на сайте.'
+          : 'Дальше система смонтирует ролик и пришлёт вам на согласование.'}
       </p>
     </div>
   )
@@ -81,7 +97,11 @@ function Job({ job, onRetry, onCancel, onDone }) {
   return (
     <div className={`rounded-xl border p-4 ${st.cls}`}>
       <div className="flex items-center gap-2 flex-wrap">
-        <span className="font-medium">{brief.theme || job.kind}</span>
+        <span className="font-medium">
+          {job.kind === 'ai_task'
+            ? `🧠 Вопрос Клоду: ${(brief.prompt || '').slice(0, 60)}`
+            : brief.theme || job.kind}
+        </span>
         <span className="text-xs">{st.label}</span>
         <span className="ml-auto text-[11px] text-[#5a5a7a] font-mono">{job.id.slice(0, 8)}</span>
       </div>

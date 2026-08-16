@@ -149,6 +149,10 @@ async def _handle_command(chat_id: str, text: str):
         pass
     token = _in_command.set(True)
     try:
+        # Ответа ждёт человек в чате: не ответит ни одна своя модель — вопрос
+        # уйдёт Клоду, а не потеряется.
+        from core import ai_escrow
+        ai_escrow.interactive(source="telegram", chat_id=chat_id)
         await _dispatch_command(chat_id, text)
     except Exception as e:
         import traceback
@@ -1192,6 +1196,8 @@ async def _handle_plain_text(chat_id: str, text: str):
     гасло: человек писал сообщение и не получал вообще ничего.
     """
     try:
+        from core import ai_escrow
+        ai_escrow.interactive(source="telegram", chat_id=chat_id)
         await _plain_text(chat_id, text)
     except Exception as e:
         import traceback

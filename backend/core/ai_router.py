@@ -460,11 +460,21 @@ class AIRouter:
                         break
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)
-        # Отсутствие ключей и сбой провайдеров — разные беды, и чинятся по-разному.
-        # Общий текст «All AI providers failed» не подсказывал, что именно делать.
+        detail = " | ".join(f"{m} → {err}" for m, err in errors.items()) or str(last_error or "")
+
+        # Последнее звено цепочки — Клод в аккаунте Claude Code. Запрос человека
+        # больше не пропадает: он уходит в очередь и ждёт ответа там.
+        from core import ai_escrow
+        if ai_escrow.wanted():
+            why = detail or ("нет ни одного ключа ИИ" if not available_providers() else "")
+            text = await ai_escrow.ask(system, prompt, role=model, errors=why)
+            return {"text": text, "tokens": 0, "cost": 0.0,
+                    "model_used": "claude-escrow", "escrow": True, "duration_sec": 0.0}
+
+        # Фоновому шагу ждать человека бессмысленно — он честно падает.
+        # Отсутствие ключей и сбой провайдеров чинятся по-разному, поэтому тексты разные.
         if not available_providers():
             raise RuntimeError("Нет ни одного ключа ИИ. " + FREE_SIGNUP_HINT)
-        detail = " | ".join(f"{m} → {err}" for m, err in errors.items()) or str(last_error)
         raise RuntimeError(f"Все ИИ-провайдеры отказали. {detail}")
 
 ai_router = AIRouter()
