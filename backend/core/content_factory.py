@@ -96,13 +96,20 @@ async def _analyze(topic: str | None) -> dict:
         result = await ai_router.call(BRAIN_MODEL, await system_prompt(), prompt)
         raw = result.get("text", "")
     except Exception as e:
-        return {"theme": topic or "AI для бизнеса", "hook_type": "тайна",
-                "hook_text": "Смотри до конца", "avatar_script": "",
-                "image_prompt": "dark cinematic AI tech poster, gold neon accents",
-                "instagram": {"caption": "", "hashtags": ["#ai", "#бизнес"]},
-                "youtube": {"title": topic or "AI", "description": ""},
-                "tiktok": {"caption": ""}, "telegram": {"post": ""},
-                "_error": f"Нет AI-ключа для анализа: {str(e)[:120]}. Добавь GEMINI_API_KEY."}
+        # Моделей нет — но пустая заглушка «AI для бизнеса» хуже, чем осмысленная
+        # заготовка по заданной теме: её видно, её можно доработать руками.
+        from core.offline_content import draft
+        d = draft(topic or "ваша тема")
+        caption = d["caption"]
+        return {"theme": d["theme"], "hook_type": g["hook_type"],
+                "hook_text": d["hook_text"], "avatar_script": caption,
+                "image_prompt": d["cover_prompt"], "_format": g["format"],
+                "instagram": {"caption": caption, "hashtags": ["#ai", "#бизнес"]},
+                "youtube": {"title": d["theme"], "description": caption},
+                "tiktok": {"caption": caption[:150]}, "telegram": {"post": caption},
+                "_offline": True,
+                "_error": f"Модели недоступны ({str(e)[:100]}). Собрал заготовку "
+                          f"без ИИ — текст стоит доработать."}
     try:
         s, e = raw.find("{"), raw.rfind("}") + 1
         data = json.loads(raw[s:e])
@@ -197,13 +204,22 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     # 1-2. Анализ + план (AI-маркетолог)
     plan = await _analyze(topic)
     report["plan"] = plan
-    report["steps"].append({"step": "analysis", "ok": "_error" not in plan, "theme": plan.get("theme")})
+    # Офлайн-заготовка — это не провал шага: контент есть, просто собран по
+    # шаблону. Провал — когда на выходе пусто.
+    report["offline"] = bool(plan.get("_offline"))
+    report["steps"].append({"step": "analysis",
+                            "ok": "_error" not in plan or plan.get("_offline", False),
+                            "theme": plan.get("theme"),
+                            "note": plan.get("_error") if plan.get("_offline") else None})
 
     # 2b. Продакшен-ТЗ с раскадровкой и промтами (креативный директор)
     brief = await build_brief(plan)
     report["brief"] = brief
-    report["steps"].append({"step": "brief", "ok": "_error" not in brief,
-                            "shots": len(brief.get("storyboard", []))})
+    report["offline"] = report["offline"] or bool(brief.get("_offline"))
+    report["steps"].append({"step": "brief",
+                            "ok": bool(brief.get("storyboard")),   # пусто — вот это провал
+                            "shots": len(brief.get("storyboard", [])),
+                            "note": brief.get("_error") if brief.get("_offline") else None})
 
     # 2c. Выбор стратегии видео (формат из ротации: talking_head → HeyGen-аватар)
     ct = content_type if content_type != "auto" else plan.get("_format", "auto")
@@ -362,6 +378,11 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         report["hint"] = ("Не прошли шаги: " + ", ".join(failed) +
                           ". Обычно причина — нет ключа ИИ: добавьте GEMINI_API_KEY "
                           "(бесплатно) или ANTHROPIC_API_KEY в Подключениях.")
+    elif report.get("offline"):
+        report["hint"] = ("Собрано без моделей ИИ: тексты и раскадровка — по "
+                          "шаблону, картинки бесплатным генератором. Добавьте "
+                          "бесплатный ключ (Groq или Gemini), и то же самое будет "
+                          "писаться под вашу нишу.")
 
     await _flush_steps(report)   # публикация/согласование — последний кусок журнала
     report.pop("_journaled", None)   # служебный счётчик наружу не отдаём

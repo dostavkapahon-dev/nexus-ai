@@ -708,6 +708,10 @@ async def _dispatch_command(chat_id: str, text: str):
         return
 
     if cmd == "diag":
+        # Первым делом — главный вопрос: сможем ли мы сейчас создать контент.
+        from core import preflight
+        await send_message(chat_id, preflight.as_text(await preflight.check("video")))
+
         def yn(v):
             return "✅" if v else "❌"
         ai_keys = {
@@ -1252,7 +1256,16 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
     """
     from core.content_factory import run_factory
     from core.task_manager import spawn
-    from core import task_feed
+    from core import task_feed, preflight
+
+    # Сначала — сможем ли мы это сделать. «Запускаю» при пустых ключах означало
+    # тишину на месте результата: человек ждал ролик, которого не будет.
+    gate = await preflight.check(kind)
+    if not gate["ok"]:
+        await send_message(chat_id, preflight.as_text(gate))
+        return
+    if gate["warnings"]:
+        await send_message(chat_id, preflight.as_text({"warnings": gate["warnings"]}))
 
     real_topic = None if topic.lower() in ("авто", "auto", "") else topic
     platforms = [platform] if platform else None

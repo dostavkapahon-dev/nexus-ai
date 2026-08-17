@@ -14,6 +14,13 @@ async def system_health():
     return await overview()
 
 
+@router.get("/preflight")
+async def system_preflight(kind: str = "video"):
+    """Сможем ли создать контент прямо сейчас и чего не хватает."""
+    from core.preflight import check
+    return await check(kind)
+
+
 @router.get("/summary")
 async def system_summary():
     """Только то, что нужно главной странице: система, подключения, текущая
