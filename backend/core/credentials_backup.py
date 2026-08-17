@@ -61,6 +61,33 @@ async def export_all(password: str) -> dict:
                      "saved_at": datetime.utcnow().isoformat()}}
 
 
+ENV_BLOB = "NEXUS_KEYS_BACKUP"        # копия целиком, зашифрованная
+ENV_PASSWORD = "NEXUS_KEYS_PASSWORD"  # пароль от неё
+
+
+async def restore_from_env() -> dict:
+    """Разворачивает ключи из переменной окружения при старте.
+
+    Диск контейнера на Render стирается при каждом деплое, а переменные
+    окружения — нет. Поэтому копия, положенная в переменную, переживает деплой
+    и возвращает все доступы сама, без внешней базы. Значение зашифровано, а
+    пароль лежит отдельной переменной — это не «секреты россыпью в настройках».
+    """
+    blob = (os.getenv(ENV_BLOB, "") or "").strip()
+    password = (os.getenv(ENV_PASSWORD, "") or "").strip()
+    if not blob:
+        return {"ok": False, "skipped": "нет копии в окружении"}
+    if not password:
+        return {"ok": False, "error": f"{ENV_BLOB} задан, а {ENV_PASSWORD} — нет"}
+
+    try:
+        file = json.loads(blob)
+    except ValueError:
+        return {"ok": False, "error": f"{ENV_BLOB} не разобран как копия доступов"}
+
+    return await import_all(file, password)
+
+
 async def import_all(file: dict, password: str) -> dict:
     """Восстанавливает доступы из копии. Значения ложатся в базу заново
     зашифрованными серверным ключом — как при обычном сохранении."""

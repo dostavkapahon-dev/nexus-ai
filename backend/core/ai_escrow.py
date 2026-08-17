@@ -57,6 +57,55 @@ def suppressed():
 
 
 SETTING = "claude_escrow"          # хранится там же, где прочие настройки
+BEAT = "claude_worker_beat"        # когда исполнитель последний раз был на связи
+BEAT_TTL = 300                     # 5 минут без отметки — считаем, что ушёл
+
+
+async def worker_beat() -> dict:
+    """Клод-исполнитель отмечается, что он на связи."""
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+
+    now = datetime.utcnow().isoformat()
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == BEAT))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = now
+        else:
+            db.add(Connection(key_name=BEAT, key_value=now))
+        await db.commit()
+    return {"ok": True, "at": now}
+
+
+async def worker_alive() -> bool:
+    """Есть ли кому разбирать очередь прямо сейчас.
+
+    Без этого вопросы копились бы в очереди, которую никто не читает: человек
+    ждёт результат, а он лежит непрочитанным. Нет исполнителя — система идёт
+    автономным путём.
+    """
+    from datetime import datetime
+
+    from sqlalchemy import select
+
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == BEAT))
+        row = r.scalar_one_or_none()
+    if not row or not row.key_value:
+        return False
+    try:
+        seen = datetime.fromisoformat(row.key_value)
+    except ValueError:
+        return False
+    return (datetime.utcnow() - seen).total_seconds() < BEAT_TTL
 
 
 async def enabled() -> bool:
@@ -114,10 +163,12 @@ async def ask(system: str, prompt: str, role: str = "", errors: str = "") -> str
     """Кладёт запрос в очередь для Клода. Возвращает текст для того, кто ждёт."""
     from core import production_queue as pq
 
-    if not await enabled():
-        # Ручной режим выключен: возвращаем отказ, и вызывающий код идёт своим
-        # запасным путём (заготовка по шаблону), не трогая человека.
-        raise RuntimeError("Нет ни одной модели ИИ, ручная передача Клоду выключена.")
+    # Очередь наполняется, только если есть кому её разобрать: либо на связи
+    # Клод-исполнитель (tools/claude_worker.py на вашей подписке), либо ручной
+    # режим включён осознанно. Иначе вопрос лёг бы в очередь, которую никто не
+    # читает, а человек ждал бы ответа, который не придёт.
+    if not (await worker_alive() or await enabled()):
+        raise RuntimeError("Нет ни одной модели ИИ, исполнитель не на связи.")
 
     place = _where.get() or {}
     digest = _digest(system, prompt)
