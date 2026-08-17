@@ -262,9 +262,13 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
 
     await _flush_steps(report)   # обложка и кадры
 
-    # 3c. Видео по выбранной стратегии
+    # 3c. Видео по выбранной стратегии.
+    # `vid` объявлена ДО ветки: изображению, посту и карусели видео не нужно, но
+    # шаг публикации ниже всё равно смотрит на неё. Пока она жила внутри `if`,
+    # любой формат без видео падал на последнем шаге с UnboundLocalError — уже
+    # после того, как весь контент был готов.
+    vid = {"ok": False}
     if want_video:
-        vid = {"ok": False}
         st = strategy["strategy"]
         first_img = frames[0]["image"] if frames else cover
 
@@ -487,8 +491,19 @@ async def _send_report(report: dict, platforms: list) -> None:
             lines.append(f"{mark} {s['step']}{extra}")
         if not report["dry_run"]:
             lines.append("")
-            for pf, r in report["published"].items():
-                lines.append(f"{'✅' if r.get('ok') else '⚠️'} {pf}")
+            published = report.get("published") or {}
+            # Форм две: плоская запись о согласовании и словарь по площадкам.
+            # Раньше перебор был только по второй, ошибка глушилась — и отчёт
+            # просто не приходил, пряча вместе с собой настоящие сбои.
+            if "status" in published:
+                mark = "✅" if published["status"] == "awaiting_approval" else "⚠️"
+                lines.append(f"{mark} {published.get('note') or published['status']}")
+            else:
+                for pf, r in published.items():
+                    ok = r.get("ok") if isinstance(r, dict) else None
+                    lines.append(f"{'✅' if ok else '⚠️'} {pf}")
         await send_message(chat_id, "\n".join(lines))
-    except Exception:
-        pass
+    except Exception as e:
+        # Молчащий отчёт — это скрытая поломка: причину пишем хотя бы в лог.
+        print(f"[NEXUS] отчёт фабрики не отправлен: {type(e).__name__}: {str(e)[:160]}",
+              flush=True)
