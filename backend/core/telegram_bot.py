@@ -238,6 +238,35 @@ async def _refresh_env_from_db():
         pass
 
 
+async def _provider_lines() -> list:
+    """Все ИИ-провайдеры с ключами и источником ключа.
+
+    Источник важнее галочки: ключ из переменных окружения переживёт деплой, а
+    сохранённый в базе — нет, пока не подключена постоянная БД. Без этой пометки
+    «ключи пропали сами» выглядит мистикой.
+    """
+    from sqlalchemy import select
+
+    from core.ai_router import PROVIDER_KEY_ENV
+    from database.models import Connection
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection.key_name))
+        in_db = {row[0].upper() for row in r.all()}
+
+    lines = []
+    for provider, env in sorted(PROVIDER_KEY_ENV.items()):
+        if not env or provider in ("openai", "gemini"):
+            continue                       # эти два проверяются выше, живьём
+        if not os.getenv(env):
+            continue                       # не задан — не шумим, их два десятка
+        where = "база (пропадёт при деплое)" if env in in_db else "переменные Render"
+        lines.append(f"✅ {provider.title()} — задан · {where}")
+    if not lines:
+        lines.append("⬜ Бесплатные провайдеры (Groq, Cerebras, NVIDIA…) — не заданы")
+    return lines
+
+
 async def _dispatch_command(chat_id: str, text: str):
     from core.orchestrator import nexus_core
     from agents.reporter import reporter
@@ -773,9 +802,10 @@ async def _dispatch_command(chat_id: str, text: str):
         else:
             checks.append("⬜ OpenAI — не задан")
 
-        for name, env in (("Claude", "ANTHROPIC_API_KEY"), ("DeepSeek", "DEEPSEEK_API_KEY")):
-            checks.append(f"{'✅' if os.getenv(env) else '⬜'} {name} — "
-                          f"{'задан' if os.getenv(env) else 'не задан'}")
+        # Все остальные провайдеры — списком из роутера, а не четырьмя вручную
+        # перечисленными. Раньше подключённый Groq в диагностике не было видно
+        # вовсе: он просто не упоминался, и выглядело это как «ключ не принят».
+        checks += await _provider_lines()
 
         verdict = ("\n\n<b>Итог:</b> " +
                    ("система готова ✅" if any("✅" in c for c in checks)

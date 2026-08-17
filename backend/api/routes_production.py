@@ -13,6 +13,24 @@ from pydantic import BaseModel
 router = APIRouter(prefix="/api/production", tags=["production"])
 
 
+@router.post("/worker/beat")
+async def worker_beat():
+    """Клод-исполнитель отмечается, что он на связи (tools/claude_worker.py)."""
+    from core.ai_escrow import worker_beat as beat
+    return await beat()
+
+
+@router.get("/worker")
+async def worker_status():
+    from core.ai_escrow import worker_alive
+    alive = await worker_alive()
+    return {"alive": alive,
+            "note": ("Клод-исполнитель на связи — вопросы уходят ему."
+                     if alive else
+                     "Исполнителя нет: система работает автономно, "
+                     "без моделей — по шаблону.")}
+
+
 @router.get("/next")
 async def next_job():
     """Взять следующее ТЗ. Пусто — значит очередь пуста, это не ошибка."""

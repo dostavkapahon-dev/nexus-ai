@@ -94,6 +94,19 @@ async def lifespan(app: FastAPI):
     # шифрование только что включили, дошифровывает старые записи.
     from core.credentials import load_into_env
     await load_into_env()
+
+    # Копия ключей из переменной окружения. Диск Render стирается при каждом
+    # деплое, переменные — нет, поэтому это единственный способ не вводить
+    # доступы заново, пока не подключена постоянная база.
+    try:
+        from core.credentials_backup import restore_from_env
+        res = await restore_from_env()
+        if res.get("ok"):
+            print(f"[NEXUS] доступы восстановлены из копии: {res['restored']}", flush=True)
+        elif res.get("error"):
+            print(f"[NEXUS] копия доступов не развёрнута: {res['error']}", flush=True)
+    except Exception as e:
+        print(f"[NEXUS] копия доступов не развёрнута: {type(e).__name__}: {e}", flush=True)
     # Профиль агента наполняется из прежних настроек один раз — чтобы включение
     # новой формы не выглядело как «мои настройки пропали».
     try:
