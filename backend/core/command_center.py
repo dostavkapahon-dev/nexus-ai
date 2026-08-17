@@ -94,6 +94,11 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
 
     await log_event(source, "user", text)
 
+    # Этого ответа ждёт человек: если свои модели откажут, вопрос уйдёт Клоду,
+    # а не превратится в отказ.
+    from core import ai_escrow
+    ai_escrow.interactive(source=source)
+
     # Маршрутизация свободного текста тем же роутером, что и Telegram.
     try:
         from core import intent
@@ -113,11 +118,15 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
             # выполнения»: проблема не в выполнении, а в том, что выполнять нечем.
             from core.ai_router import ai_available, FREE_SIGNUP_HINT
             if not ai_available():
-                from core.intent import NO_AI_REPLY
-                reply = NO_AI_REPLY + FREE_SIGNUP_HINT
+                # Своих моделей нет — задачу ведёт Клод, а не отказ в ответ.
+                from core import ai_escrow
+                reply = await ai_escrow.ask(
+                    "Ты — дирижёр SMM-системы NEXUS AI. Выполни задачу владельца.",
+                    text, role="director", errors="нет ни одного ключа ИИ")
+                reply = f"{reply}\n\n{FREE_SIGNUP_HINT}"
                 await log_event(source, "agent", reply)
-                return {"ok": False, "reply": reply, "cmd": cmd, "steps": [],
-                        "reason": "no_ai_provider"}
+                return {"ok": True, "reply": reply, "cmd": cmd, "steps": [],
+                        "reason": "escrow_claude"}
 
             # Всё остальное ведёт мозг-дирижёр (Claude → инструменты) под задачей,
             # чтобы запуск было видно в /api/tasks и он не пропал при сбое.

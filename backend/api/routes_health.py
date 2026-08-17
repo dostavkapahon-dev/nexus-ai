@@ -14,6 +14,13 @@ async def system_health():
     return await overview()
 
 
+@router.get("/preflight")
+async def system_preflight(kind: str = "video"):
+    """Сможем ли создать контент прямо сейчас и чего не хватает."""
+    from core.preflight import check
+    return await check(kind)
+
+
 @router.get("/summary")
 async def system_summary():
     """Только то, что нужно главной странице: система, подключения, текущая
@@ -60,9 +67,14 @@ async def system_summary():
     errors = await recent_errors(24, 5)
     error_count = len(errors.get("tasks", [])) + len(errors.get("agents", []))
 
+    from database.db import storage_info
+
     return {
         "system": {"ok": True, "ai_available": bool(providers), "providers": providers,
                    "mode": "full" if providers else "control_only"},
+        # Главная обязана показывать это первой строкой: без постоянной базы
+        # все настройки на экране — временные.
+        "storage": storage_info(),
         "connections": [{"platform": p["platform"], "ok": bool(p.get("ok")),
                          "configured": bool(p.get("configured")),
                          "error": p.get("error")} for p in platforms],

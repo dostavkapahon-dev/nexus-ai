@@ -63,6 +63,7 @@ class ResultBody(BaseModel):
     image_url: str | None = None
     audio_url: str | None = None
     cover_url: str | None = None
+    text: str | None = None       # ответ Клода на текстовое задание (kind=ai_task)
     note: str = ""
     publish: bool = True          # продолжить конвейер: монтаж → согласование
 
@@ -78,7 +79,8 @@ async def submit_result(job_id: str, body: ResultBody):
     from core.production_queue import submit
 
     assets = {"video_url": body.video_url, "image_url": body.image_url,
-              "audio_url": body.audio_url, "cover_url": body.cover_url}
+              "audio_url": body.audio_url, "cover_url": body.cover_url,
+              "text": body.text}
     res = await submit(job_id, assets, body.note)
     if not res.get("ok"):
         return res
@@ -86,6 +88,11 @@ async def submit_result(job_id: str, body: ResultBody):
     job = res["job"]
     if not body.publish:
         return {**res, "next": "остановлено по запросу: publish=false"}
+
+    # Текстовое задание монтировать нечего — ответ уходит тому, кто спрашивал.
+    from core import ai_escrow
+    if job.get("kind") == ai_escrow.KIND:
+        return {**res, "next": await ai_escrow.deliver(job)}
 
     from core.content_factory import finalize_from_assets
     outcome = await finalize_from_assets(job)

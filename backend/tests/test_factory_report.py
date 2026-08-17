@@ -44,13 +44,18 @@ async def _noop(*a, **k):
     return None
 
 
-async def test_factory_reports_failure_without_keys(dead_ai):
+async def test_factory_without_keys_makes_a_draft_and_says_so(dead_ai):
+    """Без ключей работа не останавливается: собирается заготовка по шаблону.
+
+    Но выдавать её за обычный результат нельзя — иначе человек не поймёт, почему
+    тексты слабее, и не добавит бесплатный ключ.
+    """
     report = await cf.run_factory(topic="тест", platforms=["telegram"],
                                   dry_run=True, want_video=False)
-    assert report["ok"] is False, report["steps"]
-    assert "analysis" in report["failed_steps"]
-    assert "brief" in report["failed_steps"]
-    assert "GEMINI_API_KEY" in report["hint"]
+    assert report["ok"] is True, report["steps"]
+    assert report["offline"] is True
+    assert report["plan"]["theme"] == "тест"
+    assert "без моделей ИИ" in report["hint"]
 
 
 async def test_self_check_step_not_ok_without_keys(dead_ai):
@@ -60,12 +65,26 @@ async def test_self_check_step_not_ok_without_keys(dead_ai):
     assert step["ok"] is False
 
 
-async def test_empty_storyboard_is_not_a_success(dead_ai):
+async def test_empty_storyboard_is_not_a_success(monkeypatch):
+    """Нет кадров — нет ролика, и шаг обязан быть отмечен провалом."""
+    monkeypatch.setattr(cf, "_send_report", _noop)
+
+    async def analyze(topic):
+        return {"theme": "тема", "hook_text": "хук", "image_prompt": "кадр",
+                "instagram": {"caption": "текст"}}
+
+    async def empty_brief(plan):
+        return {"storyboard": [], "cover_prompt": "обложка"}
+
+    monkeypatch.setattr(cf, "_analyze", analyze)
+    monkeypatch.setattr("core.creative_director.build_brief", empty_brief)
+
     report = await cf.run_factory(topic="тест", platforms=["telegram"],
                                   dry_run=True, want_video=False)
     frames = next(s for s in report["steps"] if s["step"] == "storyboard_frames")
     assert frames["count"] == 0
     assert frames["ok"] is False
+    assert report["ok"] is False, "пустой бриф — это провал, а не заготовка"
 
 
 async def test_factory_ok_when_critical_steps_pass(monkeypatch):

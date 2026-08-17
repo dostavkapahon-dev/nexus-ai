@@ -53,18 +53,27 @@ async def test_direct_commands_still_route_without_ai(client, no_ai):
 
 
 @pytest.mark.asyncio
-async def test_command_center_does_not_create_doomed_task(client, no_ai):
-    """Заводить задачу, которая гарантированно упадёт, — мусор в журнале и
-    неверная причина: проблема не в выполнении, а в том, что выполнять нечем."""
+async def test_command_center_hands_the_task_to_claude(client, no_ai, monkeypatch):
+    """Своих моделей нет — задачу ведёт Клод. Заводить задачу, которая
+    гарантированно упадёт, всё так же нельзя: это мусор в журнале."""
     from core.task_manager import list_tasks
+    from core import production_queue as pq
+
+    async def yes(text):
+        return True
+
+    monkeypatch.setattr("core.notify.notify_owner", yes)
     before = len(await list_tasks(limit=200))
 
     res = await cc.run_command("сделай рилс про доставку", source="dashboard", mirror=False)
 
-    assert res["ok"] is False
-    assert res["reason"] == "no_ai_provider"
-    assert "/queue" in res["reply"]
+    assert res["reason"] == "escrow_claude"
+    assert "Клоду" in res["reply"]
+    assert "Groq" in res["reply"], "подсказка про бесплатный ключ никуда не делась"
     assert len(await list_tasks(limit=200)) == before      # задача не заведена
+
+    queued = [j for j in await pq.jobs() if j["kind"] == "ai_task"]
+    assert queued, "вопрос пропал: ни модели, ни очереди"
 
 
 @pytest.mark.asyncio

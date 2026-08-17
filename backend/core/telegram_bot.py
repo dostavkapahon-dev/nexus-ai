@@ -33,6 +33,10 @@ async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
     """
     from publishers.telegram_pub import TEXT_LIMIT, fit
 
+    # Пустой текст Telegram отвергает («message text is empty»), и для человека
+    # это выглядит как молчание бота. Лучше честная строка, чем ничего.
+    if not (text or "").strip():
+        text = "🤔 Ответ получился пустым. Повторите запрос другими словами или /help."
     body, cut = fit(text, TEXT_LIMIT)
     try:
         payload = {
@@ -73,19 +77,38 @@ async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
 
 
 def _main_menu_kb() -> dict:
-    """Инлайн-кнопки пульта управления."""
+    """Главное меню. Восемь кнопок вместо россыпи: по ТЗ человек управляет
+    результатом, а не выбирает, какую из четырнадцати команд нажать. Остальные
+    команды продолжают работать текстом — просто не занимают экран."""
     return {"inline_keyboard": [
+        [{"text": "✍️ СОЗДАТЬ", "callback_data": "create"}],
         [{"text": "📊 Статус", "callback_data": "status"},
-         {"text": "📋 План", "callback_data": "plan"}],
-        [{"text": "✍️ Создать", "callback_data": "create"},
-         {"text": "📤 Опубликовать", "callback_data": "publish"}],
-        [{"text": "🚀 Автопилот (полный цикл)", "callback_data": "auto"}],
+         {"text": "📋 Контент", "callback_data": "queue"}],
         [{"text": "🧠 Стратегия", "callback_data": "strategy"},
          {"text": "📈 Тренды", "callback_data": "trend"}],
-        [{"text": "🏭 Фабрика (превью)", "callback_data": "factory"}],
-        [{"text": "⏸ Пауза", "callback_data": "pause"},
-         {"text": "▶️ Возобновить", "callback_data": "resume"}],
-        [{"text": "⚙️ Настройки", "callback_data": "config"}],
+        [{"text": "📤 Публикация", "callback_data": "publish"},
+         {"text": "⚙️ Настройки", "callback_data": "config"}],
+    ]}
+
+
+def _create_kb() -> dict:
+    """Шаг 1 сценария CREATE: что именно создаём."""
+    return {"inline_keyboard": [
+        [{"text": "🎬 Видео", "callback_data": "mk_video"},
+         {"text": "🖼 Изображение", "callback_data": "mk_image"}],
+        [{"text": "📝 Пост", "callback_data": "mk_post"},
+         {"text": "🎠 Карусель", "callback_data": "mk_carousel"}],
+        [{"text": "📅 Контент-план", "callback_data": "mk_plan"}],
+    ]}
+
+
+def _platform_kb(kind: str) -> dict:
+    """Шаг 2: для какой площадки."""
+    return {"inline_keyboard": [
+        [{"text": "Instagram", "callback_data": f"pf_{kind}_instagram"},
+         {"text": "TikTok", "callback_data": f"pf_{kind}_tiktok"}],
+        [{"text": "Telegram", "callback_data": f"pf_{kind}_telegram"},
+         {"text": "YouTube", "callback_data": f"pf_{kind}_youtube"}],
     ]}
 
 
@@ -145,6 +168,10 @@ async def _handle_command(chat_id: str, text: str):
         pass
     token = _in_command.set(True)
     try:
+        # Ответа ждёт человек в чате: не ответит ни одна своя модель — вопрос
+        # уйдёт Клоду, а не потеряется.
+        from core import ai_escrow
+        ai_escrow.interactive(source="telegram", chat_id=chat_id)
         await _dispatch_command(chat_id, text)
     except Exception as e:
         import traceback
@@ -681,6 +708,10 @@ async def _dispatch_command(chat_id: str, text: str):
         return
 
     if cmd == "diag":
+        # Первым делом — главный вопрос: сможем ли мы сейчас создать контент.
+        from core import preflight
+        await send_message(chat_id, preflight.as_text(await preflight.check("video")))
+
         def yn(v):
             return "✅" if v else "❌"
         ai_keys = {
@@ -863,6 +894,12 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd == "status":
         async with AsyncSessionLocal() as db:
             report = await reporter.build_status_report(db)
+        # Про временное хранилище говорим в каждом отчёте: это единственная
+        # поломка, которая тихо стирает всё остальное.
+        from database.db import storage_info
+        st = storage_info()
+        if not st["persistent"]:
+            report += f"\n\n⚠️ <b>Данные временные.</b> {st['warning']}"
         await send_message(chat_id, report)
 
     elif cmd == "analyze":
@@ -895,15 +932,48 @@ async def _dispatch_command(chat_id: str, text: str):
                     "\n\nНи одной ниши пока не заведено — создайте её в дашборде."
                 await send_message(chat_id, f"❌ Ниша «{query}» не найдена.{have}")
 
+    elif cmd == "create" and not args:
+        # Главная команда системы: человек говорит, ЧТО он хочет, остальное
+        # решает система. Раньше «Создать» сразу лезло в контент-план и упиралось
+        # в «запусти /analyze».
+        await send_message(chat_id, "✍️ <b>Что создать?</b>", reply_markup=_create_kb())
+
+    elif cmd.startswith("mk_"):
+        kind = cmd[3:]
+        if kind == "plan":
+            await _dispatch_command(chat_id, "/plan7")
+            return
+        await send_message(chat_id, "📱 <b>Для какой площадки?</b>",
+                           reply_markup=_platform_kb(kind))
+
+    elif cmd.startswith("pf_"):
+        # pf_<вид>_<площадка> — вид и площадка выбраны, осталась тема.
+        parts = cmd.split("_")
+        kind, platform = (parts + ["video", "instagram"])[1:3]
+        from core import dialog
+        await dialog.expect(chat_id, dialog.AWAIT_TOPIC,
+                            {"kind": kind, "platform": platform})
+        titles = {"video": "ролика", "image": "изображения", "post": "поста",
+                  "carousel": "карусели"}
+        await send_message(chat_id,
+                           f"🎯 <b>О чём {titles.get(kind, 'контент')}?</b>\n"
+                           f"Напишите тему одной строкой — или ответьте "
+                           f"«по трендам», и я выберу сам.")
+
     elif cmd == "create":
-        await send_message(chat_id, "✍️ Создаю контент для всех активных ниш...")
+        await send_message(chat_id, "✍️ Создаю контент...")
         async with AsyncSessionLocal() as db:
             result = await db.execute(
                 select(ContentPlan).where(ContentPlan.status == "pending").limit(3)
             )
             plans = result.scalars().all()
             if not plans:
-                await send_message(chat_id, "❗ Нет запланированного контента. Запусти /analyze сначала.")
+                # Пустой контент-план — не повод отказывать: конвейер умеет
+                # придумать тему сам. Раньше здесь был тупик «запусти /analyze».
+                await send_message(chat_id,
+                                   "📋 Запланированных постов нет — запускаю фабрику: "
+                                   "тема, сценарий, кадры, монтаж.")
+                await _dispatch_command(chat_id, "/factory " + " ".join(args))
                 return
             for plan in plans:
                 from core.task_manager import spawn
@@ -1029,17 +1099,42 @@ async def _dispatch_command(chat_id: str, text: str):
                     source="telegram", ref_id=args[0])
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
-    elif cmd in ("factory", "reel"):
-        # Полный цикл: анализ → генерация → публикация. Без аргумента — dry-run.
+    elif cmd in ("factory", "reel", "create_reel"):
+        # Полный цикл: анализ → генерация → монтаж → согласование в Telegram.
+        # Раньше без аргументов запускался dry-run: конвейер отрабатывал, но шаг
+        # согласования пропускался, и ролик не приходил никуда — выглядело как
+        # «ничего не создалось».
         from core.content_factory import run_factory
-        topic = " ".join(args) if args else None
-        publish = bool(args) and args[-1].lower() in ("post", "publish", "go")
-        if publish:
-            topic = " ".join(args[:-1]) or None
-        await send_message(chat_id, f"🏭 Фабрика контента запущена{' (публикация)' if publish else ' (превью)'}...")
+        from core import dialog
+
+        rest = list(args)
+        preview = bool(rest) and rest[-1].lower() in ("превью", "preview", "dry")
+        if preview:
+            rest = rest[:-1]
+        if rest and rest[-1].lower() in ("post", "publish", "go"):
+            rest = rest[:-1]
+        topic = " ".join(rest).strip() or None
+        auto = topic and topic.lower() in ("авто", "auto")
+        if auto:
+            topic = None
+
+        if not topic and not preview and not auto:
+            # Один вопрос вместо рассказа о том, как всё будет сделано.
+            await dialog.expect(chat_id, dialog.AWAIT_TOPIC)
+            await send_message(chat_id,
+                               "🎬 Делаю ролик. <b>Какая тема?</b>\n"
+                               "Напишите тему одной строкой — или ответьте "
+                               "«по трендам», и я выберу сам.")
+            return
+
         from core.task_manager import spawn
-        await spawn("factory", f"Фабрика: {topic or 'тема по трендам'}",
-                    lambda: run_factory(topic=topic, dry_run=not publish), source="telegram")
+        from core import task_feed
+        goal = f"Фабрика: {topic or 'тема по трендам'}"
+        task_id = await spawn("factory", goal,
+                              lambda: run_factory(topic=topic, dry_run=preview),
+                              source="telegram")
+        # Одно живое сообщение вместо тишины на минуты: шаги дописываются в него.
+        await task_feed.start(task_id, chat_id, goal)
 
     elif cmd.startswith("set_goal"):
         # Раньше команда рапортовала об установке цели, ничего не сохраняя.
@@ -1153,7 +1248,67 @@ async def _handle_media(chat_id: str, msg: dict):
         await send_message(chat_id, f"💾 Сохранил как референс. Разбор не удался: {str(e)[:120]}")
 
 
+async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
+    """Запускает создание выбранного вида контента и показывает живой статус.
+
+    Один вход для всех форматов: человек выбрал «что» и «где», тему назвал —
+    дальше система сама решает, чем и как это делать.
+    """
+    from core.content_factory import run_factory
+    from core.task_manager import spawn
+    from core import task_feed, preflight
+
+    # Сначала — сможем ли мы это сделать. «Запускаю» при пустых ключах означало
+    # тишину на месте результата: человек ждал ролик, которого не будет.
+    gate = await preflight.check(kind)
+    if not gate["ok"]:
+        await send_message(chat_id, preflight.as_text(gate))
+        return
+    if gate["warnings"]:
+        await send_message(chat_id, preflight.as_text({"warnings": gate["warnings"]}))
+
+    real_topic = None if topic.lower() in ("авто", "auto", "") else topic
+    platforms = [platform] if platform else None
+    want_video = kind == "video"
+    content_type = {"video": "auto", "image": "photo", "post": "post",
+                    "carousel": "carousel"}.get(kind, "auto")
+
+    titles = {"video": "Ролик", "image": "Изображение", "post": "Пост",
+              "carousel": "Карусель"}
+    goal = f"{titles.get(kind, 'Контент')}: {real_topic or 'тема по трендам'}"
+
+    await send_message(chat_id,
+                       f"🎬 <b>План готов</b>\n"
+                       f"{titles.get(kind, 'Контент')} · {platform or 'все площадки'} · "
+                       f"{real_topic or 'тема по трендам'}\n"
+                       f"Запускаю. Готовое пришлю на согласование.")
+
+    task_id = await spawn(kind if kind != "video" else "factory", goal,
+                          lambda: run_factory(topic=real_topic, platforms=platforms,
+                                              dry_run=False, want_video=want_video,
+                                              content_type=content_type),
+                          source="telegram")
+    await task_feed.start(task_id, chat_id, goal)
+
+
 async def _handle_plain_text(chat_id: str, text: str):
+    """Неубиваемая обёртка: ошибка разбора текста уходит в чат, а не в тишину.
+
+    Обработчик запускается фоновой задачей, и раньше исключение в ней просто
+    гасло: человек писал сообщение и не получал вообще ничего.
+    """
+    try:
+        from core import ai_escrow
+        ai_escrow.interactive(source="telegram", chat_id=chat_id)
+        await _plain_text(chat_id, text)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        await send_message(chat_id, f"⚠️ Не смог обработать сообщение: {str(e)[:200]}\n"
+                                    f"Попробуйте иначе или /help.")
+
+
+async def _plain_text(chat_id: str, text: str):
     """Обычное сообщение: ответ на вопрос автопилота или правки к контенту."""
     from core import autopilot as ap
 
@@ -1189,6 +1344,25 @@ async def _handle_plain_text(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines)[:4000], reply_markup=kb)
         return
 
+    from core import dialog
+    await dialog.remember(chat_id, "user", text)
+
+    # 1б) Ждём тему ролика — следующее сообщение и есть тема. Без этого «ИИ ролик»
+    # → «какая тема?» → ответ уходил в общий разбор и терялся.
+    if await dialog.awaiting(chat_id) == dialog.AWAIT_TOPIC:
+        ctx = await dialog.pending(chat_id)
+        await dialog.expect(chat_id, "")
+        # «авто» — служебное слово: тему выберет сам конвейер, спрашивать
+        # второй раз нельзя, иначе разговор зациклится.
+        topic = "авто" if text.strip().lower() in (
+            "сам", "сама", "сам придумай", "по трендам", "любая", "на твой выбор",
+            "не знаю", "давай", "напиши", "1") else text.strip()
+        if ctx.get("kind"):
+            await _start_creation(chat_id, ctx["kind"], ctx.get("platform", ""), topic)
+        else:
+            await _handle_command(chat_id, f"/factory {topic}")
+        return
+
     # 2) Правки к контенту на согласовании.
     from core import moderation
     async with AsyncSessionLocal() as db:
@@ -1196,12 +1370,14 @@ async def _handle_plain_text(chat_id: str, text: str):
     if not pid:
         # 3) Свободный текст: понимаем намерение и выполняем нужное действие.
         from core import intent
-        cmd = await intent.route(text)
+        hist = await dialog.history(chat_id)
+        cmd = await intent.route(text, hist)
         if cmd and cmd != "/chat":
             await send_message(chat_id, f"🤖 Понял: <code>{cmd[:80]}</code>")
             await _handle_command(chat_id, cmd)
             return
-        reply = await intent.chat_reply(text)
+        reply = await intent.chat_reply(text, hist)
+        await dialog.remember(chat_id, "agent", reply)
         await send_message(chat_id, reply)
         try:
             from core.command_center import log_event

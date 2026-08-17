@@ -67,6 +67,20 @@ export default function Home() {
         <p className="text-sm text-[#5a5a7a]">Общий статус системы</p>
       </div>
 
+      {/* Без постоянной базы всё, что вводится в интерфейсе, исчезнет при
+          следующем деплое. Молчать об этом — значит показывать настройки,
+          которые не переживут ночь. */}
+      {data.storage && !data.storage.persistent && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+          <div className="text-sm font-medium text-amber-300">
+            ⚠️ Постоянная база не подключена
+          </div>
+          <p className="text-xs text-[#c0c0e0] mt-1.5 leading-relaxed">
+            {data.storage.warning}
+          </p>
+        </div>
+      )}
+
       <div className="grid md:grid-cols-2 gap-4">
         <Card title="Система">
           <div className="flex items-center gap-2 text-sm">

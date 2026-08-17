@@ -140,6 +140,14 @@ async def overview() -> dict:
     else:
         verdict = "ok"
 
+    # Временное хранилище — не жёлтая лампочка на всякий случай, а обещание
+    # потерять ключи и память при следующем деплое. Зелёным система с ним быть
+    # не может.
+    from database.db import storage_info
+    store = storage_info()
+    if not store["persistent"] and verdict == "ok":
+        verdict = "degraded"
+
     from core.ai_router import available_providers
     providers = available_providers()
 
@@ -149,6 +157,7 @@ async def overview() -> dict:
         # видно сразу, доступна ли генерация или только прямые команды.
         "ai": {"available": bool(providers), "providers": providers,
                "mode": "full" if providers else "control_only"},
+        "storage": store,
         "agents": ag,
         "social": await social(),
         "scheduler": scheduler_jobs(),

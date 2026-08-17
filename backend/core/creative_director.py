@@ -72,11 +72,19 @@ async def build_brief(analysis: dict) -> dict:
         s, e = raw.find("{"), raw.rfind("}") + 1
         return json.loads(raw[s:e])
     except Exception as e:
-        return {"title": analysis.get("theme", "Reel"), "duration_sec": 20, "storyboard": [],
-                "cover_prompt": analysis.get("image_prompt", "dark cinematic AI poster"),
+        # Без модели раскадровка раньше выходила пустой, а пустая раскадровка —
+        # это ноль кадров и ноль видео. Берём каркас из офлайн-заготовки: он
+        # хотя бы построен вокруг заданной темы.
+        from core.offline_content import draft
+        d = draft(analysis.get("theme") or "ваша тема")
+        return {"title": d["theme"], "duration_sec": 15,
+                "storyboard": d["storyboard"],
+                "cover_prompt": analysis.get("image_prompt") or d["cover_prompt"],
                 "video_motion_prompt": "slow cinematic zoom, dynamic camera",
-                "avatar_script": analysis.get("avatar_script", ""), "voice_mood": "energetic",
-                "_error": f"Нет AI для ТЗ: {str(e)[:100]}"}
+                "avatar_script": analysis.get("avatar_script") or d["caption"],
+                "voice_mood": "energetic", "_offline": True,
+                "_error": f"Модель для ТЗ недоступна ({str(e)[:80]}). "
+                          f"Раскадровка собрана по шаблону."}
 
 
 def choose_strategy(content_type: str = "auto") -> dict:

@@ -86,6 +86,14 @@ async def add_step(task_id: str, action: str, ok: bool = True,
     except Exception:
         pass
 
+    # Если за задачей следит чат — обновляем то же сообщение, а не шлём новое.
+    try:
+        from core import task_feed
+        if task_feed.watching(task_id):
+            await task_feed._redraw(task_id)
+    except Exception:
+        pass
+
 
 async def add_cost(task_id: str, model: str = "", tokens: int = 0, cost: float = 0.0):
     """Накопление расхода по задаче (основа для BLOCK 02 — Cost Control)."""
@@ -137,6 +145,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                          duration_sec=round((finished - started).total_seconds(), 2),
                          result=_safe_result(result), error=None)
             current_task_id.reset(token)
+            await _finish_feed(task_id, ok=True)
             await _report(task_id)
             return {"ok": True, "task_id": task_id, "result": result}
         except Exception as e:
@@ -151,8 +160,20 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                  duration_sec=round((finished - started).total_seconds(), 2),
                  error=last_error[:2000])
     current_task_id.reset(token)
+    from core.errors import human
+    await _finish_feed(task_id, ok=False, note=human(last_error))
     await _report(task_id)
     return {"ok": False, "task_id": task_id, "error": last_error}
+
+
+async def _finish_feed(task_id: str, ok: bool, note: str = ""):
+    """Закрывает живой статус задачи в чате, если он был открыт."""
+    try:
+        from core import task_feed
+        if task_feed.watching(task_id):
+            await task_feed.finish(task_id, ok, note)
+    except Exception:
+        pass
 
 
 async def _report(task_id: str):
@@ -214,6 +235,50 @@ async def recover_stuck() -> int:
     except Exception:
         pass
     return n
+
+
+async def watchdog() -> dict:
+    """Ищет задачи, которые перестали подавать признаки жизни.
+
+    `recover_stuck` работает только при старте, поэтому зависший worker висел до
+    следующего перезапуска сервиса, а человек ждал результат, которого уже не
+    будет. Сторож ходит по расписанию: задача в RUNNING дольше таймаута и без
+    новых шагов — считается потерянной, помечается FAILED с понятной причиной, а
+    владелец получает сообщение. «Вечных» задач быть не должно.
+    """
+    from core.errors import human
+
+    cutoff = datetime.utcnow() - timedelta(minutes=STUCK_AFTER_MIN)
+    stuck = []
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Task).where(Task.status == RUNNING))
+        for t in r.scalars():
+            steps = t.steps or []
+            last = t.started_at or t.created_at
+            if steps:
+                # Шаги пишутся со временем — живая задача обновляет его.
+                try:
+                    stamp = steps[-1].get("ts")
+                    if stamp:
+                        last = datetime.fromisoformat(stamp)
+                except Exception:
+                    pass
+            if last and last <= cutoff:
+                t.status = FAILED
+                t.error = f"Задача зависла: нет продвижения дольше {STUCK_AFTER_MIN} мин."
+                t.finished_at = datetime.utcnow()
+                stuck.append({"id": t.id, "kind": t.kind, "goal": t.goal})
+        await db.commit()
+
+    for s in stuck:
+        try:
+            from core.notify import notify_owner
+            await notify_owner(
+                f"⏱ Задача «{s['goal'] or s['kind']}» остановлена: "
+                f"{human('timeout')}\nМожно запустить заново — /tasks")
+        except Exception:
+            pass
+    return {"stuck": len(stuck), "tasks": stuck}
 
 
 async def get(task_id: str) -> dict | None:
