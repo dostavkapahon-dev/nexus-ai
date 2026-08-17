@@ -105,7 +105,7 @@ async def test_create_tells_about_limits_before_starting(client, monkeypatch):
         sent.append("SPAWNED")
         return "t1"
 
-    async def fake_feed(task_id, chat_id, title):
+    async def fake_feed(task_id, chat_id, title, kind="video"):
         return None
 
     monkeypatch.setattr(tb, "send_message", fake_send)

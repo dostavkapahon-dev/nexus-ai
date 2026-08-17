@@ -120,13 +120,19 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
             if not ai_available():
                 # Своих моделей нет — задачу ведёт Клод, а не отказ в ответ.
                 from core import ai_escrow
-                reply = await ai_escrow.ask(
-                    "Ты — дирижёр SMM-системы NEXUS AI. Выполни задачу владельца.",
-                    text, role="director", errors="нет ни одного ключа ИИ")
+                try:
+                    reply = await ai_escrow.ask(
+                        "Ты — дирижёр SMM-системы NEXUS AI. Выполни задачу владельца.",
+                        text, role="director", errors="нет ни одного ключа ИИ")
+                    reason = "escrow_claude"
+                except Exception:
+                    # Ручной режим выключен — не зовём человека, объясняем прямо.
+                    from core.intent import NO_AI_REPLY
+                    reply, reason = NO_AI_REPLY, "no_ai_provider"
                 reply = f"{reply}\n\n{FREE_SIGNUP_HINT}"
                 await log_event(source, "agent", reply)
                 return {"ok": True, "reply": reply, "cmd": cmd, "steps": [],
-                        "reason": "escrow_claude"}
+                        "reason": reason}
 
             # Всё остальное ведёт мозг-дирижёр (Claude → инструменты) под задачей,
             # чтобы запуск было видно в /api/tasks и он не пропал при сбое.

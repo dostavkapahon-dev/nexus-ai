@@ -25,7 +25,7 @@ def bot(monkeypatch):
         spawned.append({"kind": kind, "goal": goal, "fn": fn})
         return "task-1"
 
-    async def fake_start(task_id, chat_id, title):
+    async def fake_start(task_id, chat_id, title, kind="video"):
         spawned.append({"feed": title})
 
     monkeypatch.setattr(tb, "send_message", fake_send)

@@ -39,8 +39,12 @@ async def pre_check(agent: str, task: str, context: str = "", model: str = None)
     model = model or ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash")
     prompt = CHECK_TEMPLATE.format(agent=agent, task=task[:1500],
                                    context=(context or "нет")[:3000])
+    from core import ai_escrow
     try:
-        res = await ai_router.call(model, CHECK_SYSTEM, prompt)
+        # Самопроверка — служебный шаг: если моделей нет, её надо пропустить,
+        # а не отправлять человеку на ручную пересылку.
+        with ai_escrow.suppressed():
+            res = await ai_router.call(model, CHECK_SYSTEM, prompt)
         text = res.get("text", "")
         s, e = text.find("{"), text.rfind("}") + 1
         data = json.loads(text[s:e])

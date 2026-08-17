@@ -21,10 +21,18 @@ from core.task_manager import add_step, CREATED, RUNNING, WAITING, COMPLETED, FA
 # Ожидаемые шаги конвейера — по ним считается «3 из 7». Список неточен для любой
 # задачи, поэтому знаменателем берём максимум из плана и факта: показать «8/7»
 # хуже, чем показать честное «8/8».
-PLAN = ["Анализ задачи", "Исследование", "Сценарий", "Промпты",
-        "Генерация", "Проверка", "Готовый результат"]
+PLANS = {
+    "video": ["Анализ задачи", "Исследование", "Сценарий", "Промпты",
+              "Генерация", "Проверка", "Готовый результат"],
+    "image": ["Анализ задачи", "Промпт", "Генерация", "Готовый результат"],
+    "post": ["Анализ задачи", "Текст", "Готовый результат"],
+    "carousel": ["Анализ задачи", "Структура", "Промпты", "Генерация",
+                 "Готовый результат"],
+}
+PLAN = PLANS["video"]                            # запасной вариант
 
 _messages: dict[str, tuple[str, int]] = {}      # task_id → (chat_id, message_id)
+_plans: dict[str, list] = {}                    # task_id → ожидаемые шаги
 
 HEAD = {CREATED: "🕓", RUNNING: "⚙️", WAITING: "⏸", COMPLETED: "✅", FAILED: "⚠️"}
 
@@ -33,11 +41,17 @@ def _url(method: str) -> str:
     return f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN', '')}/{method}"
 
 
-async def start(task_id: str, chat_id: str, title: str) -> None:
-    """Первое сообщение задачи. Дальше оно только редактируется."""
+async def start(task_id: str, chat_id: str, title: str, kind: str = "video") -> None:
+    """Первое сообщение задачи. Дальше оно только редактируется.
+
+    Шкала берётся под вид контента: у изображения четыре шага, и показывать
+    «1/7» — значит обещать шесть этапов, которых не будет.
+    """
     if not chat_id or not os.getenv("TELEGRAM_BOT_TOKEN"):
         return
-    text = f"⚙️ <b>{title}</b>\n⏳ 1/{len(PLAN)} {PLAN[0]}"
+    plan = PLANS.get(kind, PLAN)
+    _plans[task_id] = plan
+    text = f"⚙️ <b>{title}</b>\n⏳ 1/{len(plan)} {plan[0]}"
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.post(_url("sendMessage"),
@@ -59,6 +73,7 @@ async def step(task_id: str, action: str, ok: bool = True, error: str = "") -> N
 async def finish(task_id: str, ok: bool, note: str = "") -> None:
     await _redraw(task_id, final=(COMPLETED if ok else FAILED), note=note)
     _messages.pop(task_id, None)
+    _plans.pop(task_id, None)
 
 
 async def _redraw(task_id: str, final: str = "", note: str = "") -> None:
@@ -72,8 +87,9 @@ async def _redraw(task_id: str, final: str = "", note: str = "") -> None:
     if not task:
         return
 
+    plan = _plans.get(task_id, PLAN)
     steps = task.get("steps") or []
-    total = max(len(PLAN), len(steps))
+    total = max(len(plan), len(steps))
     lines = [f"{HEAD.get(final or task.get('status'), '⚙️')} "
              f"<b>{task.get('goal') or task.get('kind')}</b>"]
 
@@ -86,7 +102,7 @@ async def _redraw(task_id: str, final: str = "", note: str = "") -> None:
         lines.append(line)
 
     if not final and len(steps) < total:
-        lines.append(f"⏳ {len(steps) + 1}/{total} {PLAN[min(len(steps), len(PLAN) - 1)]}")
+        lines.append(f"⏳ {len(steps) + 1}/{total} {plan[min(len(steps), len(plan) - 1)]}")
     if note:
         lines.append(f"\n{note}")
 

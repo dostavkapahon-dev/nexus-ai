@@ -14,8 +14,16 @@ def no_backoff(monkeypatch):
 
 @pytest.fixture
 def router(monkeypatch):
+    """Роутер с ключами у всех провайдеров.
+
+    Ключи нужны именно здесь: система намеренно не обращается к провайдерам, у
+    которых ключа нет, — иначе каждый вызов без ключей превращался в минуты
+    ожидания в пустоту. Порядок фолбэка проверяется на системе, где обращаться
+    есть к кому.
+    """
     for env in ar.PROVIDER_KEY_ENV.values():
-        monkeypatch.delenv(env, raising=False)
+        if env:
+            monkeypatch.setenv(env, "test-key")
     monkeypatch.setattr(ar, "_GEMINI_RESOLVED", None)
     return ar.AIRouter()
 
@@ -95,6 +103,9 @@ async def test_all_providers_failed_message_lists_each_error(router, monkeypatch
 
 
 async def test_models_without_key_are_skipped(router, monkeypatch):
+    for env in ar.PROVIDER_KEY_ENV.values():
+        if env:
+            monkeypatch.delenv(env, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     seen = _stub_calls(monkeypatch, {"gemini-2.0-flash-lite": "ok"})
     await router.call("gpt-4o", "sys", "hi")

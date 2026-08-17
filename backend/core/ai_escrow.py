@@ -14,6 +14,7 @@
   * одинаковый вопрос не ставится в очередь дважды в течение часа.
 """
 import hashlib
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 
@@ -38,6 +39,63 @@ def reset():
     _where.set({})
 
 
+@contextmanager
+def suppressed():
+    """Служебный вызов внутри запроса человека: его в очередь отдавать нельзя.
+
+    Самопроверки, выбор формата, разметка — вещи на секунду работы модели. Гнать
+    такое через ручную пересылку бессмысленно: человек потратит минуты на то, что
+    конвейер должен пропустить и пойти дальше.
+    """
+    was, where = _interactive.get(), _where.get()
+    _interactive.set(False)
+    try:
+        yield
+    finally:
+        _interactive.set(was)
+        _where.set(where)
+
+
+SETTING = "claude_escrow"          # хранится там же, где прочие настройки
+
+
+async def enabled() -> bool:
+    """Включена ли ручная пересылка вопросов Клоду.
+
+    По умолчанию — нет. Система должна доводить работу до конца сама: нет
+    моделей — собирает заготовку и идёт дальше. Просить человека пересылать
+    служебные вопросы в чат и вставлять ответы формой — это ровно та ручная
+    работа, ради избавления от которой система и делалась.
+    """
+    from sqlalchemy import select
+
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == SETTING))
+        row = r.scalar_one_or_none()
+    return bool(row and (row.key_value or "").strip() == "on")
+
+
+async def set_enabled(on: bool) -> dict:
+    from sqlalchemy import select
+
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == SETTING))
+        row = r.scalar_one_or_none()
+        value = "on" if on else "off"
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=SETTING, key_value=value))
+        await db.commit()
+    return {"ok": True, "escrow": value}
+
+
 def wanted() -> bool:
     return bool(_interactive.get())
 
@@ -55,6 +113,11 @@ WAIT_TEXT = (
 async def ask(system: str, prompt: str, role: str = "", errors: str = "") -> str:
     """Кладёт запрос в очередь для Клода. Возвращает текст для того, кто ждёт."""
     from core import production_queue as pq
+
+    if not await enabled():
+        # Ручной режим выключен: возвращаем отказ, и вызывающий код идёт своим
+        # запасным путём (заготовка по шаблону), не трогая человека.
+        raise RuntimeError("Нет ни одной модели ИИ, ручная передача Клоду выключена.")
 
     place = _where.get() or {}
     digest = _digest(system, prompt)

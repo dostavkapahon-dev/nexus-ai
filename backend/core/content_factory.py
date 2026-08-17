@@ -158,6 +158,11 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
     platforms = platforms or DEFAULT_PLATFORMS
     report = {"steps": [], "assets": {}, "published": {}, "dry_run": dry_run}
 
+    # Отметка «начали» до всей долгой части: иначе живой статус стоит на первом
+    # шаге всё время анализа, и это неотличимо от зависания.
+    report["steps"].append({"step": "Анализ задачи", "ok": True})
+    await _flush_steps(report)
+
     # 0. Рецепт вируса из разведки (/viral) — подмешиваем в тему, если есть.
     try:
         from core.viral_research import get_recipe

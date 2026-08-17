@@ -16,6 +16,14 @@ from database.models import ProductionJob
 
 
 @pytest_asyncio.fixture(autouse=True)
+async def _relay_on(client):
+    """Ручная передача выключена по умолчанию — здесь проверяется именно она."""
+    await ai_escrow.set_enabled(True)
+    yield
+    await ai_escrow.set_enabled(False)
+
+
+@pytest_asyncio.fixture(autouse=True)
 async def _clean(client):
     async def wipe():
         async with AsyncSessionLocal() as db:
@@ -47,6 +55,17 @@ async def test_failed_call_goes_to_claude_instead_of_raising(client, monkeypatch
     told = []
     monkeypatch.setattr("core.notify.notify_owner",
                         lambda text: told.append(text) or _true())
+
+    # Ключ есть, но провайдер отказал — вот когда очередь к Клоду и нужна.
+    # Полное отсутствие ключей ведёт себя иначе: в сеть не идём вовсе.
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    async def refuse(*a, **kw):
+        raise RuntimeError("503 service unavailable")
+
+    monkeypatch.setattr(ai_router, "_call_gemini", refuse)
+    monkeypatch.setattr("core.ai_router.FALLBACK_CHAIN", ["gemini-2.0-flash"])
+    monkeypatch.setattr("asyncio.sleep", lambda *_: _true())
 
     ai_escrow.interactive(source="telegram", chat_id="42")
     res = await ai_router.call("gemini-2.0-flash", "система", "сделай контент-план")

@@ -53,10 +53,122 @@ function Row({ item, onRecheck, onDelete, busy }) {
   )
 }
 
+// Подключение к Клоду одним действием: ключ проверяется живым вызовом, и только
+// после этого сохраняется. Иначе неверный ключ обнаружится при первой генерации,
+// а выглядеть это будет как «система не работает».
+function ClaudeCard({ onDone }) {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const connect = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const { data } = await connections.connectClaude(key)
+      setMsg(data)
+      if (data.ok) { setKey(''); onDone() }
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="bg-[#0d0d1c] border border-violet-500/25 rounded-xl p-4 space-y-2">
+      <div className="text-sm font-medium">🧠 Подключить Клода — один раз</div>
+      <p className="text-xs text-[#5a5a7a]">
+        После подключения система обращается к Клоду сама: пересылать задания
+        вручную больше не нужно. Ключ берётся в console.anthropic.com.
+      </p>
+      <div className="flex gap-2">
+        <input type="password" value={key} onChange={e => setKey(e.target.value)}
+          placeholder="sk-ant-…"
+          className="flex-1 bg-[#09091a] border border-[#1c1c30] rounded-lg px-3 py-2 text-xs
+                     text-[#c0c0e0] placeholder-[#4a4a68] focus:outline-none focus:border-violet-500/40" />
+        <button onClick={connect} disabled={busy || !key}
+          className="px-3 py-2 rounded-lg text-xs bg-violet-600/20 border border-violet-500/30
+                     text-violet-200 hover:bg-violet-600/30 disabled:opacity-40">
+          {busy ? 'Проверяю…' : 'Проверить и подключить'}
+        </button>
+      </div>
+      {msg && (
+        <div className={`text-xs ${msg.ok ? 'text-emerald-300' : 'text-red-300'}`}>
+          {msg.message || msg.error}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Копия доступов одним файлом. Пока в Render не подключена постоянная база,
+// это разница между «восстановил за минуту» и «ввожу пятнадцать полей заново».
+function BackupCard() {
+  const [password, setPassword] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+
+  const download = async () => {
+    setBusy(true); setMsg(null)
+    try {
+      const { data } = await connections.backup(password)
+      if (!data.ok) { setMsg({ ok: false, text: data.error }); return }
+      const blob = new Blob([JSON.stringify(data.file)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `nexus-keys-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      setMsg({ ok: true, text: `Сохранено ключей: ${data.count}. Храните файл и пароль отдельно.` })
+    } finally { setBusy(false) }
+  }
+
+  const restore = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setBusy(true); setMsg(null)
+    try {
+      const parsed = JSON.parse(await file.text())
+      const { data } = await connections.restore(parsed, password)
+      setMsg({ ok: data.ok, text: data.ok ? `Восстановлено ключей: ${data.restored}` : data.error })
+      if (data.ok) window.location.reload()
+    } catch {
+      setMsg({ ok: false, text: 'Не удалось прочитать файл копии.' })
+    } finally { setBusy(false); e.target.value = '' }
+  }
+
+  return (
+    <div className="bg-[#0d0d1c] border border-[#1c1c30] rounded-xl p-4 space-y-2">
+      <div className="text-sm font-medium">💾 Копия ключей одним файлом</div>
+      <p className="text-xs text-[#5a5a7a]">
+        Файл шифруется отдельным паролем — не тем, что на сервере. Потеряете
+        пароль — копию открыть нельзя, так и задумано.
+      </p>
+      <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+        placeholder="пароль копии (от 8 символов)"
+        className="w-full bg-[#09091a] border border-[#1c1c30] rounded-lg px-3 py-2 text-xs
+                   text-[#c0c0e0] placeholder-[#4a4a68] focus:outline-none focus:border-violet-500/40" />
+      <div className="flex gap-2 items-center">
+        <button onClick={download} disabled={busy || password.length < 8}
+          className="px-3 py-2 rounded-lg text-xs border border-[#1c1c30] text-[#c0c0e0]
+                     hover:border-violet-500/40 disabled:opacity-40">
+          Скачать копию
+        </button>
+        <label className={`px-3 py-2 rounded-lg text-xs border border-[#1c1c30] cursor-pointer
+                          hover:border-violet-500/40 ${password.length < 8 ? 'opacity-40 pointer-events-none' : ''}`}>
+          Восстановить из файла
+          <input type="file" accept="application/json" onChange={restore} className="hidden" />
+        </label>
+      </div>
+      {msg && (
+        <div className={`text-xs ${msg.ok ? 'text-emerald-300' : 'text-red-300'}`}>{msg.text}</div>
+      )}
+    </div>
+  )
+}
+
 export default function Credentials() {
   const [data, setData] = useState(null)
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
+  const [persistence, setPersistence] = useState(null)
 
   const load = async () => {
     const { data } = await connections.status()
@@ -70,6 +182,14 @@ export default function Credentials() {
       const { data } = await connections.recheck(item.key)
       setNote(`${item.label}: ${data.message || (data.ok ? 'ок' : 'не прошло')}`)
       await load()
+    } finally { setBusy('') }
+  }
+
+  const verify = async () => {
+    setBusy('verify')
+    try {
+      const { data } = await connections.verify()
+      setPersistence(data)
     } finally { setBusy('') }
   }
 
@@ -117,6 +237,33 @@ export default function Credentials() {
             : data.storage.hint}
         </div>
       </div>
+
+      {/* Главный вопрос владельца — «почему я ввожу ключи каждый раз». Ответ
+          должен стоять здесь же, рядом с полями ввода. */}
+      <div className="bg-[#0d0d1c] border border-[#1c1c30] rounded-xl p-4 space-y-2">
+        <div className="text-sm font-medium">🗄 Сохранность ключей</div>
+        <button onClick={verify} disabled={busy === 'verify'}
+          className="px-3 py-2 rounded-lg text-xs border border-[#1c1c30] text-[#c0c0e0]
+                     hover:border-violet-500/40 disabled:opacity-40">
+          {busy === 'verify' ? 'Проверяю…' : 'Проверить сохранность'}
+        </button>
+        {persistence && (
+          <div className={`text-xs ${persistence.persistent ? 'text-emerald-300' : 'text-amber-300'}`}>
+            {persistence.verdict}
+          </div>
+        )}
+        {persistence && !persistence.persistent && (
+          <ol className="text-[11px] text-[#8a8ab0] list-decimal ml-4 space-y-1">
+            <li>Заведите бесплатную базу на supabase.com и скопируйте строку подключения.</li>
+            <li>Render → ваш сервис → Environment → добавьте <code>DATABASE_URL</code>.</li>
+            <li>Там же задайте <code>NEXUS_SECRET_KEY</code> — любую длинную строку, и не теряйте её.</li>
+            <li>Save changes: сервис перезапустится, и ключи перестанут пропадать.</li>
+          </ol>
+        )}
+      </div>
+
+      <ClaudeCard onDone={load} />
+      <BackupCard />
 
       {note && (
         <div className="bg-[#0d0d1c] border border-[#1c1c30] rounded-xl p-3 text-sm text-[#c0c0e0]">
