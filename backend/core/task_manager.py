@@ -167,8 +167,12 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                  duration_sec=round((finished - started).total_seconds(), 2),
                  error=last_error[:2000])
     current_task_id.reset(token)
+    # Человеку — понятная фраза, но с типом ошибки: без него «не получилось»
+    # не даёт никакой зацепки ни владельцу, ни тому, кто чинит.
     from core.errors import human
-    await _finish_feed(task_id, ok=False, note=human(last_error))
+    short = last_error.split(":")[0][:60] if last_error else ""
+    note = human(last_error) + (f"\n<code>{short}</code>" if short else "")
+    await _finish_feed(task_id, ok=False, note=note)
     await _report(task_id)
     return {"ok": False, "task_id": task_id, "error": last_error}
 
