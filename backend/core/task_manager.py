@@ -131,6 +131,13 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
     from core.cost_tracker import current_task_id
     token = current_task_id.set(task_id)
 
+    # Очередь к Клоду — для прямых вопросов человека, а не для работы внутри
+    # задачи: её текст-заглушка («запрос ушёл Клоду») иначе попадёт в конвейер
+    # как будто это ответ модели и уедет в подпись к посту. У задачи есть журнал,
+    # повторы и сторож — ей положено честно упасть или собрать заготовку.
+    from core import ai_escrow
+    ai_escrow.reset()
+
     last_error = ""
     for attempt in range(1, max(1, max_attempts) + 1):
         await _patch(task_id, attempts=attempt)

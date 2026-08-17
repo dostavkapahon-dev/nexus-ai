@@ -58,6 +58,10 @@ export const connections = {
   remove: (key) => api.delete(`/connections/${key}`),
   status: () => api.get('/connections/status'),
   recheck: (key) => api.post(`/connections/${key}/recheck`),
+  backup: (password) => api.post('/connections/backup', { password }),
+  restore: (file, password) => api.post('/connections/restore', { file, password }),
+  verify: () => api.post('/connections/verify'),
+  connectClaude: (api_key) => api.post('/connections/claude', { api_key }),
 }
 
 export const analytics = {

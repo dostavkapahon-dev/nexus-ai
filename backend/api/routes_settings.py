@@ -243,6 +243,107 @@ async def delete_connection(key_name: str, db: AsyncSession = Depends(get_db)):
                     if from_env is not None and not conn else ""}
 
 
+class ClaudeBody(BaseModel):
+    api_key: str
+
+
+@router.post("/api/connections/claude")
+async def connect_claude(body: ClaudeBody):
+    """Подключение к Клоду один раз: проверяем ключ живым вызовом и сохраняем.
+
+    «Сохранили и надеемся» здесь не годится: неверный ключ обнаружится только
+    при первой генерации, а выглядеть это будет как «система не работает».
+    """
+    key = (body.api_key or "").strip()
+    if not key:
+        return {"ok": False, "error": "введите ключ Anthropic (начинается на sk-ant-)"}
+
+    from core import credentials
+    from core.ai_router import ai_router
+
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = key
+    try:
+        res = await ai_router._call_claude("claude-haiku-4-5-20251001",
+                                           "Отвечай одним словом.", "Скажи: готово")
+        alive = bool((res or {}).get("text"))
+    except Exception as e:
+        # Ключ не сохраняем и окружение возвращаем как было — иначе в системе
+        # осел бы нерабочий ключ, который «подключён».
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+        from core.errors import human
+        return {"ok": False, "error": human(e), "detail": str(e)[:200]}
+
+    if not alive:
+        return {"ok": False, "error": "Claude ответил пусто — попробуйте ещё раз."}
+
+    await credentials.set("anthropic_api_key", key)
+    await credentials.record_check("anthropic_api_key", True)
+    return {"ok": True,
+            "message": "Клод подключён. Теперь система обращается к нему сама — "
+                       "пересылать задания вручную больше не нужно."}
+
+
+class BackupBody(BaseModel):
+    password: str
+    file: dict | None = None
+
+
+@router.post("/api/connections/backup")
+async def backup_connections(body: BackupBody):
+    """Все доступы одним зашифрованным файлом.
+
+    POST, а не GET: пароль не должен оседать в истории браузера, в логах прокси
+    и в referer — а именно туда попадает строка запроса.
+    """
+    from core.credentials_backup import export_all
+    return await export_all(body.password)
+
+
+@router.post("/api/connections/restore")
+async def restore_connections(body: BackupBody):
+    """Восстановление доступов из копии — одно действие вместо всех полей заново."""
+    from core.credentials_backup import import_all
+    if not body.file:
+        return {"ok": False, "error": "не приложен файл копии"}
+    return await import_all(body.file, body.password)
+
+
+@router.post("/api/connections/verify")
+async def verify_persistence():
+    """Переживут ли сохранённые доступы перезапуск.
+
+    Отвечает не «база такая-то», а на вопрос, который человек на самом деле
+    задаёт: пропадут мои ключи или нет.
+    """
+    from datetime import datetime
+
+    from core import credentials
+    from database.db import storage_info
+
+    probe = f"проверка {datetime.utcnow().isoformat(timespec='seconds')}"
+    written = await credentials.set("nexus_persistence_probe", probe)
+    read_back = await credentials.get("nexus_persistence_probe")
+    await credentials.delete("nexus_persistence_probe")
+
+    st = storage_info()
+    works = bool(written.get("ok")) and read_back == probe
+    if not works:
+        verdict = "База не принимает запись — сохранять доступы сейчас нельзя."
+    elif st["persistent"]:
+        verdict = "Доступы сохраняются в постоянной базе и переживут перезапуск и деплой."
+    else:
+        verdict = ("Запись работает, но база временная: при следующем деплое или "
+                   "перезапуске доступы будут стёрты. " + st["warning"])
+
+    from core import secrets
+    return {"ok": works, "persistent": st["persistent"], "storage": st["kind"],
+            "encrypted": secrets.enabled(), "verdict": verdict}
+
+
 @router.post("/api/connections/test")
 async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
     results = {}

@@ -14,6 +14,7 @@
   * одинаковый вопрос не ставится в очередь дважды в течение часа.
 """
 import hashlib
+from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 
@@ -36,6 +37,23 @@ def reset():
     и фоновую работу: иначе фоновый сбой уедет в очередь к Клоду как «его ждут»."""
     _interactive.set(False)
     _where.set({})
+
+
+@contextmanager
+def suppressed():
+    """Служебный вызов внутри запроса человека: его в очередь отдавать нельзя.
+
+    Самопроверки, выбор формата, разметка — вещи на секунду работы модели. Гнать
+    такое через ручную пересылку бессмысленно: человек потратит минуты на то, что
+    конвейер должен пропустить и пойти дальше.
+    """
+    was, where = _interactive.get(), _where.get()
+    _interactive.set(False)
+    try:
+        yield
+    finally:
+        _interactive.set(was)
+        _where.set(where)
 
 
 def wanted() -> bool:
