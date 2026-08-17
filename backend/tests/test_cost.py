@@ -5,6 +5,13 @@ from core import cost_tracker as ct
 from core import task_manager as tm
 
 
+@pytest.fixture
+def with_key(monkeypatch):
+    """Ключ провайдера. Без него система намеренно не идёт в сеть, а учёт
+    расходов проверяется как раз на состоявшихся вызовах."""
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+
 @pytest.mark.asyncio
 async def test_record_writes_to_agent_log(client):
     before = (await ct.spend(24))["cost_usd"]
@@ -15,7 +22,7 @@ async def test_record_writes_to_agent_log(client):
 
 
 @pytest.mark.asyncio
-async def test_router_call_is_tracked_even_outside_base_agent(client, monkeypatch):
+async def test_router_call_is_tracked_even_outside_base_agent(client, monkeypatch, with_key):
     """Ключевая дыра аудита: вызовы вне BaseAgent шли мимо учёта."""
     from core import ai_router as ar
 
@@ -32,7 +39,7 @@ async def test_router_call_is_tracked_even_outside_base_agent(client, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_cost_attaches_to_running_task(client, monkeypatch):
+async def test_cost_attaches_to_running_task(client, monkeypatch, with_key):
     """Расход внутри задачи должен попасть именно в неё — через контекст."""
     from core import ai_router as ar
 
@@ -56,7 +63,7 @@ async def test_cost_attaches_to_running_task(client, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_call_is_recorded_as_error(client, monkeypatch):
+async def test_failed_call_is_recorded_as_error(client, monkeypatch, with_key):
     from core import ai_router as ar
 
     async def boom(self, model, system, prompt):

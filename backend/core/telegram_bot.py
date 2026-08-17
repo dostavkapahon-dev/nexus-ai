@@ -1288,7 +1288,7 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
                                               dry_run=False, want_video=want_video,
                                               content_type=content_type),
                           source="telegram")
-    await task_feed.start(task_id, chat_id, goal)
+    await task_feed.start(task_id, chat_id, goal, kind=kind)
 
 
 async def _handle_plain_text(chat_id: str, text: str):

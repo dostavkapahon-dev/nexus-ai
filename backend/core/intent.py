@@ -158,9 +158,12 @@ async def chat_reply(text: str, history: str = "") -> str:
         # избавиться от ожидания.
         from core import ai_escrow
         if ai_escrow.wanted():
-            answer = await ai_escrow.ask(CHAT_SYSTEM, text, role="chat",
-                                         errors="нет ни одного ключа ИИ")
-            return f"{answer}\n\n{FREE_SIGNUP_HINT}"
+            try:
+                answer = await ai_escrow.ask(CHAT_SYSTEM, text, role="chat",
+                                             errors="нет ни одного ключа ИИ")
+                return f"{answer}\n\n{FREE_SIGNUP_HINT}"
+            except Exception:
+                pass          # ручной режим выключен — отвечаем как обычно
         return NO_AI_REPLY + FREE_SIGNUP_HINT
 
     try:

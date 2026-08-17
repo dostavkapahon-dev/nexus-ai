@@ -53,9 +53,13 @@ async def test_direct_commands_still_route_without_ai(client, no_ai):
 
 
 @pytest.mark.asyncio
-async def test_command_center_hands_the_task_to_claude(client, no_ai, monkeypatch):
-    """Своих моделей нет — задачу ведёт Клод. Заводить задачу, которая
-    гарантированно упадёт, всё так же нельзя: это мусор в журнале."""
+async def test_command_center_does_not_bother_the_human(client, no_ai, monkeypatch):
+    """Своих моделей нет — система объясняет это сама.
+
+    Просить человека пересылать вопрос вручную по умолчанию нельзя: это ровно та
+    ручная работа, от которой система должна избавлять. Заводить задачу, которая
+    гарантированно упадёт, всё так же нельзя — это мусор в журнале.
+    """
     from core.task_manager import list_tasks
     from core import production_queue as pq
 
@@ -67,13 +71,12 @@ async def test_command_center_hands_the_task_to_claude(client, no_ai, monkeypatc
 
     res = await cc.run_command("сделай рилс про доставку", source="dashboard", mirror=False)
 
-    assert res["reason"] == "escrow_claude"
-    assert "Клоду" in res["reply"]
+    assert res["reason"] == "no_ai_provider"
     assert "Groq" in res["reply"], "подсказка про бесплатный ключ никуда не делась"
     assert len(await list_tasks(limit=200)) == before      # задача не заведена
 
     queued = [j for j in await pq.jobs() if j["kind"] == "ai_task"]
-    assert queued, "вопрос пропал: ни модели, ни очереди"
+    assert queued == [], "человека дёрнули ручной пересылкой без его согласия"
 
 
 @pytest.mark.asyncio

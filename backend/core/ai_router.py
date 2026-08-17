@@ -423,8 +423,15 @@ class AIRouter:
         ordered = [model] + [m for m in FALLBACK_CHAIN if m != model]
         # Пропускаем модели без ключа провайдера, чтобы не жечь время на заведомый сбой.
         with_keys = [m for m in ordered if _has_key(m)]
-        # Если ключей нет вовсе (напр. локальный тест) — пробуем как есть.
-        models_to_try = with_keys or ordered
+
+        # Ключей нет ни у кого — в сеть не идём вовсе. Раньше здесь включался
+        # перебор всех ~12 моделей по три попытки с паузами: минуты ожидания в
+        # пустоту на КАЖДЫЙ вызов. Снаружи это выглядело как «задача зависла на
+        # первом шаге», хотя система просто стучалась в двери без ключей.
+        if not with_keys:
+            raise RuntimeError("Нет ни одного ключа ИИ. " + FREE_SIGNUP_HINT)
+
+        models_to_try = with_keys
         last_error = None
         errors = {}
         for m in models_to_try:
