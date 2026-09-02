@@ -82,7 +82,14 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
     return url
 
 
-async def _image_responds(url: str, attempts: int = 2) -> tuple[bool, str]:
+# Сколько ждать картинку. Проверка стоит времени человека: она происходит,
+# пока он ждёт ответа в чате, поэтому запас должен быть разумным, а не
+# максимальным. Бесплатный генератор обычно отвечает за 5–20 секунд.
+IMAGE_CHECK_TIMEOUT = 25       # секунд на попытку
+IMAGE_CHECK_ATTEMPTS = 2
+
+
+async def _image_responds(url: str, attempts: int = IMAGE_CHECK_ATTEMPTS) -> tuple[bool, str]:
     """Отдаётся ли по ссылке настоящая картинка.
 
     Генератор рисует её на первом запросе, поэтому нужен именно GET: HEAD он
@@ -93,7 +100,8 @@ async def _image_responds(url: str, attempts: int = 2) -> tuple[bool, str]:
     last = "нет ответа"
     for n in range(attempts):
         try:
-            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+            async with httpx.AsyncClient(timeout=IMAGE_CHECK_TIMEOUT,
+                                         follow_redirects=True) as c:
                 r = await c.get(url)
             ctype = r.headers.get("content-type", "")
             if r.status_code == 200 and ctype.startswith("image/") and r.content:

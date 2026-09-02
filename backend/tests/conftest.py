@@ -49,6 +49,22 @@ def _reset_escrow():
     ai_escrow.reset()
 
 
+@pytest.fixture(autouse=True)
+def _no_live_image_check(monkeypatch):
+    """Проверка сгенерированной картинки ходит в интернет — в тестах не должна.
+
+    Иначе прогон зависит от стороннего сервиса: он же определяет и время
+    (на CI это было +2 минуты на каждый вызов фабрики), и — если сервис ляжет —
+    результат. Тестам, которым важно именно поведение проверки, она
+    подменяется своей заглушкой, и та побеждает эту.
+    """
+    async def offline(url, attempts=2):
+        return True, ""
+
+    monkeypatch.setattr("core.media_generator._image_responds", offline)
+    yield
+
+
 @pytest_asyncio.fixture
 async def client():
     await init_db()

@@ -139,7 +139,7 @@ async def test_dead_image_link_is_not_reported_as_success(monkeypatch):
 
     await media_generator.generate_image("кадр")
 
-    assert tracked and tracked[-1]["ok"] is False
+    assert tracked and tracked[-1]["ok"] is False, "заглушка conftest перебила тест"
     assert "не отдал картинку" in tracked[-1]["error"]
 
 
