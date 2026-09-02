@@ -10,6 +10,8 @@
 задачи, и вызовы внутри неё сами попадают в её расход — менять вызывающий код не нужно.
 """
 import os
+
+from core import notify
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 
@@ -171,7 +173,7 @@ async def maybe_alert():
         if _alerted_at["day"] == today and _alerted_at["level"] >= level:
             return
 
-        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        chat_id = await notify.owner_chat()
         if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat_id):
             return
         from core.telegram_bot import send_message

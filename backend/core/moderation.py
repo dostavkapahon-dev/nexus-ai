@@ -21,16 +21,29 @@ QUEUE_KEY = "moderation_queue"     # {pid: {text, media_url, platforms, kind, re
 PENDING_FIX_KEY = "pending_fix"    # pid, для которого админ сейчас пишет правки
 
 
-async def _tg(method: str, payload: dict):
+async def _tg(method: str, payload: dict) -> dict:
+    """Вызов Telegram. Возвращает ответ API: `{"ok": bool, "description": str}`.
+
+    Раньше здесь стоял голый `except: pass`, да и сам ответ не читался. А
+    Telegram отвечает `HTTP 200` с `ok:false` — например «failed to get HTTP URL
+    content», когда картинка по ссылке не отдалась. То есть отправка падала,
+    а система считала, что материал доставлен, и молчала.
+    """
     import httpx
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
-        return
+        return {"ok": False, "description": "нет TELEGRAM_BOT_TOKEN"}
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            await c.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
-    except Exception:
-        pass
+        async with httpx.AsyncClient(timeout=30) as c:
+            r = await c.post(f"https://api.telegram.org/bot{token}/{method}",
+                             json=payload)
+        data = r.json()
+    except Exception as e:
+        return {"ok": False, "description": f"{type(e).__name__}: {str(e)[:150]}"}
+    if not data.get("ok"):
+        print(f"[NEXUS] Telegram {method}: {str(data.get('description'))[:200]}",
+              flush=True)
+    return data
 
 
 def _kb(pid: str) -> dict:
@@ -60,8 +73,12 @@ async def analyze_media_for(pid: str) -> str:
 async def send_for_approval(text: str, media_url: str = None, platforms: list = None,
                             kind: str = "plan", ref: str = None) -> str | None:
     """Кладёт контент в очередь и шлёт админу превью с кнопками. Возвращает pid."""
-    admin = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not admin or not os.getenv("TELEGRAM_BOT_TOKEN"):
+    # Владелец мог подключить бота через /start, не задавая TELEGRAM_CHAT_ID —
+    # это штатный путь. Раньше в таком случае материал молча оседал в очереди
+    # и не доходил до человека: «сгенерировал, а в Telegram ничего не прислал».
+    from core import notify
+    admin = await notify.owner_chat()
+    if not admin:
         return None
 
     pid = uuid.uuid4().hex[:8]
@@ -72,14 +89,29 @@ async def send_for_approval(text: str, media_url: str = None, platforms: list = 
     caption = ("🆕 <b>На согласование</b>\n\n" + (text or ""))[:1024]
     kb = _kb(pid)
     if media_url and str(media_url).lower().endswith((".mp4", ".mov", ".webm")):
-        await _tg("sendVideo", {"chat_id": admin, "video": media_url,
-                                "caption": caption, "parse_mode": "HTML", "reply_markup": kb})
+        res = await _tg("sendVideo", {"chat_id": admin, "video": media_url,
+                                      "caption": caption, "parse_mode": "HTML",
+                                      "reply_markup": kb})
     elif media_url:
-        await _tg("sendPhoto", {"chat_id": admin, "photo": media_url,
-                                "caption": caption, "parse_mode": "HTML", "reply_markup": kb})
+        res = await _tg("sendPhoto", {"chat_id": admin, "photo": media_url,
+                                      "caption": caption, "parse_mode": "HTML",
+                                      "reply_markup": kb})
     else:
-        await _tg("sendMessage", {"chat_id": admin, "text": caption,
-                                  "parse_mode": "HTML", "reply_markup": kb})
+        res = await _tg("sendMessage", {"chat_id": admin, "text": caption,
+                                        "parse_mode": "HTML", "reply_markup": kb})
+
+    if not res.get("ok") and media_url:
+        # Telegram не смог забрать медиа по ссылке (чаще всего генератор не
+        # отдал картинку вовремя). Текст с кнопками важнее картинки: без этого
+        # запаса вся работа пропадала молча.
+        res = await _tg("sendMessage", {
+            "chat_id": admin,
+            "text": caption + f"\n\n🖼 Медиа не вложилось: {media_url}\n"
+                              f"<i>Причина: {str(res.get('description'))[:150]}</i>",
+            "parse_mode": "HTML", "reply_markup": kb})
+    if not res.get("ok"):
+        print(f"[NEXUS] материал {pid} не доставлен владельцу: "
+              f"{str(res.get('description'))[:200]}", flush=True)
     return pid
 
 

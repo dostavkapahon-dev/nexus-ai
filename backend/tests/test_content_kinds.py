@@ -104,6 +104,8 @@ async def test_report_survives_flat_publication(client, monkeypatch):
         texts.append(text)
         return {}
 
+    # Оба условия обязательны: без токена писать нечем, без адресата — некому.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "777")
     monkeypatch.setattr("core.telegram_bot.send_message", fake_send)
 

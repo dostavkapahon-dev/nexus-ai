@@ -145,7 +145,10 @@ async def test_moderation_queue_keeps_every_post(monkeypatch):
     await init_db()
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "1")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "t")
-    monkeypatch.setattr(moderation, "_tg", lambda *a, **k: asyncio.sleep(0))
+    async def fake_tg(method, payload):
+        return {"ok": True}
+
+    monkeypatch.setattr(moderation, "_tg", fake_tg)
     await kv.set(moderation.QUEUE_KEY, {})
 
     pids = await asyncio.gather(*(moderation.send_for_approval(f"пост {i}")

@@ -13,6 +13,8 @@ CONTENT FACTORY — единый конвейер Pakhon Studio.
 ключа/площадки не валит весь цикл — логируется и продолжаем.
 """
 import os
+
+from core import notify
 import json
 
 from core.brand import system_prompt, cover_prompt, PLATFORM_SPECS
@@ -471,7 +473,7 @@ def _caption_for(platform: str, plan: dict) -> str:
 
 
 async def _send_report(report: dict, platforms: list) -> None:
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not chat_id:
         return
     try:

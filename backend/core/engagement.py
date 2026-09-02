@@ -12,7 +12,7 @@ from datetime import datetime
 
 from sqlalchemy import select
 
-from core import kv
+from core import kv, notify
 from database.db import AsyncSessionLocal
 
 # Уже обработанные комментарии, чтобы не отвечать дважды.
@@ -112,7 +112,7 @@ async def _active_niche() -> tuple[str, str]:
 async def _ask_approval(items: list[dict]):
     """Отправляет подготовленные ответы на согласование в Telegram."""
     import os
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat_id):
         return
     from core.telegram_bot import send_message

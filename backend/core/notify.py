@@ -28,22 +28,31 @@ _KIND_RU = {
 }
 
 
-def _chat_id() -> str:
-    return os.getenv("TELEGRAM_CHAT_ID", "")
+async def owner_chat() -> str:
+    """Куда писать владельцу. ЕДИНСТВЕННЫЙ правильный ответ на этот вопрос.
+
+    Владелец берётся оттуда же, откуда его знает бот: из `TELEGRAM_CHAT_ID`
+    либо из закрепления первым `/start` (`core/telegram_owner`). Прямое чтение
+    переменной окружения — ошибка: подключить бота можно и без неё, это
+    штатный путь, и тогда результат работы молча уходил в никуда. Снаружи это
+    выглядело как «сгенерировал, но в Telegram ничего не прислал».
+    """
+    if not os.getenv("TELEGRAM_BOT_TOKEN"):
+        return ""
+    env = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if env:
+        return env
+    try:
+        from core.telegram_owner import owner_id
+        return (await owner_id()) or ""
+    except Exception:
+        return ""
 
 
 async def notify_owner(text: str) -> bool:
-    """Сообщение владельцу системы. Единственная точка «сказать человеку».
-
-    Владелец берётся оттуда же, откуда его знает бот: из настроек либо из
-    закрепления первым `/start` — иначе уведомления молча уходили в никуда,
-    пока не задан TELEGRAM_CHAT_ID.
-    """
+    """Сообщение владельцу системы. Единственная точка «сказать человеку»."""
     try:
-        if not os.getenv("TELEGRAM_BOT_TOKEN"):
-            return False
-        from core.telegram_owner import owner_id
-        chat_id = _chat_id() or await owner_id()
+        chat_id = await owner_chat()
         if not chat_id:
             return False
         from core.telegram_bot import send_message
@@ -91,11 +100,7 @@ async def task_finished(task: dict):
     try:
         if not should_report(task):
             return
-        chat_id = _chat_id()
-        if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat_id):
-            return
-        from core.telegram_bot import send_message
-        await send_message(chat_id, format_task(task))
+        await notify_owner(format_task(task))
     except Exception:
         pass
 

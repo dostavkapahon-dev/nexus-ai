@@ -12,7 +12,7 @@ Claude-дирижёра (core.marketing_director.run_director), а резуль�
 """
 import time
 
-from core import kv
+from core import kv, notify
 
 FEED_KEY = "control_feed"
 FEED_MAX = 60
@@ -135,7 +135,7 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
     if mirror and source == "dashboard":
         try:
             import os
-            chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+            chat_id = await notify.owner_chat()
             if os.getenv("TELEGRAM_BOT_TOKEN") and chat_id:
                 from core.telegram_bot import send_message
                 await send_message(chat_id, f"🖥 <b>С дашборда:</b> {text}\n\n{reply}")

@@ -68,10 +68,42 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
         # Провайдер вернул пусто — платить не за что, но знать об этом полезно.
         await _track_media(name, "image", False, time.time() - t0, "пустой ответ провайдера")
 
-    # Бесплатный путь работает всегда — картинка будет в любом случае.
+    # Бесплатный путь — последний рубеж, но «всегда работает» он только на
+    # бумаге: `_pollinations` лишь собирает ссылку, а картинку по ней рисуют
+    # в момент первого запроса. Пока никто не сходил по ссылке, неизвестно,
+    # получилась ли картинка вообще. Раньше здесь безусловно писалось
+    # «успех» — и дальше по конвейеру уезжала мёртвая ссылка: Telegram не мог
+    # её забрать, отправка падала, а система считала работу сделанной.
+    t0 = time.time()
     url = _pollinations(prompt, size)
-    await _track_media("pollinations", "image", True)
+    ok, err = await _image_responds(url)
+    await _track_media("pollinations", "image", ok, time.time() - t0,
+                       None if ok else err)
     return url
+
+
+async def _image_responds(url: str, attempts: int = 2) -> tuple[bool, str]:
+    """Отдаётся ли по ссылке настоящая картинка.
+
+    Генератор рисует её на первом запросе, поэтому нужен именно GET: HEAD он
+    обслуживает не всегда. Первый заход часто упирается в очередь — отсюда
+    вторая попытка, дальше настаивать смысла нет, лучше честно сказать.
+    """
+    import httpx
+    last = "нет ответа"
+    for n in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=60, follow_redirects=True) as c:
+                r = await c.get(url)
+            ctype = r.headers.get("content-type", "")
+            if r.status_code == 200 and ctype.startswith("image/") and r.content:
+                return True, ""
+            last = f"HTTP {r.status_code}, тип «{ctype or '—'}»"
+        except Exception as e:
+            last = f"{type(e).__name__}: {str(e)[:120]}"
+        if n + 1 < attempts:
+            await asyncio.sleep(2)
+    return False, f"генератор изображений не отдал картинку ({last})"
 
 async def _gemini_imagen(prompt: str, size: str) -> str | None:
     """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""

@@ -1,4 +1,6 @@
 import os
+
+from core import notify
 import json
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +28,7 @@ async def broadcast(niche_id: str, data: dict):
 
 async def _send_telegram_report(text: str):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = await notify.owner_chat()
     if not token or not chat_id:
         return
     try:
