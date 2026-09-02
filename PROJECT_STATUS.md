@@ -56,7 +56,7 @@ API-ключи выживают только потому, что продубл
 | ✅ | ~~`ai_mode` — фикция~~ → `pick_model` реально выбирает economy/premium | `core/ai_router.py` |
 | ✅ | ~~`log()` коммитил чужие изменения~~ → отдельная сессия | `agents/base_agent.py` |
 | 🟡 | Секреты plaintext в БД и в `os.environ` всего процесса | `api/routes_settings.py:80-94` |
-| 🟡 | Гонки при read-modify-write KV `Connection` без блокировки | `core/command_center.py`, `core/moderation.py` |
+| ✅ | ~~Гонки при read-modify-write KV `Connection`~~ → общий слой `core/kv.py`: замок на ключ + `FOR UPDATE` на Postgres | `core/kv.py` |
 | ✅ | ~~Нет системы задач~~ → реализована, см. `TASK_SYSTEM.md` | `core/task_manager.py` |
 | ✅ | ~~Нет OAuth и long-lived токенов~~ → OAuth Meta + авто-продление в 08:00 | `connectors/`, `api/routes_social.py` |
 

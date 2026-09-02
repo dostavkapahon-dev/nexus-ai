@@ -1451,26 +1451,35 @@ async def _plain_text(chat_id: str, text: str):
     # 1) Идёт интервью автопилота — записываем ответ и задаём следующий вопрос.
     st = await ap.get_state()
     if st.get("stage") == "interview":
-        qs = st.get("questions", [])
-        i = st.get("idx", 0)
-        if i < len(qs):
-            st.setdefault("answers", {})[qs[i]] = text.strip()
-            i += 1
-            st["idx"] = i
-        if i < len(qs):
-            await ap.set_state(st)
-            await send_message(chat_id, f"❓ <b>Вопрос {i+1} из {len(qs)}</b>\n\n{qs[i]}")
+        # Ответ записывается под замком: два быстрых сообщения подряд читали одно
+        # и то же состояние, и второе затирало первое — ответ пропадал, а человека
+        # переспрашивали тот же вопрос. Отправка сообщений — уже вне замка,
+        # держать его на время сетевого вызова незачем.
+        async with ap.edit_state() as st:
+            qs = st.get("questions", [])
+            i = st.get("idx", 0)
+            if i < len(qs):
+                st.setdefault("answers", {})[qs[i]] = text.strip()
+                i += 1
+                st["idx"] = i
+            next_question = qs[i] if i < len(qs) else None
+            if next_question is None:
+                st["stage"] = "strategies"      # вопросы кончились → строим стратегии
+            total = len(qs)
+
+        if next_question is not None:
+            await send_message(chat_id, f"❓ <b>Вопрос {i+1} из {total}</b>\n\n{next_question}")
             return
-        # Вопросы кончились → строим стратегии
-        st["stage"] = "strategies"
-        await ap.set_state(st)
         await send_message(chat_id, "🎯 <b>Шаг 3/4</b> — собираю варианты стратегии на основе всего...")
         opts = await ap.build_strategies(st.get("analysis", {}), st.get("answers", {}))
         if not opts:
             await send_message(chat_id, "⚠️ Не удалось собрать стратегии — попробуй /auto ещё раз")
             return
+        # Сборка стратегий занимает секунды — замок на это время не держим,
+        # а результат кладём отдельной короткой правкой.
+        async with ap.edit_state() as fresh:
+            fresh["options"] = opts
         st["options"] = opts
-        await ap.set_state(st)
         lines = ["🎯 <b>Варианты стратегии</b>", ""]
         for n, o in enumerate(opts):
             lines.append(f"<b>{n+1}. {o.get('title','')}</b>\n{o.get('angle','')}\n"
@@ -1501,8 +1510,7 @@ async def _plain_text(chat_id: str, text: str):
 
     # 2) Правки к контенту на согласовании.
     from core import moderation
-    async with AsyncSessionLocal() as db:
-        pid = await moderation.pending_fix_id(db)
+    pid = await moderation.pending_fix_id()
     if not pid:
         # 3) Свободный текст: понимаем намерение и выполняем нужное действие.
         from core import intent

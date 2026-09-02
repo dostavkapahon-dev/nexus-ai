@@ -101,16 +101,20 @@ async def _remember(events: list[dict]) -> list[dict]:
     каждый повтор заново запускал разбор комментариев и плодил задачи.
     Возвращает только новые события.
     """
-    from core.engagement import _load, _save
+    from core import kv
     try:
-        stored = await _load(EVENTS_KEY, [])
-        known = {e.get("id") for e in stored if e.get("id")}
-        fresh = [e for e in events if not (e.get("id") and e["id"] in known)]
-        if not fresh:
-            return []
-        now = datetime.utcnow().isoformat()
-        stored += [{**e, "received_at": now} for e in fresh]
-        await _save(EVENTS_KEY, stored[-MAX_EVENTS:])
+        # Проверка «видели ли уже» и запись — одной операцией под замком.
+        # Meta шлёт повторы пачками, и раздельные чтение и запись означали, что
+        # два параллельных вызова признавали одно событие новым: разбор
+        # комментариев запускался дважды на одно и то же.
+        fresh: list[dict] = []
+        async with kv.update(EVENTS_KEY, []) as stored:
+            known = {e.get("id") for e in stored if e.get("id")}
+            fresh = [e for e in events if not (e.get("id") and e["id"] in known)]
+            if fresh:
+                now = datetime.utcnow().isoformat()
+                stored += [{**e, "received_at": now} for e in fresh]
+                del stored[:-MAX_EVENTS]
         return fresh
     except Exception as e:
         # Потеря событий не должна быть незаметной: раньше здесь стоял голый pass.
@@ -119,8 +123,8 @@ async def _remember(events: list[dict]) -> list[dict]:
 
 
 async def recent_events(limit: int = 20) -> list[dict]:
-    from core.engagement import _load
-    return list(reversed(await _load(EVENTS_KEY, [])))[:limit]
+    from core import kv
+    return list(reversed(await kv.get(EVENTS_KEY, [])))[:limit]
 
 
 async def handle_events(payload: dict) -> dict:

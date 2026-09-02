@@ -3,6 +3,7 @@ import pytest
 from sqlalchemy import delete
 
 from core import engagement as eng
+from core import kv
 from core.contracts import AgentResult, handoff, weakest
 from database.db import AsyncSessionLocal
 from database.models import Connection
@@ -93,7 +94,7 @@ async def test_fetch_skips_already_seen(client, monkeypatch):
         return _comments("c1", "c2", "c3")
 
     monkeypatch.setattr(get_connector("instagram"), "read_comments", fake_read)
-    await eng._save(eng.SEEN_KEY, ["c1"])
+    await kv.set(eng.SEEN_KEY, ["c1"])
 
     fresh = await eng.fetch_new_comments("instagram")
     assert [c["id"] for c in fresh] == ["c2", "c3"]
@@ -142,7 +143,7 @@ async def test_approve_sends_and_clears_queue(client, monkeypatch):
         return {"ok": True}
 
     monkeypatch.setattr(type(get_connector("instagram")), "reply_comment", fake_send)
-    await eng._save(eng.PENDING_KEY, [
+    await kv.set(eng.PENDING_KEY, [
         {"platform": "instagram", "comment_id": "c1", "reply": "ответ", "author": "u"}])
 
     res = await eng.approve_all()
@@ -159,7 +160,7 @@ async def test_approve_reports_failures_honestly(client, monkeypatch):
         return {"ok": False, "error": "нет права instagram_manage_comments"}
 
     monkeypatch.setattr(type(get_connector("instagram")), "reply_comment", fake_send)
-    await eng._save(eng.PENDING_KEY, [
+    await kv.set(eng.PENDING_KEY, [
         {"platform": "instagram", "comment_id": "c1", "reply": "ответ", "author": "u"}])
 
     res = await eng.approve_all()
@@ -185,7 +186,7 @@ async def test_irrelevant_comments_are_skipped_but_marked_seen(client, monkeypat
     res = await eng.process_comments("instagram", limit=5)
     assert res["skipped"] == 1
     assert res["pending_approval"] == 0
-    assert "c1" in await eng._load(eng.SEEN_KEY, [])
+    assert "c1" in await kv.get(eng.SEEN_KEY, [])
 
 
 @pytest.mark.asyncio
@@ -199,7 +200,7 @@ async def test_unsupported_platform_does_not_crash(client):
 
 @pytest.mark.asyncio
 async def test_discard_clears_queue(client):
-    await eng._save(eng.PENDING_KEY, [{"platform": "instagram", "comment_id": "c1",
+    await kv.set(eng.PENDING_KEY, [{"platform": "instagram", "comment_id": "c1",
                                        "reply": "r", "author": "u"}])
     assert await eng.discard_pending() == 1
     assert await eng.pending() == []

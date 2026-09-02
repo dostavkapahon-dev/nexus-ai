@@ -30,6 +30,7 @@ USER
                                             server_browser / desktop_agent
               ↓
    БД (Postgres при DATABASE_URL, иначе эфемерный SQLite) + Connection KV
+   правка KV — только через core/kv.py (замок на ключ, без потерянных записей)
    память агента: AgentState ←→ data/*.json (core/file_state.py)
    доступы: core/credentials.py → core/secrets.py (шифрование NEXUS_SECRET_KEY)
             → os.environ на старте, весь код читает их через os.getenv

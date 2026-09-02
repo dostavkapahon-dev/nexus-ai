@@ -7,39 +7,18 @@
 На «Опубликовать» → публикуется во все площадки.
 
 Очередь ожидающих хранится в таблице Connection (ключ moderation_queue, JSON) —
-без миграций схемы.
+без миграций схемы. Правки идут через `core/kv`: очередь читали и переписывали
+целиком, и параллельная задача успевала вклиниться между чтением и записью —
+пост исчезал с согласования без следа в логах.
 """
 import os
-import json
 import uuid
 from sqlalchemy import select
+from core import kv
 from database.db import AsyncSessionLocal
-from database.models import Connection
 
 QUEUE_KEY = "moderation_queue"     # {pid: {text, media_url, platforms, kind, ref}}
 PENDING_FIX_KEY = "pending_fix"    # pid, для которого админ сейчас пишет правки
-
-
-async def _load(db, key: str) -> dict:
-    r = await db.execute(select(Connection).where(Connection.key_name == key))
-    c = r.scalar_one_or_none()
-    if c and c.key_value:
-        try:
-            return json.loads(c.key_value)
-        except Exception:
-            return {}
-    return {}
-
-
-async def _save(db, key: str, value):
-    r = await db.execute(select(Connection).where(Connection.key_name == key))
-    c = r.scalar_one_or_none()
-    payload = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else value
-    if c:
-        c.key_value = payload
-    else:
-        db.add(Connection(key_name=key, key_value=payload))
-    await db.commit()
 
 
 async def _tg(method: str, payload: dict):
@@ -65,8 +44,7 @@ def _kb(pid: str) -> dict:
 
 async def analyze_media_for(pid: str) -> str:
     """Разбирает визуал (картинку/ролик) элемента на согласовании через vision."""
-    async with AsyncSessionLocal() as db:
-        item = await _get_item(db, pid)
+    item = await _get_item(pid)
     if not item:
         return "❌ Элемент не найден"
     media = item.get("media_url")
@@ -87,11 +65,9 @@ async def send_for_approval(text: str, media_url: str = None, platforms: list = 
         return None
 
     pid = uuid.uuid4().hex[:8]
-    async with AsyncSessionLocal() as db:
-        queue = await _load(db, QUEUE_KEY)
+    async with kv.update(QUEUE_KEY, {}) as queue:
         queue[pid] = {"text": text, "media_url": media_url,
                       "platforms": platforms or ["instagram"], "kind": kind, "ref": ref}
-        await _save(db, QUEUE_KEY, queue)
 
     caption = ("🆕 <b>На согласование</b>\n\n" + (text or ""))[:1024]
     kb = _kb(pid)
@@ -107,77 +83,71 @@ async def send_for_approval(text: str, media_url: str = None, platforms: list = 
     return pid
 
 
-async def _get_item(db, pid: str) -> dict | None:
-    queue = await _load(db, QUEUE_KEY)
+async def _get_item(pid: str) -> dict | None:
+    queue = await kv.get(QUEUE_KEY, {})
     return queue.get(pid)
 
 
-async def _remove(db, pid: str):
-    queue = await _load(db, QUEUE_KEY)
-    if pid in queue:
-        queue.pop(pid)
-        await _save(db, QUEUE_KEY, queue)
+async def _remove(pid: str):
+    async with kv.update(QUEUE_KEY, {}) as queue:
+        queue.pop(pid, None)
 
 
 async def approve(pid: str) -> str:
     """Публикует согласованный контент во все его площадки."""
     from core.orchestrator import nexus_core
-    async with AsyncSessionLocal() as db:
-        item = await _get_item(db, pid)
-        if not item:
-            return "❌ Элемент не найден или уже обработан"
-        results = []
-        for pf in item.get("platforms", ["instagram"]):
-            try:
-                r = await nexus_core._publish_one(pf, item.get("text", ""), item.get("media_url") or "")
-                results.append(f"{'✅' if r.get('ok') else '❌'} {pf}" + ("" if r.get("ok") else f": {str(r.get('error'))[:60]}"))
-            except Exception as e:
-                results.append(f"❌ {pf}: {str(e)[:60]}")
-        # Отметим план опубликованным.
-        if item.get("kind") == "plan" and item.get("ref"):
-            from database.models import ContentPlan
+    item = await _get_item(pid)
+    if not item:
+        return "❌ Элемент не найден или уже обработан"
+    results = []
+    for pf in item.get("platforms", ["instagram"]):
+        try:
+            r = await nexus_core._publish_one(pf, item.get("text", ""), item.get("media_url") or "")
+            results.append(f"{'✅' if r.get('ok') else '❌'} {pf}" + ("" if r.get("ok") else f": {str(r.get('error'))[:60]}"))
+        except Exception as e:
+            results.append(f"❌ {pf}: {str(e)[:60]}")
+    # Отметим план опубликованным.
+    if item.get("kind") == "plan" and item.get("ref"):
+        from database.models import ContentPlan
+        async with AsyncSessionLocal() as db:
             pr = await db.execute(select(ContentPlan).where(ContentPlan.id == item["ref"]))
             p = pr.scalar_one_or_none()
             if p:
                 p.status = "published"
                 await db.commit()
-        await _remove(db, pid)
+    await _remove(pid)
     return "📤 <b>Опубликовано</b>\n" + "\n".join(results)
 
 
 async def reject(pid: str) -> str:
-    async with AsyncSessionLocal() as db:
-        await _remove(db, pid)
+    await _remove(pid)
     return "❌ Отклонено, публиковать не буду."
 
 
 async def request_fix(pid: str) -> str:
     """Помечает, что админ сейчас будет писать правки для pid."""
-    async with AsyncSessionLocal() as db:
-        item = await _get_item(db, pid)
-        if not item:
-            return "❌ Элемент не найден"
-        await _save(db, PENDING_FIX_KEY, pid)
+    item = await _get_item(pid)
+    if not item:
+        return "❌ Элемент не найден"
+    await kv.set(PENDING_FIX_KEY, pid)
     return "✏️ Напиши одним сообщением, что поправить — я перегенерирую и снова пришлю на согласование."
 
 
-async def pending_fix_id(db) -> str | None:
-    r = await db.execute(select(Connection).where(Connection.key_name == PENDING_FIX_KEY))
-    c = r.scalar_one_or_none()
-    return (c.key_value or None) if c else None
+async def pending_fix_id() -> str | None:
+    """Элемент, для которого админ сейчас пишет правки (пусто — таких нет)."""
+    return (await kv.get(PENDING_FIX_KEY, "")) or None
 
 
 async def apply_fix(correction: str) -> str:
     """Применяет текстовые правки к ожидающему элементу и снова шлёт на согласование."""
-    async with AsyncSessionLocal() as db:
-        pid = await pending_fix_id(db)
-        if not pid:
-            return ""
-        item = await _get_item(db, pid)
-        await _save(db, PENDING_FIX_KEY, "")  # снимаем флаг
-        if not item:
-            return "❌ Элемент устарел"
-        await _remove(db, pid)
+    pid = await pending_fix_id()
+    if not pid:
+        return ""
+    item = await _get_item(pid)
+    await kv.set(PENDING_FIX_KEY, "")  # снимаем флаг
+    if not item:
+        return "❌ Элемент устарел"
+    await _remove(pid)
 
     kind = item.get("kind", "plan")
     ref = item.get("ref")
