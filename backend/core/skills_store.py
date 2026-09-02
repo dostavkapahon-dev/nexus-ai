@@ -43,6 +43,10 @@ def _save(items: list[dict]) -> None:
     os.makedirs(os.path.dirname(SKILLS_FILE), exist_ok=True)
     with open(SKILLS_FILE, "w", encoding="utf-8") as f:
         json.dump(items, f, ensure_ascii=False, indent=2)
+    # Накопленный опыт нельзя держать только на диске контейнера: деплой вернул бы
+    # файл к версии из git и стёр всё, чему агент научился после неё.
+    from core import file_state
+    file_state.mark_dirty("skills")
 
 
 def list_skills(kind: str = None, limit: int = 200) -> list[dict]:

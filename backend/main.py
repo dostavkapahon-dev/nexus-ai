@@ -107,6 +107,17 @@ async def lifespan(app: FastAPI):
             print(f"[NEXUS] копия доступов не развёрнута: {res['error']}", flush=True)
     except Exception as e:
         print(f"[NEXUS] копия доступов не развёрнута: {type(e).__name__}: {e}", flush=True)
+    # Память агента (навыки, голос бренда, история хуков) лежит в файлах на
+    # эфемерном диске — разворачиваем её из базы до того, как её кто-то прочитает.
+    try:
+        from core import file_state
+        res = await file_state.restore_all()
+        if res["restored"] or res["seeded"]:
+            print(f"[NEXUS] память агента: восстановлено {res['restored']}, "
+                  f"сохранено впервые {res['seeded']}", flush=True)
+    except Exception as e:
+        print(f"[NEXUS] память агента не восстановлена: {type(e).__name__}: {e}", flush=True)
+
     # Профиль агента наполняется из прежних настроек один раз — чтобы включение
     # новой формы не выглядело как «мои настройки пропали».
     try:

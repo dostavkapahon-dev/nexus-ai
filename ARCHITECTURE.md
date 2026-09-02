@@ -29,7 +29,8 @@ USER
                                                          ↓ фолбэк
                                             server_browser / desktop_agent
               ↓
-   SQLite (эфемерная!) + Connection KV + data/*.json
+   БД (Postgres при DATABASE_URL, иначе эфемерный SQLite) + Connection KV
+   память агента: AgentState ←→ data/*.json (core/file_state.py)
    доступы: core/credentials.py → core/secrets.py (шифрование NEXUS_SECRET_KEY)
             → os.environ на старте, весь код читает их через os.getenv
 ```

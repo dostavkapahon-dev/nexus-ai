@@ -76,6 +76,11 @@ def _save_history(hist: list) -> None:
     os.makedirs(os.path.dirname(HISTORY_PATH), exist_ok=True)
     with open(HISTORY_PATH, "w", encoding="utf-8") as f:
         json.dump(hist[-60:], f, ensure_ascii=False, indent=2)
+    # Файл эфемерен (он в .gitignore и живёт на диске контейнера) — дублируем
+    # историю в базу, иначе после деплоя ротация хуков начинается с нуля и агент
+    # повторяет вчерашний приём.
+    from core import file_state
+    file_state.mark_dirty("hook_history")
 
 
 def recent_hook_types(days: int = 7) -> list:

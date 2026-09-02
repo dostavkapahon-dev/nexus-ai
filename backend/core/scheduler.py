@@ -409,6 +409,13 @@ def start_scheduler():
     _scheduler.add_job(watchdog, CronTrigger(minute="*/5"),
                        id="watchdog", replace_existing=True)
 
+    # Каждые 5 минут — сохранение памяти агента в базу. Обычно она уезжает туда
+    # сразу при записи, но запись из потока без событийного цикла так не может:
+    # без этого джоба такое изменение дожило бы только до перезапуска.
+    from core.file_state import flush as flush_agent_state
+    _scheduler.add_job(flush_agent_state, CronTrigger(minute="*/5"),
+                       id="agent_state", replace_existing=True, max_instances=1)
+
     _scheduler.add_job(run_publish_queue, CronTrigger(minute="*/10"),
                        id="publish_queue", replace_existing=True, max_instances=1)
     _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),
