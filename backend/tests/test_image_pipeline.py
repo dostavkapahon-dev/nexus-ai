@@ -30,8 +30,27 @@ async def test_user_words_are_not_replaced_by_the_rewrite(monkeypatch):
         seen["topic"] = topic
         return {"theme": "t", "hook_text": "h", "image_prompt": "p"}
 
+    async def fake_brief(plan):
+        return {"storyboard": [], "cover_prompt": "c", "avatar_script": "s"}
+
+    async def fake_wow(b):
+        return {"score": 9}
+
+    async def fake_image(prompt, platform="instagram", **kw):
+        return "https://img/x.png"
+
+    async def fake_clip(*a, **kw):
+        return {"ok": True, "url": "https://cdn/c.mp4"}
+
     monkeypatch.setattr("core.self_critique.pre_check", fake_pre_check)
     monkeypatch.setattr(cf, "_analyze", fake_analyze)
+    # Остальной конвейер глушим: проверяем путь ЗАДАНИЯ, а не всю фабрику.
+    # Без этого тест дёргает настоящие модели — на CI это минуты ожидания
+    # и зависимость прогона от чужих сервисов.
+    monkeypatch.setattr("core.creative_director.build_brief", fake_brief)
+    monkeypatch.setattr("core.creative_director.wow_review", fake_wow)
+    monkeypatch.setattr("core.media_generator.generate_image", fake_image)
+    monkeypatch.setattr("core.media_generator.generate_clip", fake_clip)
     await init_db()
     await cf.run_factory(topic="красный самокат у подъезда, ночь", dry_run=True)
 
