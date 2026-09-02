@@ -54,7 +54,7 @@ async def test_requested_model_used_first(router, monkeypatch):
     assert "duration_sec" in r
 
 
-async def test_429_switches_to_next_model_without_retries(router, monkeypatch):
+async def test_429_switches_to_next_model_without_retries(router, monkeypatch, no_backoff):
     """Квота исчерпана — повторять ту же модель бессмысленно, идём дальше."""
     seen = _stub_calls(monkeypatch, {
         "gemini-2.0-flash-lite": Exception("429 RESOURCE_EXHAUSTED quota"),
@@ -65,7 +65,7 @@ async def test_429_switches_to_next_model_without_retries(router, monkeypatch):
     assert seen.count("gemini-2.0-flash-lite") == 1  # без трёх попыток
 
 
-async def test_deprecated_model_skipped(router, monkeypatch):
+async def test_deprecated_model_skipped(router, monkeypatch, no_backoff):
     seen = _stub_calls(monkeypatch, {
         "gpt-4o": Exception("model not found"),
         "gemini-2.0-flash-lite": "ok",
