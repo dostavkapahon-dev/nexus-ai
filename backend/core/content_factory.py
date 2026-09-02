@@ -13,6 +13,8 @@ CONTENT FACTORY — единый конвейер Pakhon Studio.
 ключа/площадки не валит весь цикл — логируется и продолжаем.
 """
 import os
+
+from core import notify
 import json
 
 from core.brand import system_prompt, cover_prompt, PLATFORM_SPECS
@@ -55,7 +57,7 @@ async def _research_trends(topic: str | None) -> str:
     return "\n".join(f"- {i['title']}: {i.get('snippet', '')}" for i in items)[:1500]
 
 _ANALYSIS_PROMPT = """\
-Ты — AI-маркетолог Pakhon Studio. Придумай ОДНУ тему дня для ниши AI/digital
+Ты — AI-маркетолог Pakhon Studio. Подготовь ОДНУ тему дня для ниши AI/digital
 бизнес (Казахстан/СНГ) и распиши её так, чтобы Reels ЗАЛЕТЕЛ.
 {topic_hint}
 
@@ -66,7 +68,7 @@ _ANALYSIS_PROMPT = """\
   "hook_type": "провокация|цифра|боль|тайна",
   "hook_text": "текстовый оверлей для первых 3 сек, крупно, до 7 слов",
   "avatar_script": "скрипт озвучки 15-25 сек, разговорно, короткие предложения, [пауза 0.5s] где нужно",
-  "image_prompt": "англоязычный промпт для обложки (сцена, без текста)",
+  "image_prompt": "англоязычный промпт для обложки: ИМЕННО ТО, что просил человек — предметы, люди, место, действие. Детально: план (крупный/средний/общий), свет, материалы. Без текста в кадре",
   "instagram": {{"caption": "подпись + 1 CTA", "hashtags": ["#..", "#.."]}},
   "youtube": {{"title": "до 60 симв с keyword", "description": "первые 2 строки keyword+CTA"}},
   "tiktok": {{"caption": "короткая подпись + хэштеги"}},
@@ -82,7 +84,20 @@ async def _analyze(topic: str | None) -> dict:
     from core.hooks import guidance, record
     g = guidance()
     trends = await _research_trends(topic)
-    hint = f"Тема задана пользователем: {topic}." if topic else "Тему выбери сам по трендам ниши."
+    # Когда человек сказал, что ему нужно, — это задание, а не пожелание.
+    # Раньше здесь была равноправная «подсказка» при инструкции «придумай тему»,
+    # и модель спокойно уходила в свою сторону: человек получал не то, что просил.
+    if topic:
+        hint = ("ЗАДАНИЕ ОТ ЧЕЛОВЕКА (дословно, ниже между линиями). Это главное:\n"
+                "――――――\n"
+                f"{topic}\n"
+                "――――――\n"
+                "Работай ИМЕННО с этим. Не подменяй тему своей, не обобщай до "
+                "абстракции. `theme` и `image_prompt` обязаны описывать то, что "
+                "здесь названо: те же предметы, люди, место и действие. Указания "
+                "ниже — это форма подачи, они не отменяют само задание.")
+    else:
+        hint = "Тему выбери сам по трендам ниши."
     hint += (f"\n\nУКАЗАНИЯ МАРКЕТОЛОГА НА СЕГОДНЯ (соблюдай):\n"
              f"- Тема дня: {g['day_theme']}\n"
              f"- Тип хука (ротация, НЕ повторяй {g['avoid_hook_types']}): {g['hook_type']}\n"
@@ -188,8 +203,13 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         from core.self_critique import pre_check
         chk = await pre_check("content_factory", topic or "выбрать тему по трендам",
                               context=str(platforms))
-        if chk.get("improved_task") and topic:
-            topic = chk["improved_task"][:2000]
+        # Уточнение ДОПИСЫВАЕТСЯ, а не подменяет собой задачу. Раньше слова
+        # человека затирались пересказом дешёвой модели, и дальше по конвейеру
+        # (тема → план → промпт картинки) ехал уже пересказ пересказа —
+        # отсюда «сделал, но не то, что я просил».
+        improved = (chk.get("improved_task") or "").strip()
+        if improved and topic and improved != topic.strip():
+            topic = f"{topic}\n\n[Уточнение: {improved[:800]}]"
         report["steps"].append({"step": "self_check", "ok": chk.get("checked", True),
                                 "ready": chk.get("ready"), "missing": chk.get("missing", [])[:3],
                                 "error": chk.get("error")})
@@ -365,7 +385,11 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         caption = _caption_for(platforms[0] if platforms else "instagram", plan)
         try:
             from core.moderation import send_for_approval
-            pid = await send_for_approval(caption, media_url=media, platforms=platforms, kind="factory")
+            # Замысел кадра едет вместе с материалом: без него правка
+            # «поменяй фон» рисуется вслепую, не зная, что было в кадре.
+            pid = await send_for_approval(
+                caption, media_url=media, platforms=platforms, kind="factory",
+                image_prompt=plan.get("image_prompt", ""))
             report["published"] = {"status": "awaiting_approval", "pid": pid,
                                    "note": "ролик отправлен в Telegram на согласование"}
             # Точка согласования — это не «шаг провалился», а ожидание человека.
@@ -437,7 +461,8 @@ async def finalize_from_assets(job: dict) -> dict:
     try:
         from core.moderation import send_for_approval
         pid = await send_for_approval(caption, media_url=media, platforms=platforms,
-                                      kind="factory")
+                                      kind="factory",
+                                      image_prompt=brief.get("cover_prompt", ""))
         out["status"] = "awaiting_approval" if pid else "no_telegram"
         out["pid"] = pid
         out["steps"].append({"step": "approval_requested", "ok": bool(pid)})
@@ -471,7 +496,7 @@ def _caption_for(platform: str, plan: dict) -> str:
 
 
 async def _send_report(report: dict, platforms: list) -> None:
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not chat_id:
         return
     try:

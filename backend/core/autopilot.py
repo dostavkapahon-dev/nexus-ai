@@ -8,15 +8,18 @@
   4. week_plan      — план на неделю: reels / посты / карусели / сторис / threads
   5. predict        — прогноз залёта в % и лучшее время публикации
 
-Состояние хранится в таблице Connection (без миграций схемы).
+Состояние хранится в таблице Connection (без миграций схемы) и правится через
+`core/kv` — под замком на ключ, чтобы параллельные сообщения не затирали ответы
+друг друга.
 Экономия токенов: тяжёлые данные ужимаются, самопроверка идёт на дешёвой модели.
 """
 import json
 from datetime import datetime
 
 from sqlalchemy import select
+from core import kv
 from database.db import AsyncSessionLocal
-from database.models import Connection, Niche, UserProfile
+from database.models import Niche, UserProfile
 from core.ai_router import ai_router, ECONOMY_MODELS
 
 STATE_KEY = "autopilot_state"     # {stage, answers, questions, analysis, options, plan}
@@ -24,36 +27,22 @@ STATE_KEY = "autopilot_state"     # {stage, answers, questions, analysis, option
 
 # ─────────────────────────── состояние ───────────────────────────
 
-async def _load(db) -> dict:
-    r = await db.execute(select(Connection).where(Connection.key_name == STATE_KEY))
-    c = r.scalar_one_or_none()
-    if c and c.key_value:
-        try:
-            return json.loads(c.key_value)
-        except Exception:
-            return {}
-    return {}
-
-
-async def _save(db, state: dict):
-    r = await db.execute(select(Connection).where(Connection.key_name == STATE_KEY))
-    c = r.scalar_one_or_none()
-    payload = json.dumps(state, ensure_ascii=False)
-    if c:
-        c.key_value = payload
-    else:
-        db.add(Connection(key_name=STATE_KEY, key_value=payload))
-    await db.commit()
-
-
 async def get_state() -> dict:
-    async with AsyncSessionLocal() as db:
-        return await _load(db)
+    return await kv.get(STATE_KEY, {})
 
 
 async def set_state(state: dict):
-    async with AsyncSessionLocal() as db:
-        await _save(db, state)
+    await kv.set(STATE_KEY, state)
+
+
+def edit_state():
+    """Правка состояния под замком: `async with edit_state() as st: st[...] = ...`
+
+    Интервью записывает ответы по одному, и параллельное сообщение (или кнопка
+    пульта) успевало вклиниться между чтением и записью — ответ на вопрос
+    пропадал, а человек видел, что его переспрашивают то же самое.
+    """
+    return kv.update(STATE_KEY, {})
 
 
 async def reset():

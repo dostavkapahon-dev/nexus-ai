@@ -76,6 +76,40 @@ async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
     return {}
 
 
+async def delete_message(chat_id: str, message_id) -> None:
+    """Убрать сообщение из чата. Нужно там, где человек прислал секрет:
+    ключ, оставшийся в истории переписки, — это ключ, который утёк."""
+    if not message_id:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            await c.post(_url("deleteMessage"),
+                         json={"chat_id": chat_id, "message_id": message_id})
+    except Exception as e:
+        print(f"[NEXUS] Telegram deleteMessage: {type(e).__name__}: {str(e)[:80]}",
+              flush=True)
+
+
+# Команды, чей текст содержит секрет и не должен оставаться в переписке.
+SECRET_COMMANDS = ("/key",)
+
+
+def mask_secret(text: str) -> str:
+    """Тот же текст, но со скрытым значением — для лент и логов."""
+    if not carries_secret(text):
+        return text
+    parts = text.strip().split()
+    return " ".join(parts[:2] + ["•••"])
+
+
+def carries_secret(text: str) -> bool:
+    """`/key` без значения — это справка, её удалять незачем и вредно:
+    человек как раз читает список имён."""
+    parts = (text or "").strip().split()
+    return bool(parts) and parts[0].split("@")[0].lower() in SECRET_COMMANDS \
+        and len(parts) >= 3
+
+
 def _main_menu_kb() -> dict:
     """Главное меню. Восемь кнопок вместо россыпи: по ТЗ человек управляет
     результатом, а не выбирает, какую из четырнадцати команд нажать. Остальные
@@ -125,6 +159,9 @@ async def setup_bot_commands():
     """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
+        {"command": "setup", "description": "Что работает и что подключить"},
+        {"command": "key", "description": "Подключить ключ прямо из чата"},
+        {"command": "autopub", "description": "Автопубликация: вкл/выкл и режимы"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
@@ -163,7 +200,9 @@ async def _handle_command(chat_id: str, text: str):
     # Пишем в общую ленту — чтобы действия из Telegram были видны в дашборде.
     try:
         from core.command_center import log_event
-        await log_event("telegram", "user", text)
+        # Лента видна в дашборде: значение ключа туда попадать не должно —
+        # удалить сообщение из чата и оставить секрет в вебе было бы половиной дела.
+        await log_event("telegram", "user", mask_secret(text))
     except Exception:
         pass
     token = _in_command.set(True)
@@ -734,6 +773,73 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"✅ Ролик собран ({res.get('clips')} сцен), но не отправился: {res.get('send_error', 'неизвестно')}")
         else:
             await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
+        return
+
+    if cmd == "setup":
+        # Разрез по способностям, а не по ключам: человек спрашивает «умеет ли
+        # система публиковать сама», а не «задан ли VK_ACCESS_TOKEN».
+        from core import setup_guide
+        await send_message(chat_id, setup_guide.as_text(await setup_guide.report()))
+        return
+
+    if cmd == "key":
+        # Настройка целиком из чата: раньше единственным местом ввода ключей был
+        # веб, то есть настроить систему с телефона было нельзя.
+        from core import credentials
+        if not args:
+            names = "\n".join(f"• <code>{f.key}</code> — {f.label}"
+                               for f in credentials.FIELDS)
+            await send_message(chat_id,
+                               "🔑 <b>Подключить ключ</b>\n"
+                               "<code>/key имя значение</code>\n"
+                               "Например: <code>/key groq_api_key gsk_...</code>\n\n"
+                               "Сообщение с ключом удаляется сразу после сохранения.\n"
+                               "Чего не хватает именно вам — покажет /setup\n\n"
+                               + names)
+            return
+        name = args[0].strip().lower().lstrip("$")
+        if name not in credentials.BY_KEY:
+            await send_message(chat_id, f"❌ Неизвестное имя <code>{name}</code>. "
+                                        "Список: /key без аргументов")
+            return
+        if len(args) < 2:
+            await send_message(chat_id, f"❌ Не хватает значения: "
+                                        f"<code>/key {name} значение</code>")
+            return
+        res = await credentials.set(name, " ".join(args[1:]))
+        if not res.get("ok"):
+            await send_message(chat_id, f"❌ Не сохранено: {res.get('error', 'ошибка')}")
+            return
+        note = ("зашифрован" if res.get("encrypted")
+                else "сохранён без шифрования — задайте NEXUS_SECRET_KEY")
+        await send_message(chat_id, f"✅ <code>{name}</code> подключён ({note}).\n"
+                                    "Что изменилось: /setup")
+        return
+
+    if cmd == "autopub":
+        # Рубильник автопостинга там же, где всё остальное управление.
+        from core import autopublish as ap
+        if not args:
+            st = await ap.get_settings()
+            rows = "\n".join(f"• {p} — <b>{m}</b>" for p, m in sorted(st["platforms"].items()))
+            await send_message(chat_id,
+                "🚀 <b>Автопубликация</b>: " + ("включена ✅" if st["enabled"] else "выключена ❌")
+                + "\n\n" + rows
+                + "\n\n<code>/autopub on</code> · <code>/autopub off</code>"
+                  "\n<code>/autopub telegram auto</code> (manual · confirm · auto)")
+            return
+        first = args[0].strip().lower()
+        if first in ("on", "off"):
+            st = await ap.set_settings(enabled=(first == "on"))
+            await send_message(chat_id, "🚀 Автопубликация "
+                               + ("включена ✅" if st["enabled"] else "выключена ❌"))
+            return
+        if len(args) < 2 or args[1].strip().lower() not in ap.MODES:
+            await send_message(chat_id, "❌ Режим: manual · confirm · auto.\n"
+                                        "Например: <code>/autopub telegram auto</code>")
+            return
+        st = await ap.set_settings(platforms={first: args[1].strip().lower()})
+        await send_message(chat_id, f"✅ {first} — <b>{st['platforms'].get(first)}</b>")
         return
 
     if cmd == "diag":
@@ -1345,26 +1451,35 @@ async def _plain_text(chat_id: str, text: str):
     # 1) Идёт интервью автопилота — записываем ответ и задаём следующий вопрос.
     st = await ap.get_state()
     if st.get("stage") == "interview":
-        qs = st.get("questions", [])
-        i = st.get("idx", 0)
-        if i < len(qs):
-            st.setdefault("answers", {})[qs[i]] = text.strip()
-            i += 1
-            st["idx"] = i
-        if i < len(qs):
-            await ap.set_state(st)
-            await send_message(chat_id, f"❓ <b>Вопрос {i+1} из {len(qs)}</b>\n\n{qs[i]}")
+        # Ответ записывается под замком: два быстрых сообщения подряд читали одно
+        # и то же состояние, и второе затирало первое — ответ пропадал, а человека
+        # переспрашивали тот же вопрос. Отправка сообщений — уже вне замка,
+        # держать его на время сетевого вызова незачем.
+        async with ap.edit_state() as st:
+            qs = st.get("questions", [])
+            i = st.get("idx", 0)
+            if i < len(qs):
+                st.setdefault("answers", {})[qs[i]] = text.strip()
+                i += 1
+                st["idx"] = i
+            next_question = qs[i] if i < len(qs) else None
+            if next_question is None:
+                st["stage"] = "strategies"      # вопросы кончились → строим стратегии
+            total = len(qs)
+
+        if next_question is not None:
+            await send_message(chat_id, f"❓ <b>Вопрос {i+1} из {total}</b>\n\n{next_question}")
             return
-        # Вопросы кончились → строим стратегии
-        st["stage"] = "strategies"
-        await ap.set_state(st)
         await send_message(chat_id, "🎯 <b>Шаг 3/4</b> — собираю варианты стратегии на основе всего...")
         opts = await ap.build_strategies(st.get("analysis", {}), st.get("answers", {}))
         if not opts:
             await send_message(chat_id, "⚠️ Не удалось собрать стратегии — попробуй /auto ещё раз")
             return
+        # Сборка стратегий занимает секунды — замок на это время не держим,
+        # а результат кладём отдельной короткой правкой.
+        async with ap.edit_state() as fresh:
+            fresh["options"] = opts
         st["options"] = opts
-        await ap.set_state(st)
         lines = ["🎯 <b>Варианты стратегии</b>", ""]
         for n, o in enumerate(opts):
             lines.append(f"<b>{n+1}. {o.get('title','')}</b>\n{o.get('angle','')}\n"
@@ -1395,8 +1510,7 @@ async def _plain_text(chat_id: str, text: str):
 
     # 2) Правки к контенту на согласовании.
     from core import moderation
-    async with AsyncSessionLocal() as db:
-        pid = await moderation.pending_fix_id(db)
+    pid = await moderation.pending_fix_id()
     if not pid:
         # 3) Свободный текст: понимаем намерение и выполняем нужное действие.
         from core import intent
@@ -1520,6 +1634,8 @@ async def poll_updates():
                 if not text:
                     continue
                 if text.startswith("/"):
+                    if carries_secret(text):
+                        await delete_message(upd_chat_id, msg.get("message_id"))
                     asyncio.create_task(_handle_command(upd_chat_id, text))
                 else:
                     # Обычный текст — возможно, это правки к контенту на согласовании.

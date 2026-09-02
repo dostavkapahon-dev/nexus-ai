@@ -9,7 +9,8 @@
 - [x] `DATABASE_URL` и `alembic upgrade head` в `render.yaml`
 - [ ] **ДЕЙСТВИЕ ПОЛЬЗОВАТЕЛЯ:** создать бесплатный Postgres в Supabase и вставить
       строку подключения в Render → Environment → `DATABASE_URL`
-- [ ] Перенести эфемерные `data/*.json` (skills, brand_voice, hook_history) в БД
+- [x] Перенести эфемерные `data/*.json` (skills, brand_voice, hook_history) в БД —
+      таблица `agent_state` + `core/file_state.py`, файл остался рабочей копией
 
 ## Быстрые 🔴-фиксы
 - [x] `core/prompt_store.py` — `gemini-1.5-flash` → `gemini-2.0-flash`

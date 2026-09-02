@@ -8,6 +8,8 @@ Schedule:
   23:00 UTC — Agent 8: Daily summary report
 """
 import os
+
+from core import notify
 import asyncio
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -24,7 +26,7 @@ async def run_daily_trends():
     from agents.reporter import reporter
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     analyst = TrendAnalyst()
 
     async with AsyncSessionLocal() as db:
@@ -49,7 +51,7 @@ async def run_daily_generate():
     from core.orchestrator import nexus_core
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     async with AsyncSessionLocal() as db:
         result = await db.execute(
             select(ContentPlan).where(ContentPlan.status == "pending").limit(10)
@@ -76,7 +78,7 @@ async def run_daily_publish():
     from publishers.telegram_pub import publish_telegram
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     published = 0
 
     async with AsyncSessionLocal() as db:
@@ -173,7 +175,7 @@ async def run_daily_report():
     from agents.reporter import reporter
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not chat_id:
         return
 
@@ -191,7 +193,7 @@ async def run_daily_factory():
         # Отчёт возвращаем наверх: по нему задача узнаёт, что упёрлась в согласование.
         return await run_factory(topic=None, dry_run=not auto)
     except Exception as e:
-        chat = os.getenv("TELEGRAM_CHAT_ID", "")
+        chat = await notify.owner_chat()
         if chat:
             from core.telegram_bot import send_message
             await send_message(chat, f"⚠️ Фабрика: {str(e)[:120]}")
@@ -203,7 +205,7 @@ async def run_weekly_analytics():
     from agents.reporter import reporter
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not chat_id:
         return
     async with AsyncSessionLocal() as db:
@@ -223,7 +225,7 @@ async def run_metrics_collection():
     from core.post_analytics import collect_metrics, learn_from_results
     res = await collect_metrics()
     learned = await learn_from_results()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
         from core.telegram_bot import send_message
         from core.post_analytics import performance
@@ -251,7 +253,7 @@ async def run_competitor_tracking():
     """Еженедельный срез метрик конкурентов — по нему видно динамику ниши."""
     from core.research_store import refresh_all
     res = await refresh_all()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
         from core.research_store import tracked_competitors
         from core.telegram_bot import send_message
@@ -298,7 +300,7 @@ async def run_token_maintenance():
     from connectors import health_all, get_connector
     from core.telegram_bot import send_message
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     problems = []
     for st in await health_all():
         platform = st.get("platform", "")
@@ -408,6 +410,13 @@ def start_scheduler():
     from core.task_manager import watchdog
     _scheduler.add_job(watchdog, CronTrigger(minute="*/5"),
                        id="watchdog", replace_existing=True)
+
+    # Каждые 5 минут — сохранение памяти агента в базу. Обычно она уезжает туда
+    # сразу при записи, но запись из потока без событийного цикла так не может:
+    # без этого джоба такое изменение дожило бы только до перезапуска.
+    from core.file_state import flush as flush_agent_state
+    _scheduler.add_job(flush_agent_state, CronTrigger(minute="*/5"),
+                       id="agent_state", replace_existing=True, max_instances=1)
 
     _scheduler.add_job(run_publish_queue, CronTrigger(minute="*/10"),
                        id="publish_queue", replace_existing=True, max_instances=1)

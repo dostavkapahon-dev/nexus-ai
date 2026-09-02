@@ -81,6 +81,9 @@ def set_brand_voice(text: str) -> None:
     os.makedirs(os.path.dirname(BRAND_VOICE_PATH), exist_ok=True)
     with open(BRAND_VOICE_PATH, "w", encoding="utf-8") as f:
         f.write(text.strip())
+    # Голос, отредактированный в вебе или командой /voice, должен пережить деплой.
+    from core import file_state
+    file_state.mark_dirty("brand_voice")
 
 
 def cover_prompt(headline: str, ratio: str = "9:16") -> str:

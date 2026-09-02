@@ -8,42 +8,17 @@
 согласование в Telegram, и только после подтверждения отправляется. Автоответы
 от лица бренда — слишком дорогая ошибка, чтобы доверять их модели без надзора.
 """
-import json
 from datetime import datetime
 
 from sqlalchemy import select
 
+from core import kv, notify
 from database.db import AsyncSessionLocal
-from database.models import Connection
 
 # Уже обработанные комментарии, чтобы не отвечать дважды.
 SEEN_KEY = "engagement_seen"
 PENDING_KEY = "engagement_pending"
 MAX_SEEN = 500
-
-
-async def _load(key: str, default):
-    async with AsyncSessionLocal() as db:
-        r = await db.execute(select(Connection).where(Connection.key_name == key))
-        c = r.scalar_one_or_none()
-    if c and c.key_value:
-        try:
-            return json.loads(c.key_value)
-        except Exception:
-            return default
-    return default
-
-
-async def _save(key: str, value):
-    async with AsyncSessionLocal() as db:
-        r = await db.execute(select(Connection).where(Connection.key_name == key))
-        c = r.scalar_one_or_none()
-        payload = json.dumps(value, ensure_ascii=False)
-        if c:
-            c.key_value = payload
-        else:
-            db.add(Connection(key_name=key, key_value=payload))
-        await db.commit()
 
 
 async def fetch_new_comments(platform: str = "instagram", limit: int = 20) -> list[dict]:
@@ -57,7 +32,7 @@ async def fetch_new_comments(platform: str = "instagram", limit: int = 20) -> li
     if not res.get("ok"):
         return []
 
-    seen = set(await _load(SEEN_KEY, []))
+    seen = set(await kv.get(SEEN_KEY, []))
     return [item for item in (res.get("comments") or []) if item.get("id") not in seen]
 
 
@@ -106,8 +81,10 @@ async def process_comments(platform: str = "instagram", limit: int = 10,
 
     # Помечаем просмотренными даже те, на которые не отвечаем: иначе будем
     # разбирать их снова на каждом прогоне и жечь токены.
-    seen = await _load(SEEN_KEY, [])
-    await _save(SEEN_KEY, (seen + seen_ids)[-MAX_SEEN:])
+    # Список просмотренных дописывается под замком: разбор комментариев идёт
+    # и по расписанию, и по команде, а потерянная отметка означает повторный
+    # разбор тех же комментариев и сожжённые на этом токены.
+    await kv.replace(SEEN_KEY, lambda cur: ((cur or []) + seen_ids)[-MAX_SEEN:])
 
     to_send = [p for p in prepared if p.get("reply")]
     if auto_send:
@@ -117,7 +94,7 @@ async def process_comments(platform: str = "instagram", limit: int = 10,
                 "sent": sum(1 for s in sent if s.get("ok")), "auto": True}
 
     if to_send:
-        await _save(PENDING_KEY, to_send)
+        await kv.set(PENDING_KEY, to_send)
         await _ask_approval(to_send)
 
     return {"ok": True, "processed": len(prepared), "skipped": skipped,
@@ -135,7 +112,7 @@ async def _active_niche() -> tuple[str, str]:
 async def _ask_approval(items: list[dict]):
     """Отправляет подготовленные ответы на согласование в Telegram."""
     import os
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    chat_id = await notify.owner_chat()
     if not (os.getenv("TELEGRAM_BOT_TOKEN") and chat_id):
         return
     from core.telegram_bot import send_message
@@ -154,7 +131,7 @@ async def _ask_approval(items: list[dict]):
 
 async def pending() -> list[dict]:
     """Ответы, ждущие согласования."""
-    return await _load(PENDING_KEY, [])
+    return await kv.get(PENDING_KEY, [])
 
 
 async def send_reply(platform: str, comment_id: str, text: str) -> dict:
@@ -180,19 +157,19 @@ async def approve_all() -> dict:
         else:
             failed.append(f"@{p.get('author', '')}: {res.get('error', '')[:80]}")
 
-    await _save(PENDING_KEY, [])
+    await kv.set(PENDING_KEY, [])
     return {"ok": True, "sent": sent, "failed": failed, "total": len(items)}
 
 
 async def discard_pending() -> int:
     """Отклонить подготовленные ответы."""
     items = await pending()
-    await _save(PENDING_KEY, [])
+    await kv.set(PENDING_KEY, [])
     return len(items)
 
 
 async def stats() -> dict:
     """Сколько комментариев обработано и что ждёт согласования."""
-    seen = await _load(SEEN_KEY, [])
+    seen = await kv.get(SEEN_KEY, [])
     return {"processed_total": len(seen), "pending_approval": len(await pending()),
             "checked_at": datetime.utcnow().isoformat()}

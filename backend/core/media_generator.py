@@ -46,8 +46,11 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
     """
     size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
 
-    # Порядок: платные по наличию ключа → бесплатный Pollinations как гарантия.
+    # Порядок: HiggsField (там модель подбирается под задачу) → остальные
+    # платные по наличию ключа → бесплатный Pollinations как запас.
     chain = []
+    if provider == "higgsfield" or (provider == "auto" and os.getenv("HIGGSFIELD_API_KEY")):
+        chain.append(("higgsfield", lambda: _higgsfield(prompt, size)))
     if provider == "imagen" or (provider == "auto" and os.getenv("GEMINI_API_KEY")):
         chain.append(("imagen", lambda: _gemini_imagen(prompt, size)))
     if provider == "dalle3" or (provider == "auto" and os.getenv("OPENAI_API_KEY")):
@@ -68,10 +71,93 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
         # Провайдер вернул пусто — платить не за что, но знать об этом полезно.
         await _track_media(name, "image", False, time.time() - t0, "пустой ответ провайдера")
 
-    # Бесплатный путь работает всегда — картинка будет в любом случае.
+    # Бесплатный путь — последний рубеж, но «всегда работает» он только на
+    # бумаге: `_pollinations` лишь собирает ссылку, а картинку по ней рисуют
+    # в момент первого запроса. Пока никто не сходил по ссылке, неизвестно,
+    # получилась ли картинка вообще. Раньше здесь безусловно писалось
+    # «успех» — и дальше по конвейеру уезжала мёртвая ссылка: Telegram не мог
+    # её забрать, отправка падала, а система считала работу сделанной.
+    t0 = time.time()
     url = _pollinations(prompt, size)
-    await _track_media("pollinations", "image", True)
+    ok, err = await _image_responds(url)
+    await _track_media("pollinations", "image", ok, time.time() - t0,
+                       None if ok else err)
     return url
+
+
+# Сколько ждать картинку. Проверка стоит времени человека: она происходит,
+# пока он ждёт ответа в чате, поэтому запас должен быть разумным, а не
+# максимальным. Бесплатный генератор обычно отвечает за 5–20 секунд.
+IMAGE_CHECK_TIMEOUT = 25       # секунд на попытку
+IMAGE_CHECK_ATTEMPTS = 2
+
+
+async def _image_responds(url: str, attempts: int = IMAGE_CHECK_ATTEMPTS) -> tuple[bool, str]:
+    """Отдаётся ли по ссылке настоящая картинка.
+
+    Генератор рисует её на первом запросе, поэтому нужен именно GET: HEAD он
+    обслуживает не всегда. Первый заход часто упирается в очередь — отсюда
+    вторая попытка, дальше настаивать смысла нет, лучше честно сказать.
+    """
+    import httpx
+    last = "нет ответа"
+    for n in range(attempts):
+        try:
+            async with httpx.AsyncClient(timeout=IMAGE_CHECK_TIMEOUT,
+                                         follow_redirects=True) as c:
+                r = await c.get(url)
+            ctype = r.headers.get("content-type", "")
+            if r.status_code == 200 and ctype.startswith("image/") and r.content:
+                return True, ""
+            last = f"HTTP {r.status_code}, тип «{ctype or '—'}»"
+        except Exception as e:
+            last = f"{type(e).__name__}: {str(e)[:120]}"
+        if n + 1 < attempts:
+            await asyncio.sleep(2)
+    return False, f"генератор изображений не отдал картинку ({last})"
+
+async def _higgsfield(prompt: str, size: str) -> str | None:
+    """Картинка через HiggsField. Модель выбирается под задачу — см.
+    `core.higgsfield.pick_image_model`."""
+    from core import higgsfield
+    ratio = "9:16" if size == "1080x1920" else "1:1"
+    res = await higgsfield.image(prompt, ratio=ratio)
+    return res.get("url") if res.get("ok") else None
+
+
+async def revise_image(image_url: str, correction: str, base_prompt: str = "",
+                       platform: str = "instagram") -> dict:
+    """Правит уже сгенерированную картинку по замечанию человека.
+
+    Ключевое — image-to-image от исходного кадра, а не новая генерация с нуля:
+    замечание «поменяй фон» должно оставить того же человека в той же одежде.
+    Без исходника каждая правка приносила совершенно другую картинку, и это
+    выглядело как «оно не редактируется».
+
+    Без HiggsField честно возвращаем отказ: бесплатный генератор умеет только
+    рисовать заново, то есть выполнить правку он не может.
+    """
+    correction = (correction or "").strip()
+    if not correction:
+        return {"ok": False, "error": "правка пустая"}
+    if not os.getenv("HIGGSFIELD_API_KEY"):
+        return {"ok": False,
+                "error": "правка картинки требует HIGGSFIELD_API_KEY: бесплатный "
+                         "генератор умеет только рисовать заново, а не править"}
+
+    from core import higgsfield
+    # Исходный замысел + замечание: без первого правка теряет контекст сцены,
+    # без второго она бессмысленна.
+    prompt = (f"{base_prompt.strip()}\n\nApply this change: {correction}"
+              if base_prompt.strip() else correction)
+    ratio = "9:16" if platform in ("tiktok", "instagram", "youtube") else "1:1"
+
+    t0 = time.time()
+    res = await higgsfield.image(prompt, ratio=ratio, reference_url=image_url)
+    await _track_media("higgsfield", "image", bool(res.get("ok")),
+                       time.time() - t0, None if res.get("ok") else res.get("error"))
+    return res
+
 
 async def _gemini_imagen(prompt: str, size: str) -> str | None:
     """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""

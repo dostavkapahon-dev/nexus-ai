@@ -6,9 +6,10 @@
 |---|---|---|
 | SQLite `backend/nexus.db` | 9 таблиц | 🔴 **НЕТ** (нет диска в render.yaml) |
 | Таблица `Connection` (KV) | состояние, ключи | 🔴 **НЕТ** (та же БД) |
-| `backend/data/skills.json` | память уроков агента | 🟡 откат к git-версии |
-| `backend/data/brand_voice.txt` | голос бренда | 🟡 откат к git-версии |
-| `backend/data/hook_history.json` | антиповтор хуков (60) | 🔴 НЕТ (в `.gitignore`) |
+| Таблица `AgentState` | навыки, голос бренда, история хуков | 🟢 ДА (если задан `DATABASE_URL`) |
+| `backend/data/skills.json` | память уроков агента | 🟢 рабочая копия `AgentState` |
+| `backend/data/brand_voice.txt` | голос бренда | 🟢 рабочая копия `AgentState` |
+| `backend/data/hook_history.json` | антиповтор хуков (60) | 🟢 рабочая копия `AgentState` |
 | Render Environment | API-ключи | 🟢 ДА |
 
 ## Таблицы (`database/models.py`)
@@ -24,6 +25,7 @@
 | `Connection` | connections | **KV-хранилище**: ключи API + состояние системы |
 | `UserProfile` | user_profile | продукт, стиль, стратегия, ai_mode, Drive |
 | `NicheAnalysisCache` | niche_analysis_cache | кэш анализа ниши (+ ссылка на Google Drive) |
+| `AgentState` | agent_state | память агента: навыки, голос бренда, история хуков |
 
 ⚠️ **Нет ни одного ForeignKey и каскада.** Удаление плана оставляет осиротевшие
 `GeneratedContent` / `Publication` (`api/routes_queue.py:57`).
@@ -51,7 +53,8 @@
 `moderation_queue`, `autopilot_state`, `viral_recipe` растут неограниченно в одном Text-поле.
 
 ## Память агента (`core/skills_store.py`)
-Файл `data/skills.json`. Запись: `{id, kind, title, body, tags, score, used, created_at}`,
+Файл `data/skills.json` — рабочая копия, источник правды — строка `skills` в
+`agent_state` (см. «Файлы и база» ниже). Запись: `{id, kind, title, body, tags, score, used, created_at}`,
 `kind ∈ hook|format|visual|audience|mistake|rule`.
 - `context_for()` — собирает блок для промпта, отдельной секцией «ЧТО НЕ СРАБОТАЛО».
 - `learn_from(text, source)` — дешёвой моделью извлекает ≤5 уроков и сохраняет.
@@ -65,3 +68,26 @@
 4. Версионирования промптов (`CustomPrompt` перезаписывается in-place).
 5. Аудита изменений настроек и ключей.
 6. Multi-tenant: `UserProfile` де-факто одна строка, `Connection` глобален.
+
+## Файлы и база: кто главный (`core/file_state.py`)
+
+Три состояния агента исторически жили только в файлах `backend/data/*`. Диск
+контейнера на Render эфемерный, поэтому деплой возвращал `skills.json` и
+`brand_voice.txt` к версии из git, а `hook_history.json` (он в `.gitignore`)
+стирал совсем — агент «забывал» всё, чему научился, и повторял вчерашний хук.
+
+Теперь файл — рабочая копия (его по-прежнему видно и можно править руками),
+а источник правды — таблица `agent_state`:
+
+| Когда | Что происходит |
+|---|---|
+| старт (`main.lifespan`) | `restore_all()` разворачивает сохранённое на диск; если в базе пусто — туда уезжает текущий файл |
+| запись (`add_skill`, `hooks.record`, `set_brand_voice`) | `mark_dirty(...)` → содержимое сохраняется в базу |
+| каждые 5 минут (планировщик, джоб `agent_state`) | `flush()` — подстраховка для записей из потока без событийного цикла |
+
+При конфликте побеждает база: файл приезжает из образа сборки и не знает ничего
+о том, что агент выучил после деплоя. Неудачная запись не теряется — имя
+возвращается в очередь и уедет следующим заходом.
+
+Шифрования здесь нет намеренно: голос бренда, приёмы и история хуков —
+не секреты, в отличие от доступов (`core/credentials.py` → `core/secrets.py`).

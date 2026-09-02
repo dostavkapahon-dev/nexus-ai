@@ -42,8 +42,10 @@ def factory(monkeypatch):
     async def clip(*a, **kw):
         return {"ok": True, "url": "https://cdn/clip.mp4", "provider": "test"}
 
-    async def approval(text, media_url=None, platforms=None, kind="plan", ref=None):
-        sent.update({"media": media_url, "platforms": platforms, "text": text})
+    async def approval(text, media_url=None, platforms=None, kind="plan", ref=None,
+                       **kw):
+        sent.update({"media": media_url, "platforms": platforms, "text": text,
+                     "image_prompt": kw.get("image_prompt", "")})
         return "pid-1"
 
     async def noop(*a, **kw):
@@ -104,6 +106,8 @@ async def test_report_survives_flat_publication(client, monkeypatch):
         texts.append(text)
         return {}
 
+    # Оба условия обязательны: без токена писать нечем, без адресата — некому.
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "777")
     monkeypatch.setattr("core.telegram_bot.send_message", fake_send)
 

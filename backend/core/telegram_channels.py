@@ -21,6 +21,7 @@ import time
 
 from sqlalchemy import select
 
+from core import kv
 from database.db import AsyncSessionLocal
 from database.models import Connection
 from publishers import telegram_pub as tg
@@ -37,32 +38,9 @@ POST_RIGHT = "can_post_messages"
 
 # ─────────────────────────── хранилище ───────────────────────────
 
-async def _load(db) -> list[dict]:
-    r = await db.execute(select(Connection).where(Connection.key_name == CHANNELS_KEY))
-    c = r.scalar_one_or_none()
-    if not (c and c.key_value):
-        return []
-    try:
-        data = json.loads(c.key_value)
-        return data if isinstance(data, list) else []
-    except ValueError:
-        return []
-
-
-async def _save(db, items: list[dict]):
-    r = await db.execute(select(Connection).where(Connection.key_name == CHANNELS_KEY))
-    c = r.scalar_one_or_none()
-    payload = json.dumps(items, ensure_ascii=False)
-    if c:
-        c.key_value = payload
-    else:
-        db.add(Connection(key_name=CHANNELS_KEY, key_value=payload))
-    await db.commit()
-
-
 async def list_channels() -> list[dict]:
-    async with AsyncSessionLocal() as db:
-        return await _load(db)
+    items = await kv.get(CHANNELS_KEY, [])
+    return items if isinstance(items, list) else []
 
 
 async def default_channel() -> str:
@@ -230,13 +208,12 @@ async def add_channel(chat_id: str, *, make_default: bool = True,
     entry = {**chat, "connected_at": int(time.time()),
              "rights": check.get("rights", []), "default": False}
 
-    async with AsyncSessionLocal() as db:
-        items = [c for c in await _load(db) if c.get("chat_id") != chat["chat_id"]]
+    async with kv.update(CHANNELS_KEY, []) as items:
+        items[:] = [c for c in items if c.get("chat_id") != chat["chat_id"]]
         items.append(entry)
         if make_default or len(items) == 1:
             for c in items:
                 c["default"] = c["chat_id"] == chat["chat_id"]
-        await _save(db, items)
 
     # Совместимость: остальной код (коннектор, планировщик) читает переменную.
     os.environ["TELEGRAM_POST_CHAT_ID"] = chat["chat_id"]
@@ -245,27 +222,30 @@ async def add_channel(chat_id: str, *, make_default: bool = True,
 
 
 async def remove_channel(chat_id: str) -> dict:
-    async with AsyncSessionLocal() as db:
-        items = await _load(db)
+    removed = False
+    async with kv.update(CHANNELS_KEY, []) as items:
         rest = [c for c in items if str(c.get("chat_id")) != str(chat_id)]
-        if len(rest) == len(items):
-            return {"ok": False, "error": "канал не подключён"}
-        if rest and not any(c.get("default") for c in rest):
-            rest[0]["default"] = True
-        await _save(db, rest)
+        removed = len(rest) != len(items)
+        if removed:
+            if rest and not any(c.get("default") for c in rest):
+                rest[0]["default"] = True
+            items[:] = rest
+    if not removed:
+        return {"ok": False, "error": "канал не подключён"}
     os.environ["TELEGRAM_POST_CHAT_ID"] = await default_channel()
     await _persist_env("telegram_post_chat_id", os.environ["TELEGRAM_POST_CHAT_ID"])
     return {"ok": True, "removed": str(chat_id)}
 
 
 async def set_default(chat_id: str) -> dict:
-    async with AsyncSessionLocal() as db:
-        items = await _load(db)
-        if not any(str(c.get("chat_id")) == str(chat_id) for c in items):
-            return {"ok": False, "error": "канал не подключён"}
-        for c in items:
-            c["default"] = str(c.get("chat_id")) == str(chat_id)
-        await _save(db, items)
+    known = False
+    async with kv.update(CHANNELS_KEY, []) as items:
+        known = any(str(c.get("chat_id")) == str(chat_id) for c in items)
+        if known:
+            for c in items:
+                c["default"] = str(c.get("chat_id")) == str(chat_id)
+    if not known:
+        return {"ok": False, "error": "канал не подключён"}
     os.environ["TELEGRAM_POST_CHAT_ID"] = str(chat_id)
     await _persist_env("telegram_post_chat_id", str(chat_id))
     return {"ok": True, "default": str(chat_id)}

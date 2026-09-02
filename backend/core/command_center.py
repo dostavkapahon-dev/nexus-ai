@@ -10,13 +10,9 @@ Claude-дирижёра (core.marketing_director.run_director), а резуль�
 Хранилище ленты — таблица Connection (ключ control_feed, JSON-список), без
 миграций схемы. Лента ограничена по размеру, чтобы не разрастаться.
 """
-import asyncio
-import json
 import time
 
-from sqlalchemy import select
-from database.db import AsyncSessionLocal
-from database.models import Connection
+from core import kv, notify
 
 FEED_KEY = "control_feed"
 FEED_MAX = 60
@@ -24,48 +20,23 @@ FEED_MAX = 60
 # Лента — одна JSON-строка, которую читают и переписывают целиком. Телеграм
 # обрабатывает сообщения параллельными задачами, поэтому без замка две записи,
 # начатые одновременно, затирали друг друга: побеждала та, что коммитилась
-# последней, а вторая исчезала бесследно.
-_feed_lock = asyncio.Lock()
-
-
-async def _get_conn(db, key: str):
-    r = await db.execute(select(Connection).where(Connection.key_name == key))
-    return r.scalar_one_or_none()
+# последней, а вторая исчезала бесследно. Замок теперь общий для всех KV-строк
+# (`core/kv`), а не свой у каждого модуля: свой не защищал от соседа.
 
 
 async def log_event(source: str, role: str, text: str):
     """Добавляет запись в общую ленту. source: dashboard|telegram|system; role: user|agent."""
     entry = {"ts": int(time.time()), "source": source, "role": role,
              "text": (text or "")[:1500]}
-    async with _feed_lock, AsyncSessionLocal() as db:
-        c = await _get_conn(db, FEED_KEY)
-        feed = []
-        if c and c.key_value:
-            try:
-                feed = json.loads(c.key_value)
-            except Exception:
-                feed = []
+    async with kv.update(FEED_KEY, []) as feed:
         feed.append(entry)
-        feed = feed[-FEED_MAX:]
-        payload = json.dumps(feed, ensure_ascii=False)
-        if c:
-            c.key_value = payload
-        else:
-            db.add(Connection(key_name=FEED_KEY, key_value=payload))
-        await db.commit()
+        del feed[:-FEED_MAX]          # длина ленты ограничена, правим на месте
     return entry
 
 
 async def get_feed(limit: int = 40) -> list[dict]:
-    async with AsyncSessionLocal() as db:
-        c = await _get_conn(db, FEED_KEY)
-    if not (c and c.key_value):
-        return []
-    try:
-        feed = json.loads(c.key_value)
-    except Exception:
-        return []
-    return feed[-limit:]
+    feed = await kv.get(FEED_KEY, [])
+    return feed[-limit:] if isinstance(feed, list) else []
 
 
 def _summarize(result: dict) -> str:
@@ -164,7 +135,7 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True)
     if mirror and source == "dashboard":
         try:
             import os
-            chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+            chat_id = await notify.owner_chat()
             if os.getenv("TELEGRAM_BOT_TOKEN") and chat_id:
                 from core.telegram_bot import send_message
                 await send_message(chat_id, f"🖥 <b>С дашборда:</b> {text}\n\n{reply}")

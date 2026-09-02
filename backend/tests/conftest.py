@@ -49,6 +49,72 @@ def _reset_escrow():
     ai_escrow.reset()
 
 
+class OutboundBlocked(RuntimeError):
+    """Тест попытался сходить в интернет."""
+
+
+@pytest.fixture(autouse=True)
+def _no_outbound_network(monkeypatch):
+    """Тесты не ходят в сеть — и падают, если попробуют.
+
+    Дважды подряд живой запрос протекал в тесты (проверка сгенерированной
+    картинки, затем полный прогон фабрики). Прогон при этом оставался зелёным,
+    поэтому заметить это можно было только по времени CI: 1 м 30 с → 5 м 54 с →
+    3 м 09 с. Такая ошибка должна падать сразу и громко, а не превращаться в
+    медленный прогон, зависящий от чужого сервиса.
+
+    Блокируется только настоящий транспорт httpx. ASGITransport, через который
+    тесты стучатся в само приложение, работает как раньше.
+    """
+    import httpx
+
+    def blocked(self, request, *a, **kw):
+        raise OutboundBlocked(
+            f"Тест пошёл в сеть: {request.method} {request.url}. "
+            "Подмените вызов заглушкой — прогон не должен зависеть от чужого "
+            "сервиса (см. _no_outbound_network в conftest)."
+        )
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", blocked)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", blocked)
+
+    # httpx — не единственная дверь наружу: yt-dlp ходит через urllib, а
+    # Google SDK через свой транспорт. Поэтому дополнительно закрыт сам сокет.
+    # Локальные адреса оставлены: на них держатся служебные пары сокетов
+    # внутри asyncio, и их запрет сломал бы сам прогон.
+    import socket
+
+    real_connect = socket.socket.connect
+
+    def guarded_connect(self, address, *a, **kw):
+        host = address[0] if isinstance(address, tuple) else address
+        if isinstance(host, str) and host not in ("127.0.0.1", "::1", "localhost"):
+            raise OutboundBlocked(
+                f"Тест открыл сокет наружу: {host}. Подмените вызов заглушкой "
+                "(см. _no_outbound_network в conftest)."
+            )
+        return real_connect(self, address, *a, **kw)
+
+    monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_live_image_check(monkeypatch):
+    """Проверка сгенерированной картинки ходит в интернет — в тестах не должна.
+
+    Иначе прогон зависит от стороннего сервиса: он же определяет и время
+    (на CI это было +2 минуты на каждый вызов фабрики), и — если сервис ляжет —
+    результат. Тестам, которым важно именно поведение проверки, она
+    подменяется своей заглушкой, и та побеждает эту.
+    """
+    async def offline(url, attempts=2):
+        return True, ""
+
+    monkeypatch.setattr("core.media_generator._image_responds", offline)
+    yield
+
+
 @pytest_asyncio.fixture
 async def client():
     await init_db()

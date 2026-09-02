@@ -1,4 +1,6 @@
 import os
+
+from core import notify
 from fastapi import APIRouter, Depends, BackgroundTasks, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -82,7 +84,7 @@ async def publish(plan_id: str, db: AsyncSession = Depends(get_db)):
     if not content:
         raise HTTPException(400, "No content generated")
 
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    chat_id = await notify.owner_chat()
     if not chat_id:
         raise HTTPException(400, "TELEGRAM_CHAT_ID not configured")
 

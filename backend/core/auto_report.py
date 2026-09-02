@@ -7,6 +7,8 @@
   • всё настроено → запускаем разбор аккаунта (Роль 1) и шлём отчёт админу.
 """
 import os
+
+from core import notify
 import asyncio
 from datetime import date
 from sqlalchemy import select
@@ -39,7 +41,7 @@ async def auto_analyze_on_start(delay: float = 25.0):
         pass
 
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-    admin = os.getenv("TELEGRAM_CHAT_ID", "")
+    admin = await notify.owner_chat()
     if not token or not admin:
         return  # без бота/чата некуда слать
 

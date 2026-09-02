@@ -295,3 +295,22 @@ class Strategy(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     activated_at = Column(DateTime)
     archived_at = Column(DateTime)
+
+
+class AgentState(Base):
+    """Память агента, которая раньше лежала только в файлах `backend/data/*`.
+
+    Файлы удобны человеку — их видно и можно править руками, — но на Render диск
+    контейнера эфемерный: любой деплой возвращал `skills.json` и `brand_voice.txt`
+    к версии из git, а `hook_history.json` (он в `.gitignore`) исчезал совсем.
+    Со стороны это выглядело как «агент забыл всё, чему научился, и снова
+    повторяет один и тот же хук».
+
+    Файл остаётся рабочей копией, а строка здесь — источником правды: при старте
+    содержимое разворачивается обратно на диск, при каждой записи — сохраняется
+    сюда. См. `core/file_state.py`.
+    """
+    __tablename__ = 'agent_state'
+    key = Column(String, primary_key=True)
+    value = Column(Text, default='')
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
