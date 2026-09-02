@@ -187,3 +187,28 @@ async def test_activity_feed_keeps_parallel_entries():
     feed = await kv.get(command_center.FEED_KEY, [])
     assert len(feed) == 12
     assert len(feed) <= command_center.FEED_MAX
+
+
+@pytest.mark.asyncio
+async def test_plain_string_survives_a_round_trip(state_dir=None):
+    """Не всё состояние — структура: флаг «человек сейчас пишет правки» это
+    просто идентификатор. Строка записывалась как есть, а читалась как JSON
+    и молча превращалась в пустоту — кнопка «Правки» переставала работать."""
+    await init_db()
+    await kv.set("test_plain", "pid123")
+    assert await kv.get("test_plain", "") == "pid123"
+
+
+@pytest.mark.asyncio
+async def test_legacy_plain_value_is_still_readable():
+    """Строки, записанные не через kv (так пишут другие модули), читаются.
+
+    Оговорка: значение из одних цифр — это валидный JSON-число, и оно вернётся
+    числом. Поэтому такие ключи (например chat_id владельца) свои модули читают
+    сами, напрямую, а не через этот слой.
+    """
+    await init_db()
+    async with AsyncSessionLocal() as db:
+        db.add(Connection(key_name="test_legacy", key_value="b969be9f"))
+        await db.commit()
+    assert await kv.get("test_legacy", "") == "b969be9f"

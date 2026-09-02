@@ -21,6 +21,18 @@ QUEUE_KEY = "moderation_queue"     # {pid: {text, media_url, platforms, kind, re
 PENDING_FIX_KEY = "pending_fix"    # pid, для которого админ сейчас пишет правки
 
 
+# Слова, по которым видно, что замечание относится к картинке, а не к тексту.
+# Перерисовывать кадр на каждую правку подписи — жечь деньги впустую.
+_IMAGE_WORDS = ("картин", "фото", "изображ", "визуал", "кадр", "обложк", "фон",
+                "цвет", "свет", "ракурс", "план", "сцен", "перерисуй", "перегенер",
+                "image", "photo", "background", "colour", "color", "lighting")
+
+
+def _about_image(correction: str) -> bool:
+    low = (correction or "").lower()
+    return any(w in low for w in _IMAGE_WORDS)
+
+
 async def _tg(method: str, payload: dict) -> dict:
     """Вызов Telegram. Возвращает ответ API: `{"ok": bool, "description": str}`.
 
@@ -71,7 +83,8 @@ async def analyze_media_for(pid: str) -> str:
 
 
 async def send_for_approval(text: str, media_url: str = None, platforms: list = None,
-                            kind: str = "plan", ref: str = None) -> str | None:
+                            kind: str = "plan", ref: str = None,
+                            image_prompt: str = "") -> str | None:
     """Кладёт контент в очередь и шлёт админу превью с кнопками. Возвращает pid."""
     # Владелец мог подключить бота через /start, не задавая TELEGRAM_CHAT_ID —
     # это штатный путь. Раньше в таком случае материал молча оседал в очереди
@@ -84,7 +97,11 @@ async def send_for_approval(text: str, media_url: str = None, platforms: list = 
     pid = uuid.uuid4().hex[:8]
     async with kv.update(QUEUE_KEY, {}) as queue:
         queue[pid] = {"text": text, "media_url": media_url,
-                      "platforms": platforms or ["instagram"], "kind": kind, "ref": ref}
+                      "platforms": platforms or ["instagram"], "kind": kind,
+                      "ref": ref,
+                      # Замысел сцены нужен для правки: без него «поменяй фон»
+                      # рисуется без всякого представления, что было в кадре.
+                      "image_prompt": image_prompt}
 
     caption = ("🆕 <b>На согласование</b>\n\n" + (text or ""))[:1024]
     kb = _kb(pid)
@@ -187,8 +204,24 @@ async def apply_fix(correction: str) -> str:
         from core.orchestrator import nexus_core
         await nexus_core.generate_content_for_plan(ref, corrections=correction)
         return "🔄 Перегенерировал с правками — прислал новую версию на согласование."
-    # kind == factory или без ref: правим текст напрямую и снова на согласование
+    # kind == factory или без ref. Правка может касаться и картинки: раньше
+    # сюда просто дописывался текст, а media_url переотправлялся тот же самый —
+    # то есть замечание по визуалу не делало ничего, и это выглядело как
+    # «картинка не редактируется».
+    media = item.get("media_url")
+    note = ""
+    if media and _about_image(correction):
+        from core.media_generator import revise_image
+        res = await revise_image(media, correction,
+                                 base_prompt=item.get("image_prompt", ""))
+        if res.get("ok"):
+            media = res["url"]
+            note = f"\n🖼 Картинку перерисовал ({res.get('model', 'higgsfield')})."
+        else:
+            note = f"\n⚠️ Картинку поправить не вышло: {str(res.get('error'))[:150]}"
+
     new_text = (item.get("text", "") + f"\n\n[Правки: {correction}]")
-    await send_for_approval(new_text, media_url=item.get("media_url"),
-                            platforms=item.get("platforms"), kind=kind, ref=ref)
-    return "🔄 Обновил с учётом правок — на согласовании."
+    await send_for_approval(new_text, media_url=media,
+                            platforms=item.get("platforms"), kind=kind, ref=ref,
+                            image_prompt=item.get("image_prompt", ""))
+    return "🔄 Обновил с учётом правок — на согласовании." + note

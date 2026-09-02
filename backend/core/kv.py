@@ -54,13 +54,26 @@ def _decode(raw: str | None, default):
     try:
         return json.loads(raw)
     except ValueError:
-        # Испорченная строка не должна ронять вызывающего: он получит пустое
-        # состояние и перезапишет его — это лучше, чем падение на каждом заходе.
+        # Не JSON. Два разных случая, и путать их нельзя:
+        #  • ключ хранит простое значение — строку, записанную не через `kv`
+        #    (так пишут `telegram_owner` и другие модули). Её и возвращаем;
+        #  • ключ хранит структуру, а строка испорчена — тогда честнее отдать
+        #    пустое состояние: вызывающий перезапишет его, а не упадёт на
+        #    каждом заходе.
+        if default is None or isinstance(default, str):
+            return raw
         return default
 
 
 def _encode(value) -> str:
-    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    """Всегда JSON — включая строки.
+
+    Раньше строка писалась как есть, а читалась через `json.loads` и не
+    разбиралась: `set(key, "pid123")` с последующим `get` возвращал пустоту.
+    Так молча ломался флаг «человек сейчас пишет правки» — кнопка «Правки»
+    переставала работать.
+    """
+    return json.dumps(value, ensure_ascii=False)
 
 
 async def get(key: str, default=None):

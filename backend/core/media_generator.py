@@ -46,8 +46,11 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
     """
     size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
 
-    # Порядок: платные по наличию ключа → бесплатный Pollinations как гарантия.
+    # Порядок: HiggsField (там модель подбирается под задачу) → остальные
+    # платные по наличию ключа → бесплатный Pollinations как запас.
     chain = []
+    if provider == "higgsfield" or (provider == "auto" and os.getenv("HIGGSFIELD_API_KEY")):
+        chain.append(("higgsfield", lambda: _higgsfield(prompt, size)))
     if provider == "imagen" or (provider == "auto" and os.getenv("GEMINI_API_KEY")):
         chain.append(("imagen", lambda: _gemini_imagen(prompt, size)))
     if provider == "dalle3" or (provider == "auto" and os.getenv("OPENAI_API_KEY")):
@@ -112,6 +115,49 @@ async def _image_responds(url: str, attempts: int = IMAGE_CHECK_ATTEMPTS) -> tup
         if n + 1 < attempts:
             await asyncio.sleep(2)
     return False, f"генератор изображений не отдал картинку ({last})"
+
+async def _higgsfield(prompt: str, size: str) -> str | None:
+    """Картинка через HiggsField. Модель выбирается под задачу — см.
+    `core.higgsfield.pick_image_model`."""
+    from core import higgsfield
+    ratio = "9:16" if size == "1080x1920" else "1:1"
+    res = await higgsfield.image(prompt, ratio=ratio)
+    return res.get("url") if res.get("ok") else None
+
+
+async def revise_image(image_url: str, correction: str, base_prompt: str = "",
+                       platform: str = "instagram") -> dict:
+    """Правит уже сгенерированную картинку по замечанию человека.
+
+    Ключевое — image-to-image от исходного кадра, а не новая генерация с нуля:
+    замечание «поменяй фон» должно оставить того же человека в той же одежде.
+    Без исходника каждая правка приносила совершенно другую картинку, и это
+    выглядело как «оно не редактируется».
+
+    Без HiggsField честно возвращаем отказ: бесплатный генератор умеет только
+    рисовать заново, то есть выполнить правку он не может.
+    """
+    correction = (correction or "").strip()
+    if not correction:
+        return {"ok": False, "error": "правка пустая"}
+    if not os.getenv("HIGGSFIELD_API_KEY"):
+        return {"ok": False,
+                "error": "правка картинки требует HIGGSFIELD_API_KEY: бесплатный "
+                         "генератор умеет только рисовать заново, а не править"}
+
+    from core import higgsfield
+    # Исходный замысел + замечание: без первого правка теряет контекст сцены,
+    # без второго она бессмысленна.
+    prompt = (f"{base_prompt.strip()}\n\nApply this change: {correction}"
+              if base_prompt.strip() else correction)
+    ratio = "9:16" if platform in ("tiktok", "instagram", "youtube") else "1:1"
+
+    t0 = time.time()
+    res = await higgsfield.image(prompt, ratio=ratio, reference_url=image_url)
+    await _track_media("higgsfield", "image", bool(res.get("ok")),
+                       time.time() - t0, None if res.get("ok") else res.get("error"))
+    return res
+
 
 async def _gemini_imagen(prompt: str, size: str) -> str | None:
     """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""

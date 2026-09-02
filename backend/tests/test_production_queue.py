@@ -149,8 +149,10 @@ async def test_finalize_sends_to_approval_not_publishes(client, monkeypatch):
 
     sent = {}
 
-    async def fake_approval(text, media_url=None, platforms=None, kind="plan", ref=None):
-        sent.update({"text": text, "media": media_url, "platforms": platforms})
+    async def fake_approval(text, media_url=None, platforms=None, kind="plan",
+                            ref=None, **kw):
+        sent.update({"text": text, "media": media_url, "platforms": platforms,
+                     "image_prompt": kw.get("image_prompt", "")})
         return "pid123"
 
     async def fake_local(vid):
@@ -195,7 +197,8 @@ async def test_finalize_says_when_there_is_nobody_to_approve(client, monkeypatch
 async def test_api_full_round_trip(auth_client, monkeypatch):
     approved = {}
 
-    async def fake_approval(text, media_url=None, platforms=None, kind="plan", ref=None):
+    async def fake_approval(text, media_url=None, platforms=None, kind="plan",
+                            ref=None, **kw):
         approved["media"] = media_url
         return "pid777"
 

@@ -42,8 +42,10 @@ def factory(monkeypatch):
     async def clip(*a, **kw):
         return {"ok": True, "url": "https://cdn/clip.mp4", "provider": "test"}
 
-    async def approval(text, media_url=None, platforms=None, kind="plan", ref=None):
-        sent.update({"media": media_url, "platforms": platforms, "text": text})
+    async def approval(text, media_url=None, platforms=None, kind="plan", ref=None,
+                       **kw):
+        sent.update({"media": media_url, "platforms": platforms, "text": text,
+                     "image_prompt": kw.get("image_prompt", "")})
         return "pid-1"
 
     async def noop(*a, **kw):
