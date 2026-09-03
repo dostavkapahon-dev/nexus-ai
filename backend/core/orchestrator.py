@@ -38,6 +38,24 @@ async def _send_telegram_report(text: str):
     except Exception:
         pass
 
+async def _send_telegram_preview(plan_id: str, platform: str, topic: str,
+                                 text: str, image_url: str = None):
+    """Готовый контент → в Telegram с кнопками подтверждения/правки/публикации."""
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not os.getenv("TELEGRAM_BOT_TOKEN") or not chat_id:
+        return
+    try:
+        from core.telegram_bot import send_message, send_photo, _plan_buttons
+        caption = f"📝 <b>{topic}</b>\n<i>{platform}</i>\n\n{text}"
+        buttons = _plan_buttons(plan_id)
+        if image_url:
+            await send_photo(chat_id, image_url, caption[:1024], buttons)
+        else:
+            await send_message(chat_id, caption, buttons=buttons)
+    except Exception:
+        pass
+
+
 async def _get_profile(db):
     result = await db.execute(select(UserProfile).limit(1))
     return result.scalar_one_or_none()
@@ -165,6 +183,20 @@ class NexusCore:
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "visual_creator"})
             visual = VisualCreator()
             visual_result = await visual.create(db, plan.niche_id, niche.name, plan.topic, plan.platform, text_voiced)
+            # HIXIIT — приоритетный генеративный слой: сам выбирает модель под задачу.
+            try:
+                from core.hixiit import generate as hixiit_generate, mcp_configured
+                if mcp_configured():
+                    hx = await hixiit_generate(
+                        visual_result.get("image_prompt") or plan.topic,
+                        kind="video" if (plan.format or "").lower() in ("reels", "video", "shorts") else "image",
+                        allow_free=False,
+                    )
+                    if hx.get("ok"):
+                        visual_result["image_url"] = hx["url"]
+                        visual_result["provider"] = hx.get("provider")
+            except Exception:
+                pass
             await broadcast(plan.niche_id, {"event": "agent_done", "agent": "visual_creator"})
 
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "adapter"})
@@ -182,6 +214,8 @@ class NexusCore:
             plan.status = "generated"
             await db.commit()
             await broadcast(plan.niche_id, {"event": "pipeline_complete"})
+            await _send_telegram_preview(plan_id, plan.platform, plan.topic,
+                                        text_voiced, visual_result.get("image_url"))
 
     async def publish_plan(self, plan_id: str):
         """Publish a generated plan item to all configured platforms.

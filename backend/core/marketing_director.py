@@ -22,7 +22,9 @@ SYSTEM = """\
 её и выполняешь через доступные инструменты. Доступные исполнители:
 - run_browser: автономный браузерный агент на ПК пользователя (живые сессии
   Instagram/OLX/VK/YouTube). Используй для действий, у которых нет API.
-- make_video: генерация короткого видео (аватар-озвучка или кинематографичный клип).
+- make_video: генерация короткого видео через HIXIIT (Higgsfield). HIXIIT сам подбирает
+  подходящую модель из доступных в аккаунте — модель указывать не нужно.
+- make_image: генерация изображения/кадра/обложки через HIXIIT.
 - publish: публикация готового текста (+картинки) на площадку через API или браузер.
 - done: заверши работу с кратким отчётом для пользователя.
 
@@ -58,13 +60,26 @@ TOOLS = [
     },
     {
         "name": "make_video",
-        "description": "Сгенерировать короткое видео (Reels/Shorts/TikTok).",
+        "description": "Сгенерировать короткое вертикальное видео (Reels/Shorts/TikTok) через HIXIIT.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "prompt": {"type": "string", "description": "Визуальное описание сцены."},
-                "script": {"type": "string", "description": "Текст озвучки (для аватара)."},
-                "provider": {"type": "string", "enum": ["auto", "heygen", "higgsfield", "runway"]},
+                "prompt": {"type": "string", "description": "Что показать в кадре и какое движение."},
+                "script": {"type": "string", "description": "Текст озвучки, если нужен голос."},
+                "ratio": {"type": "string", "enum": ["9:16", "16:9", "1:1"]},
+                "image_url": {"type": "string", "description": "Первый кадр, если он уже есть."},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "make_image",
+        "description": "Сгенерировать изображение (кадр, обложка, визуал поста) через HIXIIT.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Визуальное описание кадра."},
+                "ratio": {"type": "string", "enum": ["9:16", "16:9", "1:1"]},
             },
             "required": ["prompt"],
         },
@@ -94,14 +109,35 @@ TOOLS = [
 ]
 
 
+def _collect_media(tool: str, result: dict, media: list) -> None:
+    """Складывает готовые медиа из результатов инструментов — их отправит Telegram."""
+    if tool not in ("make_video", "make_image"):
+        return
+    if isinstance(result, dict) and result.get("ok") and result.get("url"):
+        media.append({
+            "kind": result.get("kind") or ("video" if tool == "make_video" else "image"),
+            "url": result["url"],
+            "provider": result.get("provider", ""),
+            "model": result.get("model", ""),
+        })
+
+
 async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "run_browser":
         from core.browser_agent import run_agent
         return await run_agent(task=inp["task"], start_url=inp.get("start_url"), max_steps=20)
     if name == "make_video":
-        from core.media_generator import generate_clip
-        return await generate_clip(prompt=inp["prompt"], script=inp.get("script", ""),
-                                   provider=inp.get("provider", "auto"))
+        # Говорящий аватар остаётся на HeyGen; всё остальное — HIXIIT с авто-выбором модели.
+        if inp.get("script") and os.getenv("HEYGEN_API_KEY"):
+            from core.media_generator import generate_clip
+            return await generate_clip(prompt=inp["prompt"], script=inp["script"],
+                                       provider="heygen", ratio=inp.get("ratio", "9:16"))
+        from core.hixiit import generate
+        return await generate(inp["prompt"], kind="video",
+                              ratio=inp.get("ratio"), image_url=inp.get("image_url"))
+    if name == "make_image":
+        from core.hixiit import generate
+        return await generate(inp["prompt"], kind="image", ratio=inp.get("ratio"))
     if name == "publish":
         from core.orchestrator import nexus_core
         return await nexus_core._publish_one(inp["platform"], inp["text"], inp.get("image_url", ""))
@@ -117,6 +153,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
                    f"Составь план и начни выполнять через инструменты.",
     }]
     steps = []
+    media = []
     for _ in range(max_steps):
         resp = await client.messages.create(
             model=DIRECTOR_MODEL, max_tokens=1500, system=_full_system(), tools=TOOLS, messages=messages,
@@ -126,14 +163,16 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
         thought = next((b.text for b in resp.content if b.type == "text"), "")
 
         if tool_use is None:
-            return {"status": "stopped", "summary": thought, "steps": steps}
+            return {"status": "stopped", "summary": thought, "steps": steps, "media": media}
 
         name, inp = tool_use.name, tool_use.input
         if name == "done":
             steps.append({"action": "done", "thought": thought})
-            return {"status": "done", "summary": inp.get("summary", ""), "steps": steps}
+            return {"status": "done", "summary": inp.get("summary", ""),
+                    "steps": steps, "media": media}
 
         result = await _exec_tool(name, inp)
+        _collect_media(name, result, media)
         steps.append({"action": name, "input": inp, "thought": thought,
                       "result_ok": result.get("ok", result.get("status") == "done")})
         messages.append({
@@ -144,7 +183,8 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
                 "content": json.dumps(result, ensure_ascii=False)[:3000],
             }],
         })
-    return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
+    return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.",
+            "steps": steps, "media": media}
 
 
 # ── Gemini-путь (бесплатный Google-ключ), JSON-протокол инструментов ───────────
@@ -153,7 +193,8 @@ GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.0-fla
 _GEMINI_DIRECTOR_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
 {"tool":"run_browser","args":{"task":"...","start_url":"..."}}
-{"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
+{"tool":"make_video","args":{"prompt":"...","script":"...","ratio":"9:16"}}
+{"tool":"make_image","args":{"prompt":"...","ratio":"9:16"}}
 {"tool":"publish","args":{"platform":"instagram","text":"...","image_url":"..."}}
 {"tool":"done","args":{"summary":"..."}}
 Можно добавить поле "thought" с кратким планом/обоснованием.
@@ -165,6 +206,7 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
     system = _full_system() + "\n\n" + _GEMINI_DIRECTOR_DOC
     history = ""
     steps = []
+    media = []
     for _ in range(max_steps):
         prompt = (f"ЦЕЛЬ: {goal}\n\nКОНТЕКСТ: {context or '—'}\n\n"
                   f"Журнал выполнения:\n{history or '—'}\n\nРеши следующий шаг.")
@@ -174,20 +216,23 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
             s, e = raw.find("{"), raw.rfind("}") + 1
             data = json.loads(raw[s:e])
         except Exception:
-            return {"status": "stopped", "summary": raw[:300], "steps": steps}
+            return {"status": "stopped", "summary": raw[:300], "steps": steps, "media": media}
 
         tool = data.get("tool", "")
         args = data.get("args", {}) or {}
         thought = data.get("thought", "")
         if tool == "done":
             steps.append({"action": "done", "thought": thought})
-            return {"status": "done", "summary": args.get("summary", thought), "steps": steps}
+            return {"status": "done", "summary": args.get("summary", thought),
+                    "steps": steps, "media": media}
 
         result = await _exec_tool(tool, args)
+        _collect_media(tool, result, media)
         ok = result.get("ok", result.get("status") == "done")
         steps.append({"action": tool, "input": args, "thought": thought, "result_ok": ok})
         history += f"\n- {tool}: {'ok' if ok else 'ошибка'} :: {json.dumps(result, ensure_ascii=False)[:400]}"
-    return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
+    return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.",
+            "steps": steps, "media": media}
 
 
 async def run_director(goal: str, context: str = "", max_steps: int = 12) -> dict:

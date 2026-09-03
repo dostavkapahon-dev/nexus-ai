@@ -16,15 +16,211 @@ _offset = 0
 def _url(method: str) -> str:
     return f"https://api.telegram.org/bot{os.getenv('TELEGRAM_BOT_TOKEN', '')}/{method}"
 
-async def send_message(chat_id: str, text: str, parse_mode: str = "HTML"):
+async def _post(method: str, payload: dict, timeout: float = 20) -> dict:
     try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            await c.post(_url("sendMessage"), json={
-                "chat_id": chat_id, "text": text,
-                "parse_mode": parse_mode, "disable_web_page_preview": True
-            })
-    except Exception:
-        pass
+        async with httpx.AsyncClient(timeout=timeout) as c:
+            r = await c.post(_url(method), json=payload)
+            return r.json()
+    except Exception as e:
+        return {"ok": False, "description": str(e)}
+
+
+async def send_message(chat_id: str, text: str, parse_mode: str = "HTML",
+                       buttons: list = None):
+    payload = {"chat_id": chat_id, "text": text[:4096],
+               "parse_mode": parse_mode, "disable_web_page_preview": True}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    return await _post("sendMessage", payload)
+
+
+async def send_photo(chat_id: str, photo_url: str, caption: str = "", buttons: list = None):
+    payload = {"chat_id": chat_id, "photo": photo_url,
+               "caption": caption[:1024], "parse_mode": "HTML"}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    res = await _post("sendPhoto", payload, timeout=60)
+    if not res.get("ok"):
+        # Telegram не смог скачать файл — отдаём ссылкой, чтобы результат не потерялся.
+        await send_message(chat_id, f"{caption}\n\n🖼 {photo_url}", buttons=buttons)
+    return res
+
+
+async def send_video(chat_id: str, video_url: str, caption: str = "", buttons: list = None):
+    payload = {"chat_id": chat_id, "video": video_url,
+               "caption": caption[:1024], "parse_mode": "HTML"}
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    res = await _post("sendVideo", payload, timeout=120)
+    if not res.get("ok"):
+        await send_message(chat_id, f"{caption}\n\n🎬 {video_url}", buttons=buttons)
+    return res
+
+
+async def answer_callback(callback_id: str, text: str = ""):
+    await _post("answerCallbackQuery", {"callback_query_id": callback_id, "text": text[:200]})
+
+
+async def send_media(chat_id: str, item: dict, caption: str = "", buttons: list = None):
+    """Отправляет один медиа-результат нужным методом."""
+    if item.get("kind") == "video":
+        return await send_video(chat_id, item["url"], caption, buttons)
+    return await send_photo(chat_id, item["url"], caption, buttons)
+
+# Ожидание уточняющего ввода: chat_id → {"action": ..., "plan_id": ...}
+_pending: dict = {}
+
+
+def _plan_buttons(plan_id: str) -> list:
+    """Кнопки под готовым контентом: подтвердить / переделать / отредактировать."""
+    return [
+        [{"text": "✅ Подтвердить", "callback_data": f"ok:{plan_id}"},
+         {"text": "🔄 Перегенерировать", "callback_data": f"regen:{plan_id}"}],
+        [{"text": "✏️ Редактировать", "callback_data": f"edit:{plan_id}"},
+         {"text": "📥 В очередь", "callback_data": f"queue:{plan_id}"}],
+        [{"text": "🚀 Опубликовать", "callback_data": f"pub:{plan_id}"}],
+    ]
+
+
+def _task_buttons() -> list:
+    """Кнопки под результатом свободной задачи (без привязки к пункту плана)."""
+    return [[{"text": "🔄 Ещё вариант", "callback_data": "again"},
+             {"text": "🚀 Опубликовать", "callback_data": "pub_last"}]]
+
+
+async def _handle_text(chat_id: str, text: str):
+    """Свободный текст из Telegram → Cloud Opus решает, каких агентов включить.
+
+    Это главная цепочка: Telegram → Cloud Opus → агенты → HIXIIT → Telegram.
+    Сайт для неё не нужен.
+    """
+    # Ждём уточнение после «Редактировать»?
+    pending = _pending.pop(chat_id, None)
+    if pending and pending.get("action") == "edit":
+        await _apply_edit(chat_id, pending["plan_id"], text)
+        return
+
+    from core.marketing_director import run_director
+    from core.memory import build_context
+
+    await send_message(chat_id, "🧠 Принял задачу. Подключаю агентов…")
+    try:
+        context = await build_context()
+        result = await run_director(text, context)
+    except Exception as e:
+        await send_message(chat_id, f"❌ Ошибка оркестратора: {str(e)[:300]}")
+        return
+
+    summary = result.get("summary") or "Готово."
+    media = result.get("media") or []
+
+    if media:
+        _last_media[chat_id] = media[-1]
+        for i, item in enumerate(media):
+            caption = summary if i == len(media) - 1 else ""
+            tail = f"\n\n<i>HIXIIT · {item.get('provider','')} · {item.get('model','')}</i>"
+            await send_media(chat_id, item, (caption + tail)[:1024],
+                             _task_buttons() if i == len(media) - 1 else None)
+        return
+
+    steps = result.get("steps") or []
+    tail = ""
+    if steps:
+        tail = "\n\n<i>Шаги: " + ", ".join(
+            f"{st.get('action')}{'' if st.get('result_ok', True) else ' ⚠️'}" for st in steps
+        ) + "</i>"
+    await send_message(chat_id, f"{summary}{tail}", buttons=_task_buttons())
+
+
+# Последний созданный медиа-результат на чат — для кнопки «Опубликовать»
+_last_media: dict = {}
+# Последняя задача на чат — для кнопки «Ещё вариант»
+_last_task: dict = {}
+
+
+async def _apply_edit(chat_id: str, plan_id: str, new_text: str):
+    """Сохраняет отредактированный пользователем текст контента."""
+    from database.models import GeneratedContent
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(
+            select(GeneratedContent).where(GeneratedContent.plan_id == plan_id).limit(1))
+        content = r.scalar_one_or_none()
+        if not content:
+            await send_message(chat_id, "❌ Контент не найден — нечего редактировать.")
+            return
+        content.text_reviewed = new_text
+        await db.commit()
+    await send_message(chat_id, "✏️ Текст обновлён.", buttons=_plan_buttons(plan_id))
+
+
+async def _handle_callback(chat_id: str, callback_id: str, data: str):
+    """Нажатия на inline-кнопки: подтверждение, перегенерация, очередь, публикация."""
+    from core.orchestrator import nexus_core
+    action, _, plan_id = data.partition(":")
+
+    if action == "ok":
+        await answer_callback(callback_id, "Подтверждено")
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
+            plan = r.scalar_one_or_none()
+            if plan:
+                plan.status = "generated"
+                await db.commit()
+        await send_message(chat_id, "✅ Контент подтверждён и ждёт публикации.")
+
+    elif action == "regen":
+        await answer_callback(callback_id, "Перегенерирую")
+        asyncio.create_task(nexus_core.generate_content_for_plan(plan_id))
+        await send_message(chat_id, "🔄 Перегенерация запущена — пришлю результат.")
+
+    elif action == "edit":
+        await answer_callback(callback_id, "Жду новый текст")
+        _pending[chat_id] = {"action": "edit", "plan_id": plan_id}
+        await send_message(chat_id, "✏️ Пришли новый текст следующим сообщением.")
+
+    elif action == "queue":
+        await answer_callback(callback_id, "В очереди")
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
+            plan = r.scalar_one_or_none()
+            if plan:
+                plan.status = "generated"
+                await db.commit()
+        await send_message(chat_id, "📥 Добавлено в очередь публикаций.")
+
+    elif action == "pub":
+        await answer_callback(callback_id, "Публикую")
+        try:
+            res = await nexus_core.publish_plan(plan_id)
+            report = res.get("report", {})
+            lines = [f"{'✅' if v.get('ok') else '❌'} {k}: "
+                     f"{v.get('via') or v.get('error', '')}" for k, v in report.items()]
+            await send_message(chat_id, "🚀 <b>Публикация</b>\n" + "\n".join(lines))
+        except Exception as e:
+            await send_message(chat_id, f"❌ Ошибка публикации: {str(e)[:300]}")
+
+    elif action == "pub_last":
+        await answer_callback(callback_id, "Публикую")
+        item = _last_media.get(chat_id)
+        if not item:
+            await send_message(chat_id, "❗ Нечего публиковать — сначала создай контент.")
+            return
+        res = await nexus_core._publish_one("telegram", "", item["url"])
+        await send_message(chat_id,
+                           "🚀 Опубликовано." if res.get("ok")
+                           else f"❌ {res.get('error', 'не удалось')}")
+
+    elif action == "again":
+        await answer_callback(callback_id, "Ещё вариант")
+        task = _last_task.get(chat_id)
+        if not task:
+            await send_message(chat_id, "❗ Не помню исходную задачу — сформулируй заново.")
+            return
+        asyncio.create_task(_handle_text(chat_id, task))
+
+    else:
+        await answer_callback(callback_id, "Неизвестная кнопка")
+
 
 async def _handle_command(chat_id: str, text: str):
     from core.orchestrator import nexus_core
@@ -89,7 +285,7 @@ async def _handle_command(chat_id: str, text: str):
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
         await send_message(chat_id, f"✅ Опубликовано: {published} постов")
 
-    elif cmd == "trends":
+    elif cmd in ("trends", "trend"):
         await send_message(chat_id, "📈 Анализирую тренды...")
         from core.scheduler import run_daily_trends
         asyncio.create_task(run_daily_trends())
@@ -150,12 +346,6 @@ async def _handle_command(chat_id: str, text: str):
             msg = "⚙️ Профиль не настроен. Зайди в дашборд."
         await send_message(chat_id, msg)
 
-    elif cmd in ("trend", "trends"):
-        await send_message(chat_id, "📈 Анализирую тренды...")
-        from core.scheduler import run_daily_trends
-        asyncio.create_task(run_daily_trends())
-        await send_message(chat_id, "✅ Анализ трендов запущен, отчёт придёт через минуту")
-
     elif cmd == "prompt":
         from core.brand import set_brand_voice, get_brand_voice
         if not args:
@@ -188,6 +378,26 @@ async def _handle_command(chat_id: str, text: str):
         asyncio.create_task(nexus_core.generate_content_for_plan(args[0]))
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
+    elif cmd in ("hixiit", "hixit", "higgsfield"):
+        from core.hixiit import status as hixiit_status
+        st = await hixiit_status()
+        paths = [
+            f"{'✅' if st.get('mcp_ok') else ('⚠️' if st['mcp_configured'] else '❌')} "
+            f"MCP (основной путь)"
+            + (f" — {st.get('mcp_error','')[:120]}" if st.get("mcp_error") else ""),
+            f"{'✅' if st['api_key'] else '❌'} API-ключ HIGGSFIELD_API_KEY",
+            f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
+        ]
+        extra = ""
+        if st.get("credits") is not None:
+            extra = f"\n💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}"
+        if not st["mcp_configured"]:
+            extra += ("\n\n⚠️ MCP не настроен: добавь HIGGSFIELD_MCP_URL "
+                      "и HIGGSFIELD_MCP_TOKEN в переменные окружения.")
+        await send_message(chat_id, "🎨 <b>HIXIIT — генеративный слой</b>\n\n"
+                           + "\n".join(paths)
+                           + f"\n\n🤖 Модель по умолчанию: {st['default_model']}" + extra)
+
     elif cmd in ("factory", "reel"):
         # Полный цикл: анализ → генерация → публикация. Без аргумента — dry-run.
         from core.content_factory import run_factory
@@ -201,9 +411,18 @@ async def _handle_command(chat_id: str, text: str):
     elif cmd.startswith("set_goal"):
         try:
             goal = int(args[0])
-            await send_message(chat_id, f"🎯 Цель установлена: {goal:,} подписчиков")
         except (IndexError, ValueError):
             await send_message(chat_id, "❗ Укажи число: /set_goal 100000")
+            return
+        async with AsyncSessionLocal() as db:
+            prof_r = await db.execute(select(UserProfile).limit(1))
+            prof = prof_r.scalar_one_or_none()
+            if not prof:
+                prof = UserProfile()
+                db.add(prof)
+            prof.strategy_focus = f"{goal} подписчиков"
+            await db.commit()
+        await send_message(chat_id, f"🎯 Цель сохранена: {goal:,} подписчиков")
 
     elif cmd.startswith("set_posts"):
         try:
@@ -233,9 +452,16 @@ async def _handle_command(chat_id: str, text: str):
             "/prompt [текст] — голос бренда",
             "/report   — отчёт",
             "/pause /resume — пауза/возобновить",
+            "/hixiit   — статус генеративного слоя",
             "/config   — настройки",
         ]
-        await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
+        await send_message(
+            chat_id,
+            "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n"
+            "💬 Просто напиши задачу словами — например «сделай reels про доставку»: "
+            "её примет Cloud Opus, распределит по агентам, HIXIIT сгенерирует визуал, "
+            "результат придёт сюда с кнопками.\n\n"
+            "<b>Команды:</b>\n" + "\n".join(cmds))
 
 async def poll_updates():
     """Long-polling loop for Telegram updates."""
@@ -252,11 +478,28 @@ async def poll_updates():
                 updates = r.json().get("result", [])
                 for upd in updates:
                     _offset = upd["update_id"] + 1
+
+                    # Нажатие inline-кнопки
+                    cb = upd.get("callback_query")
+                    if cb:
+                        cb_chat = str(cb.get("message", {}).get("chat", {}).get("id", ""))
+                        if not chat_id or cb_chat == chat_id:
+                            asyncio.create_task(_handle_callback(
+                                cb_chat, cb.get("id", ""), cb.get("data", "")))
+                        continue
+
                     msg = upd.get("message", {})
-                    text = msg.get("text", "")
+                    text = (msg.get("text") or msg.get("caption") or "").strip()
                     upd_chat_id = str(msg.get("chat", {}).get("id", ""))
-                    if text.startswith("/") and (not chat_id or upd_chat_id == chat_id):
+                    if not text or (chat_id and upd_chat_id != chat_id):
+                        continue
+
+                    if text.startswith("/"):
                         asyncio.create_task(_handle_command(upd_chat_id, text))
+                    else:
+                        # Свободный текст — это задача для Cloud Opus.
+                        _last_task[upd_chat_id] = text
+                        asyncio.create_task(_handle_text(upd_chat_id, text))
         except Exception:
             await asyncio.sleep(5)
         await asyncio.sleep(1)
