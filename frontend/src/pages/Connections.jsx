@@ -4,54 +4,6 @@ import { connections as connectionsApi } from '../lib/api'
 
 const PROVIDERS = [
   {
-    id: 'openrouter', name: 'OpenRouter (сотни ИИ)', icon: '🌐', color: 'from-purple-500 to-indigo-500',
-    description: 'Один ключ — доступ к сотням моделей: Llama, Qwen, Grok, Gemini, GPT, DeepSeek и др.',
-    fields: [{ key: 'openrouter_api_key', label: 'API Key', placeholder: 'sk-or-v1-...', secret: true }],
-    steps: [
-      { text: 'Откройте', link: 'https://openrouter.ai/keys', linkText: 'openrouter.ai/keys' },
-      { text: 'Create Key → скопируйте (начинается с sk-or-)' },
-      { text: 'В промптах агентов укажите модель в формате vendor/model, напр. meta-llama/llama-3.1-70b-instruct' },
-      { text: 'Любая модель с «/» в имени автоматически идёт через OpenRouter' },
-    ],
-    models: ['vendor/model', 'qwen/qwen-2.5-72b', 'x-ai/grok-2'],
-  },
-  {
-    id: 'custom_ai', name: 'Свой ИИ / локальная LLM', icon: '🧩', color: 'from-gray-500 to-slate-600',
-    description: 'Любой OpenAI-совместимый endpoint: Ollama, LM Studio, vLLM, корпоративный шлюз',
-    fields: [
-      { key: 'custom_ai_base_url', label: 'Base URL', placeholder: 'http://localhost:11434/v1', secret: false },
-      { key: 'custom_ai_api_key', label: 'API Key (опц.)', placeholder: 'sk-... или любой', secret: true },
-    ],
-    steps: [
-      { text: 'Укажите base_url вашего OpenAI-совместимого сервера' },
-      { text: 'Модели, не известные системе, при заданном Base URL идут сюда' },
-      { text: 'Пример для Ollama: http://localhost:11434/v1, модель — llama3.1' },
-    ],
-    models: [],
-  },
-  {
-    id: 'xai', name: 'xAI Grok', icon: '𝕏', color: 'from-neutral-600 to-black',
-    description: 'Модели Grok от xAI (OpenAI-совместимый API)',
-    fields: [{ key: 'xai_api_key', label: 'API Key', placeholder: 'xai-...', secret: true }],
-    steps: [
-      { text: 'Откройте', link: 'https://console.x.ai', linkText: 'console.x.ai' },
-      { text: 'API Keys → Create → скопируйте ключ' },
-      { text: 'Используйте модели grok-2-latest, grok-beta' },
-    ],
-    models: ['grok-2-latest', 'grok-beta'],
-  },
-  {
-    id: 'mistral', name: 'Mistral AI', icon: '🐝', color: 'from-orange-400 to-amber-500',
-    description: 'Европейские модели Mistral (OpenAI-совместимый API)',
-    fields: [{ key: 'mistral_api_key', label: 'API Key', placeholder: '...', secret: true }],
-    steps: [
-      { text: 'Откройте', link: 'https://console.mistral.ai/api-keys', linkText: 'console.mistral.ai' },
-      { text: 'Create new key → скопируйте' },
-      { text: 'Модели: mistral-large-latest, mistral-small-latest' },
-    ],
-    models: ['mistral-large-latest', 'mistral-small-latest'],
-  },
-  {
     id: 'claude', name: 'Anthropic Claude', icon: '🤖', color: 'from-orange-500 to-red-500',
     description: 'Главный AI для анализа и рецензии контента',
     fields: [{ key: 'anthropic_api_key', label: 'API Key', placeholder: 'sk-ant-api03-...', secret: true }],
