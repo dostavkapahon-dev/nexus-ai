@@ -66,17 +66,25 @@ async def build_brief(analysis: dict) -> dict:
     """Полное продакшен-ТЗ с раскадровкой и промтами."""
     from core.ai_router import ai_router
     try:
-        res = await ai_router.call("claude-sonnet-4-6", system_prompt(),
+        res = await ai_router.call("claude-sonnet-4-6", await system_prompt(),
                                    _BRIEF_PROMPT.format(analysis=json.dumps(analysis, ensure_ascii=False)))
         raw = res.get("text", "")
         s, e = raw.find("{"), raw.rfind("}") + 1
         return json.loads(raw[s:e])
     except Exception as e:
-        return {"title": analysis.get("theme", "Reel"), "duration_sec": 20, "storyboard": [],
-                "cover_prompt": analysis.get("image_prompt", "dark cinematic AI poster"),
+        # Без модели раскадровка раньше выходила пустой, а пустая раскадровка —
+        # это ноль кадров и ноль видео. Берём каркас из офлайн-заготовки: он
+        # хотя бы построен вокруг заданной темы.
+        from core.offline_content import draft
+        d = draft(analysis.get("theme") or "ваша тема")
+        return {"title": d["theme"], "duration_sec": 15,
+                "storyboard": d["storyboard"],
+                "cover_prompt": analysis.get("image_prompt") or d["cover_prompt"],
                 "video_motion_prompt": "slow cinematic zoom, dynamic camera",
-                "avatar_script": analysis.get("avatar_script", ""), "voice_mood": "energetic",
-                "_error": f"Нет AI для ТЗ: {str(e)[:100]}"}
+                "avatar_script": analysis.get("avatar_script") or d["caption"],
+                "voice_mood": "energetic", "_offline": True,
+                "_error": f"Модель для ТЗ недоступна ({str(e)[:80]}). "
+                          f"Раскадровка собрана по шаблону."}
 
 
 def choose_strategy(content_type: str = "auto") -> dict:
@@ -99,7 +107,16 @@ def choose_strategy(content_type: str = "auto") -> dict:
     has_hg = bool(os.getenv("HEYGEN_API_KEY"))
     has_rw = bool(os.getenv("RUNWAY_API_KEY"))
 
-    if content_type in ("talking_head", "explainer") and has_hg:
+    # Принудительный выбор провайдера видео через env VIDEO_PROVIDER.
+    forced = os.getenv("VIDEO_PROVIDER", "").lower().strip()
+    if forced == "higgsfield":
+        via = "API" if os.getenv("HIGGSFIELD_API_KEY") else "ваш аккаунт (браузер-агент)"
+        return {"strategy": "storyboard_to_higgsfield",
+                "reason": f"HiggsField ({via}) — принудительно (VIDEO_PROVIDER)",
+                "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
+                "needs": "HIGGSFIELD_API_KEY или браузер-агент", "fallback": False}
+
+    if content_type in ("talking_head", "explainer") and has_hg and forced != "higgsfield":
         return {"strategy": "heygen_avatar", "reason": "Говорящий ведущий — аватар HeyGen",
                 "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
 
@@ -128,7 +145,7 @@ async def wow_review(brief: dict) -> dict:
     """Само-ревью на «вау». Может вернуть усиленный хук."""
     from core.ai_router import ai_router
     try:
-        res = await ai_router.call("claude-sonnet-4-6", system_prompt(),
+        res = await ai_router.call("claude-sonnet-4-6", await system_prompt(),
                                    _WOW_PROMPT.format(brief=json.dumps(brief, ensure_ascii=False)[:3000]))
         raw = res.get("text", "")
         s, e = raw.find("{"), raw.rfind("}") + 1

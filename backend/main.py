@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +22,20 @@ from api.routes_settings import router as settings_router
 from api.routes_profile import router as profile_router
 from api.routes_desktop import router as desktop_router
 from api.routes_automation import router as automation_router
+from api.routes_control import router as control_router
+from api.routes_tasks import router as tasks_router
+from api.routes_cost import router as cost_router
+from api.routes_publish import router as publish_router
+from api.routes_telegram import router as telegram_router
+from api.routes_agent_profile import router as agent_profile_router
+from api.routes_agents import router as agents_router
+from api.routes_production import router as production_router
+from api.routes_health import router as system_router
+from api.routes_social import router as social_router, public_router as social_public_router
+from api.routes_analytics import router as performance_router
+from api.routes_research import router as research_router
+from api.routes_strategy import router as strategy_router
+from api.routes_engagement import router as engagement_router
 
 class ConnectionManager:
     def __init__(self):
@@ -38,24 +53,77 @@ class ConnectionManager:
                 pass
 
     async def broadcast(self, niche_id: str, data: dict):
-        for ws in list(self.connections.get(niche_id, [])):
-            try:
-                await ws.send_text(json.dumps(data))
-            except Exception:
-                pass
+        # Дублируем в комнату "global": там сидит Командный центр и видит поток
+        # событий по всем нишам сразу.
+        rooms = {niche_id, "global"}
+        payload = json.dumps({**data, "niche_id": niche_id})
+        for room in rooms:
+            for ws in list(self.connections.get(room, [])):
+                try:
+                    await ws.send_text(payload)
+                except Exception:
+                    pass
 
 manager = ConnectionManager()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Первое, что видно в логах Render: какой код запущен и в каком он состоянии.
+    # Без этой строки нельзя было отличить «ошибка не исправлена» от «сборка
+    # не доехала», и починка уходила в гадание.
+    try:
+        from core.version import build_info
+        b = build_info()
+        print(f"[NEXUS] сборка {b['commit']} · миграции: {b['migration']} · "
+              f"Chromium: {'установлен' if b['browser_installed'] else 'нет'}",
+              flush=True)
+    except Exception:
+        pass
+
+    # Про эфемерное хранилище надо кричать первым делом: без внешней БД всё
+    # остальное — ключи, память, проекты — исчезнет при следующем деплое.
+    from database.db import storage_info
+    _st = storage_info()
+    print(f"[NEXUS] хранилище: {_st['kind']} · "
+          f"{'постоянное' if _st['persistent'] else 'ВРЕМЕННОЕ'}", flush=True)
+    if not _st["persistent"]:
+        print(f"[NEXUS] ⚠️ {_st['warning']}", flush=True)
+
     await init_db()
-    async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Connection))
-        for conn in result.scalars():
-            os.environ[conn.key_name.upper()] = conn.key_value or ""
+    # Доступы едут в окружение через один слой: он же расшифровывает их и, если
+    # шифрование только что включили, дошифровывает старые записи.
+    from core.credentials import load_into_env
+    await load_into_env()
+
+    # Копия ключей из переменной окружения. Диск Render стирается при каждом
+    # деплое, переменные — нет, поэтому это единственный способ не вводить
+    # доступы заново, пока не подключена постоянная база.
+    try:
+        from core.credentials_backup import restore_from_env
+        res = await restore_from_env()
+        if res.get("ok"):
+            print(f"[NEXUS] доступы восстановлены из копии: {res['restored']}", flush=True)
+        elif res.get("error"):
+            print(f"[NEXUS] копия доступов не развёрнута: {res['error']}", flush=True)
+    except Exception as e:
+        print(f"[NEXUS] копия доступов не развёрнута: {type(e).__name__}: {e}", flush=True)
+    # Профиль агента наполняется из прежних настроек один раз — чтобы включение
+    # новой формы не выглядело как «мои настройки пропали».
+    try:
+        from core.agent_profile import bootstrap
+        await bootstrap()
+    except Exception as e:
+        print(f"[NEXUS] профиль агента не заполнен из старых настроек: {e}", flush=True)
     set_broadcast(manager.broadcast)
+    # Задачи, зависшие в RUNNING с прошлого запуска, помечаем потерянными —
+    # иначе они висят вечно и врут о состоянии системы.
+    from core.task_manager import recover_stuck
+    await recover_stuck()
     start_scheduler()
     start_polling()
+    # Сервер сам делает разбор аккаунта и шлёт в Telegram (раз в сутки).
+    from core.auto_report import auto_analyze_on_start
+    asyncio.create_task(auto_analyze_on_start())
     yield
 
 app = FastAPI(lifespan=lifespan, title="NEXUS AI", docs_url=None, redoc_url=None)
@@ -97,8 +165,37 @@ app.include_router(prompts_router,  dependencies=[Depends(require_auth)])
 app.include_router(settings_router, dependencies=[Depends(require_auth)])
 app.include_router(profile_router,  dependencies=[Depends(require_auth)])
 app.include_router(automation_router, dependencies=[Depends(require_auth)])
+app.include_router(control_router,    dependencies=[Depends(require_auth)])
+app.include_router(tasks_router,      dependencies=[Depends(require_auth)])
+app.include_router(cost_router,       dependencies=[Depends(require_auth)])
+app.include_router(publish_router,    dependencies=[Depends(require_auth)])
+app.include_router(telegram_router,   dependencies=[Depends(require_auth)])
+app.include_router(agent_profile_router, dependencies=[Depends(require_auth)])
+app.include_router(agents_router,     dependencies=[Depends(require_auth)])
+app.include_router(production_router, dependencies=[Depends(require_auth)])
+app.include_router(system_router,     dependencies=[Depends(require_auth)])
+app.include_router(social_router,     dependencies=[Depends(require_auth)])
+app.include_router(performance_router, dependencies=[Depends(require_auth)])
+app.include_router(research_router,   dependencies=[Depends(require_auth)])
+app.include_router(strategy_router,   dependencies=[Depends(require_auth)])
+app.include_router(engagement_router, dependencies=[Depends(require_auth)])
+# OAuth-callback вызывает Meta в браузере пользователя — без нашей авторизации.
+app.include_router(social_public_router)
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
+
+@app.get("/api/health")
+async def health():
+    """Лёгкий health-эндпоинт для внешней «пробуждалки» (UptimeRobot и т.п.),
+    чтобы бесплатный Render не засыпал и Telegram-бот не замолкал.
+
+    Отдаёт версию запущенного кода: без неё нельзя отличить «ошибка не исправлена»
+    от «исправление ещё не задеплоено», и починка уходит в гадание.
+    """
+    from core.version import build_info
+    from database.db import storage_info
+    return {"ok": True, "service": "nexus-ai", "build": build_info(),
+            "storage": storage_info()}
 
 @app.websocket("/ws/{niche_id}")
 async def websocket_endpoint(websocket: WebSocket, niche_id: str):

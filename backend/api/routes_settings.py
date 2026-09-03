@@ -1,4 +1,5 @@
 import os
+import asyncio
 import httpx
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -11,8 +12,16 @@ from typing import Optional
 router = APIRouter(tags=["settings"])
 
 def mask(value):
-    if not value or len(value) < 8:
+    """Маска для показа в интерфейсе: видно, что ключ есть, но не видно самого ключа.
+
+    Раньше короткое значение (`vk_group_id`, `ig_handle`) превращалось в пустую
+    строку — и сохранённый ключ в дашборде выглядел как несохранённый. Прятать
+    надо значение, а не факт его наличия.
+    """
+    if not value:
         return ""
+    if len(value) < 8:
+        return "*" * len(value)
     return value[:4] + "****" + value[-4:]
 
 class ConnectionsBody(BaseModel):
@@ -27,12 +36,39 @@ class ConnectionsBody(BaseModel):
     custom_ai_api_key: Optional[str] = None
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
+    telegram_post_chat_id: Optional[str] = None
     instagram_access_token: Optional[str] = None
     instagram_account_id: Optional[str] = None
+    # Приложение Meta для подключения Instagram в один клик. Без этих трёх полей
+    # OAuth-кнопка не работала, а вписать их в дашборде было некуда — оставался
+    # только ручной путь через Graph API Explorer.
+    facebook_app_id: Optional[str] = None
+    facebook_app_secret: Optional[str] = None
+    nexus_public_url: Optional[str] = None
+    # Cookies площадок для публикации через браузер без API-ключей. Принимается
+    # как экспорт расширения (массив), так и storage_state Playwright.
+    instagram_verify_token: Optional[str] = None   # подтверждение подписки на вебхуки
+    # В приложении без Facebook секрет для подписи вебхуков называется
+    # Instagram app secret — отдельное поле, чтобы не заставлять заполнять «facebook».
+    instagram_app_secret: Optional[str] = None
+    instagram_token_type: Optional[str] = None     # facebook | instagram — способ продления
+    nexus_browser_storage_state: Optional[str] = None
+    nexus_publish_mode: Optional[str] = None
+    nexus_browser_cdp: Optional[str] = None
     tiktok_access_token: Optional[str] = None
+    brightdata_api_key: Optional[str] = None
+    ig_handle: Optional[str] = None
+    tiktok_handle: Optional[str] = None
+    youtube_handle: Optional[str] = None
     google_service_account_json: Optional[str] = None
     youtube_api_key: Optional[str] = None
     deepseek_api_key: Optional[str] = None
+    nvidia_api_key: Optional[str] = None
+    groq_api_key: Optional[str] = None
+    cerebras_api_key: Optional[str] = None
+    openrouter_api_key: Optional[str] = None
+    mistral_api_key: Optional[str] = None
+    github_models_token: Optional[str] = None
     vk_access_token: Optional[str] = None
     vk_group_id: Optional[str] = None
     threads_access_token: Optional[str] = None
@@ -47,6 +83,19 @@ class ConnectionsBody(BaseModel):
     elevenlabs_api_key: Optional[str] = None
     nexus_token: Optional[str] = None
 
+def _plain_map(rows) -> dict:
+    """Ключи из БД в открытом виде. Значения могут быть зашифрованы, а весь
+    код ниже ожидает рабочий ключ: нерасшифруемое просто пропускаем, иначе
+    в провайдера уйдёт шифротекст и ошибка будет выглядеть как «неверный ключ»."""
+    from core import secrets
+    out = {}
+    for c in rows:
+        plain = secrets.decrypt(c.key_value or "")
+        if plain:
+            out[c.key_name] = plain
+    return out
+
+
 @router.get("/api/connections")
 async def get_connections(db: AsyncSession = Depends(get_db)):
     """Возвращает сохранённые ключи в МАСКИРОВАННОМ виде.
@@ -55,8 +104,18 @@ async def get_connections(db: AsyncSession = Depends(get_db)):
     «сохраняться» даже на бесплатном Render, где файловая БД обнуляется при
     перезапуске: достаточно задать их в Render → Environment.
     """
+    from core import secrets
+
     result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in result.scalars()}
+    rows = list(result.scalars())
+    # Значения в базе могут быть зашифрованы: маскировать надо сам ключ, а не
+    # его шифротекст — иначе в интерфейсе видны обрывки enc:v1:.
+    db_map = {}
+    for c in rows:
+        plain = secrets.decrypt(c.key_value or "")
+        # None означает «зашифровано, а расшифровать нечем» — ключ есть, но
+        # недоступен. Показываем это честно, а не как «не подключено».
+        db_map[c.key_name] = plain if plain is not None else "\u2014"
 
     out = {}
     known = list(ConnectionsBody.model_fields.keys())
@@ -70,28 +129,232 @@ async def get_connections(db: AsyncSession = Depends(get_db)):
             out[key] = mask(val)
     return out
 
+@router.get("/api/connections/status")
+async def connections_status(db: AsyncSession = Depends(get_db)):
+    """Единый раздел «API / Подключения»: что подключено, когда и в каком состоянии.
+
+    Интерфейс строится по этому ответу, а не по своему списку полей — раньше
+    перечень ключей жил сразу на нескольких страницах и разъезжался.
+    """
+    from core import credentials, secrets
+
+    result = await db.execute(select(Connection))
+    rows = {c.key_name: c for c in result.scalars()}
+
+    items = []
+    for field in credentials.schema():
+        conn = rows.get(field["key"])
+        env_value = os.getenv(field["key"].upper(), "")
+        plain = secrets.decrypt(conn.key_value or "") if conn else None
+        unreadable = bool(conn and conn.key_value) and plain is None
+        value = plain or env_value
+        items.append({
+            **field,
+            "connected": bool(value) or unreadable,
+            "masked": mask(value) if value else "",
+            "source": "db" if conn else ("env" if env_value else ""),
+            "unreadable": unreadable,
+            "connected_at": conn.created_at.isoformat() if conn and conn.created_at else None,
+            "updated_at": conn.updated_at.isoformat() if conn and conn.updated_at else None,
+            "last_check_ok": conn.last_check_ok if conn else None,
+            "last_check_at": conn.last_check_at.isoformat() if conn and conn.last_check_at else None,
+            "last_check_error": conn.last_check_error if conn else None,
+        })
+
+    return {"items": items, "groups": credentials.GROUPS,
+            "storage": await credentials.overview(),
+            "connected": sum(1 for i in items if i["connected"])}
+
+
+@router.post("/api/connections/{key_name}/recheck")
+async def recheck_connection(key_name: str, db: AsyncSession = Depends(get_db)):
+    """Проверить связь по одному ключу и запомнить результат.
+
+    Переиспользует ту же проверку, что и «Проверить все», — иначе появилось бы
+    второе, расходящееся представление о том, что значит «ключ рабочий».
+    """
+    from core import credentials
+
+    key_name = (key_name or "").strip().lower()
+    if key_name not in ConnectionsBody.model_fields:
+        return {"ok": False, "error": f"неизвестный ключ: {key_name}"}
+
+    results = await test_connections(ConnectionsBody(), db)
+    res = results.get(key_name)
+    if res is None:
+        return {"ok": False, "error": "для этого ключа проверка связи не предусмотрена"}
+    await credentials.record_check(key_name, bool(res.get("ok")), res.get("message", ""))
+    return {"ok": bool(res.get("ok")), "message": res.get("message", "")}
+
+
 @router.post("/api/connections")
 async def save_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
+
+    # Токен из панели Meta переносится по строкам, и вместе с ним копируются
+    # пробелы и переводы строк — Meta на такой строке отвечает «Cannot parse
+    # access token». Раньше чистил только путь «Подключить по токену», а этот —
+    # нет, и один и тот же ключ вёл себя по-разному на двух страницах.
+    if data.get("instagram_access_token"):
+        from core.ig_connect import clean_token
+        token = clean_token(data["instagram_access_token"])
+        data["instagram_access_token"] = token
+        # От типа зависит и адрес API, и способ продления через 60 дней.
+        # Без этого прошлый сохранённый тип молча применялся к новому токену.
+        if "****" not in token:
+            data["instagram_token_type"] = "instagram" if token.startswith("IGAA") else "facebook"
+
+    from core import secrets
+
     for key_name, key_value in data.items():
         if not key_value or "****" in key_value:
             continue
         result = await db.execute(select(Connection).where(Connection.key_name == key_name))
         conn = result.scalar_one_or_none()
+        stored = secrets.encrypt(key_value)
         if conn:
-            conn.key_value = key_value
+            conn.key_value = stored
         else:
-            db.add(Connection(key_name=key_name, key_value=key_value))
+            db.add(Connection(key_name=key_name, key_value=stored))
+        # В окружении — всегда открытое значение: весь код читает ключи через
+        # os.getenv и ничего не знает про шифрование.
         os.environ[key_name.upper()] = key_value
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "encrypted": secrets.enabled()}
+
+@router.delete("/api/connections/{key_name}")
+async def delete_connection(key_name: str, db: AsyncSession = Depends(get_db)):
+    """Удаляет ключ насовсем — из БД и из окружения процесса.
+
+    Пустое значение в `save_connections` намеренно игнорируется: дашборд
+    присылает маски, и пустая строка там означает «поле не трогали», а не
+    «сотри ключ». Поэтому удаление — отдельное явное действие.
+    """
+    key_name = (key_name or "").strip().lower()
+    result = await db.execute(select(Connection).where(Connection.key_name == key_name))
+    conn = result.scalar_one_or_none()
+    if conn:
+        await db.delete(conn)
+        await db.commit()
+
+    # Ключ мог прийти и из окружения (Render env) — тогда в БД его нет, но код
+    # по-прежнему видит его через os.getenv, и «удалил, а он работает».
+    from_env = os.environ.pop(key_name.upper(), None)
+    if not conn and from_env is None:
+        return {"ok": False, "error": "ключ не найден"}
+    return {"ok": True, "removed": key_name,
+            "note": ("значение было задано и в переменных окружения — после "
+                     "перезапуска сервера оно вернётся, уберите его в настройках хостинга")
+                    if from_env is not None and not conn else ""}
+
+
+class ClaudeBody(BaseModel):
+    api_key: str
+
+
+@router.post("/api/connections/claude")
+async def connect_claude(body: ClaudeBody):
+    """Подключение к Клоду один раз: проверяем ключ живым вызовом и сохраняем.
+
+    «Сохранили и надеемся» здесь не годится: неверный ключ обнаружится только
+    при первой генерации, а выглядеть это будет как «система не работает».
+    """
+    key = (body.api_key or "").strip()
+    if not key:
+        return {"ok": False, "error": "введите ключ Anthropic (начинается на sk-ant-)"}
+
+    from core import credentials
+    from core.ai_router import ai_router
+
+    previous = os.environ.get("ANTHROPIC_API_KEY")
+    os.environ["ANTHROPIC_API_KEY"] = key
+    try:
+        res = await ai_router._call_claude("claude-haiku-4-5-20251001",
+                                           "Отвечай одним словом.", "Скажи: готово")
+        alive = bool((res or {}).get("text"))
+    except Exception as e:
+        # Ключ не сохраняем и окружение возвращаем как было — иначе в системе
+        # осел бы нерабочий ключ, который «подключён».
+        if previous is None:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+        else:
+            os.environ["ANTHROPIC_API_KEY"] = previous
+        from core.errors import human
+        return {"ok": False, "error": human(e), "detail": str(e)[:200]}
+
+    if not alive:
+        return {"ok": False, "error": "Claude ответил пусто — попробуйте ещё раз."}
+
+    await credentials.set("anthropic_api_key", key)
+    await credentials.record_check("anthropic_api_key", True)
+    return {"ok": True,
+            "message": "Клод подключён. Теперь система обращается к нему сама — "
+                       "пересылать задания вручную больше не нужно."}
+
+
+class BackupBody(BaseModel):
+    password: str
+    file: dict | None = None
+
+
+@router.post("/api/connections/backup")
+async def backup_connections(body: BackupBody):
+    """Все доступы одним зашифрованным файлом.
+
+    POST, а не GET: пароль не должен оседать в истории браузера, в логах прокси
+    и в referer — а именно туда попадает строка запроса.
+    """
+    from core.credentials_backup import export_all
+    return await export_all(body.password)
+
+
+@router.post("/api/connections/restore")
+async def restore_connections(body: BackupBody):
+    """Восстановление доступов из копии — одно действие вместо всех полей заново."""
+    from core.credentials_backup import import_all
+    if not body.file:
+        return {"ok": False, "error": "не приложен файл копии"}
+    return await import_all(body.file, body.password)
+
+
+@router.post("/api/connections/verify")
+async def verify_persistence():
+    """Переживут ли сохранённые доступы перезапуск.
+
+    Отвечает не «база такая-то», а на вопрос, который человек на самом деле
+    задаёт: пропадут мои ключи или нет.
+    """
+    from datetime import datetime
+
+    from core import credentials
+    from database.db import storage_info
+
+    probe = f"проверка {datetime.utcnow().isoformat(timespec='seconds')}"
+    written = await credentials.set("nexus_persistence_probe", probe)
+    read_back = await credentials.get("nexus_persistence_probe")
+    await credentials.delete("nexus_persistence_probe")
+
+    st = storage_info()
+    works = bool(written.get("ok")) and read_back == probe
+    if not works:
+        verdict = "База не принимает запись — сохранять доступы сейчас нельзя."
+    elif st["persistent"]:
+        verdict = "Доступы сохраняются в постоянной базе и переживут перезапуск и деплой."
+    else:
+        verdict = ("Запись работает, но база временная: при следующем деплое или "
+                   "перезапуске доступы будут стёрты. " + st["warning"])
+
+    from core import secrets
+    return {"ok": works, "persistent": st["persistent"], "storage": st["kind"],
+            "encrypted": secrets.enabled(), "verdict": verdict}
+
 
 @router.post("/api/connections/test")
 async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get_db)):
     results = {}
     data = body.model_dump(exclude_none=True)
     db_result = await db.execute(select(Connection))
-    db_map = {c.key_name: c.key_value for c in db_result.scalars()}
+    db_map = _plain_map(db_result.scalars())
 
     def resolve(key):
         val = data.get(key, "")
@@ -107,6 +370,27 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
             results["anthropic_api_key"] = {"ok": True, "message": "Claude подключён ✓"}
         except Exception as e:
             results["anthropic_api_key"] = {"ok": False, "message": str(e)[:120]}
+
+    # Бесплатные OpenAI-совместимые провайдеры проверяются одинаково — запросом
+    # к их каталогу моделей: ключ живой, если каталог отдался.
+    from core.ai_router import FREE_PROVIDERS
+    for _pname, _spec in FREE_PROVIDERS.items():
+        field = _spec["key_env"].lower()
+        if not (k := resolve(field)):
+            continue
+        try:
+            url = _spec["base_url"] + _spec.get("models_path", "/models")
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(url, headers={"Authorization": f"Bearer {k}"})
+            if r.status_code == 200:
+                payload = r.json()
+                raw = payload.get("data") if isinstance(payload, dict) else payload
+                results[field] = {"ok": True,
+                                  "message": f"{_spec['title']} подключён ✓ ({len(raw or [])} моделей)"}
+            else:
+                results[field] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:80]}"}
+        except Exception as e:
+            results[field] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("openai_api_key"):
         try:
@@ -166,18 +450,341 @@ async def test_connections(body: ConnectionsBody, db: AsyncSession = Depends(get
             results["custom_ai_base_url"] = {"ok": False, "message": str(e)[:120]}
 
     if key := resolve("instagram_access_token"):
+        # У Meta два несовместимых API, и токен живёт только в своём. Токен
+        # Instagram Login (IGAA…) на graph.facebook.com — не токен, а просто
+        # строка, и Facebook отвечает «Cannot parse access token». Рабочий ключ
+        # выглядел сломанным, потому что проверялся не на том сервере.
+        from core.ig_connect import clean_token
+        key = clean_token(key)
+        is_ig = key.startswith("IGAA")
+        endpoint = ("https://graph.instagram.com/v21.0/me" if is_ig
+                    else "https://graph.facebook.com/v19.0/me")
+        fields = "id,username" if is_ig else "id,name"
         try:
             async with httpx.AsyncClient(timeout=10) as c:
-                r = await c.get("https://graph.facebook.com/v19.0/me", params={"access_token": key, "fields": "id,name"})
+                r = await c.get(endpoint, params={"access_token": key, "fields": fields})
                 d = r.json()
                 if "error" in d:
                     results["instagram_access_token"] = {"ok": False, "message": d["error"]["message"][:120]}
                 else:
-                    results["instagram_access_token"] = {"ok": True, "message": f"Аккаунт: {d.get('name', d.get('id'))} ✓"}
+                    name = d.get("username") or d.get("name") or d.get("id")
+                    results["instagram_access_token"] = {"ok": True, "message": f"Аккаунт: {name} ✓"}
         except Exception as e:
             results["instagram_access_token"] = {"ok": False, "message": str(e)[:120]}
 
+    if key := resolve("brightdata_api_key"):
+        try:
+            async with httpx.AsyncClient(timeout=15) as c:
+                r = await c.post(
+                    "https://api.brightdata.com/request",
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    json={"zone": os.getenv("BRIGHTDATA_ZONE", "web_unlocker1"),
+                          "url": "https://geo.brdtest.com/welcome.txt", "format": "raw"},
+                )
+                if r.status_code == 200:
+                    results["brightdata_api_key"] = {"ok": True, "message": "Bright Data подключён ✓"}
+                else:
+                    results["brightdata_api_key"] = {"ok": False, "message": f"HTTP {r.status_code}: {r.text[:100]}"}
+        except Exception as e:
+            results["brightdata_api_key"] = {"ok": False, "message": str(e)[:120]}
+
     return results
+
+@router.get("/api/social/accounts")
+async def social_accounts():
+    """Какие аккаунты доступны для бесплатного анализа (по заданным никам)."""
+    from core.social_intel import is_configured, get_user
+    if not await is_configured():
+        return {"configured": False, "accounts": []}
+    try:
+        d = await get_user()
+        return {"configured": True, "accounts": d.get("activeSocialAccounts", []), "raw": d}
+    except Exception as e:
+        return {"configured": True, "error": str(e)[:200]}
+
+
+class SocialAnalyticsBody(BaseModel):
+    platforms: list[str] = ["instagram"]
+    post_id: Optional[str] = None
+    last_records: Optional[int] = 20
+
+
+@router.post("/api/social/analytics/profile")
+async def social_profile_analytics(body: SocialAnalyticsBody):
+    """Аналитика профиля/шапки: подписчики + топ роликов (бесплатно, yt-dlp/Bright Data)."""
+    from core.social_intel import is_configured, get_profile_analytics
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE) или BRIGHTDATA_API_KEY"}
+    try:
+        return await get_profile_analytics(body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/analytics/post")
+async def social_post_analytics(body: SocialAnalyticsBody):
+    """Аналитика ролика по ссылке (post_id = URL): просмотры, лайки, длительность."""
+    from core.social_intel import get_post_analytics
+    try:
+        return await get_post_analytics(body.post_id, body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/history")
+async def social_history(body: SocialAnalyticsBody):
+    """Последние ролики аккаунтов (бесплатно, по заданным никам)."""
+    from core.social_intel import is_configured, get_recent_posts
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE)"}
+    try:
+        return await get_recent_posts(body.platforms, body.last_records or 20)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+@router.post("/api/social/intelligence")
+async def social_intelligence(body: SocialAnalyticsBody):
+    """Досье аккаунта: профиль + топ роликов по вовлечённости — бесплатно (yt-dlp +
+    опц. Bright Data), чтобы бот делал Reels на основе реальных данных, а не вслепую."""
+    from core.social_intel import is_configured, get_account_intelligence
+    if not await is_configured():
+        return {"error": "Укажите ники (IG_HANDLE/TIKTOK_HANDLE/YOUTUBE_HANDLE) или BRIGHTDATA_API_KEY"}
+    try:
+        return await get_account_intelligence(body.platforms)
+    except Exception as e:
+        return {"error": str(e)[:200]}
+
+
+def _probe_openai_compatible(base_url: str, key: str, models_path: str = "/models") -> dict:
+    """Дёргает каталог моделей у OpenAI-совместимого провайдера."""
+    try:
+        r = httpx.get(base_url.rstrip("/") + models_path,
+                      headers={"Authorization": f"Bearer {key}"}, timeout=20)
+        if r.status_code == 200:
+            return {"ok": True}
+        body = r.text[:150]
+        low = body.lower()
+        if "quota" in low or r.status_code == 429:
+            return {"ok": False, "error": "квота исчерпана"}
+        return {"ok": False, "error": f"HTTP {r.status_code}: {body[:100]}"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)[:120]}
+
+
+@router.get("/api/ai/providers")
+async def ai_providers(db: AsyncSession = Depends(get_db)):
+    """Живой статус всех ИИ-провайдеров: у кого есть ключ и кто реально отвечает.
+
+    Показывает и платных, и бесплатных (Groq, Cerebras, NVIDIA и др.) —
+    со ссылками на регистрацию и описанием лимитов у тех, где ключа нет.
+    """
+    # Подтягиваем ключи из БД: сохранённые через дашборд должны учитываться сразу.
+    result = await db.execute(select(Connection))
+    for key_name, value in _plain_map(result.scalars()).items():
+        if value and "****" not in value:
+            os.environ.setdefault(key_name.upper(), value)
+
+    from core.ai_router import (FREE_PROVIDERS, resolve_free_model,
+                                resolve_gemini_model)
+    out = []
+
+    # ── Платные / основные ───────────────────────────────────────────────
+    gem_key = os.getenv("GEMINI_API_KEY", "")
+    gem = {"name": "Google Gemini", "key_env": "GEMINI_API_KEY", "free": False,
+           "has_key": bool(gem_key), "ok": False, "model": None,
+           "limits": "бесплатный тариф с суточным лимитом",
+           "signup": "https://aistudio.google.com/apikey", "error": None}
+    if gem_key:
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get("https://generativelanguage.googleapis.com/v1beta/models",
+                                params={"key": gem_key})
+            if r.status_code == 200:
+                gem["ok"] = True
+                gem["model"] = resolve_gemini_model()
+            else:
+                gem["error"] = r.json().get("error", {}).get("message", "ошибка")[:120]
+        except Exception as e:
+            gem["error"] = str(e)[:120]
+    out.append(gem)
+
+    oa_key = os.getenv("OPENAI_API_KEY", "")
+    oa = {"name": "OpenAI", "key_env": "OPENAI_API_KEY", "free": False,
+          "has_key": bool(oa_key), "ok": False, "model": "gpt-4o-mini",
+          "limits": "платный, по балансу", "signup": "https://platform.openai.com/api-keys",
+          "error": None}
+    if oa_key:
+        probe = await asyncio.to_thread(_probe_openai_compatible,
+                                        "https://api.openai.com/v1", oa_key)
+        oa["ok"] = probe["ok"]
+        oa["error"] = probe.get("error")
+    out.append(oa)
+
+    for title, env, url, signup, limits in (
+        ("Anthropic Claude", "ANTHROPIC_API_KEY", None,
+         "https://console.anthropic.com/settings/keys", "платный, по балансу"),
+        ("DeepSeek", "DEEPSEEK_API_KEY", "https://api.deepseek.com",
+         "https://platform.deepseek.com", "очень дёшево, центы за сотни запросов"),
+        ("Perplexity", "PERPLEXITY_API_KEY", None,
+         "https://www.perplexity.ai/settings/api", "платный — поиск трендов в реальном времени"),
+    ):
+        key = os.getenv(env, "")
+        item = {"name": title, "key_env": env, "free": False, "has_key": bool(key),
+                "ok": False, "model": None, "limits": limits, "signup": signup, "error": None}
+        if key and url:
+            probe = await asyncio.to_thread(_probe_openai_compatible, url, key)
+            item["ok"] = probe["ok"]
+            item["error"] = probe.get("error")
+        elif key:
+            item["ok"] = True  # ключ есть, отдельная проверка не нужна
+        out.append(item)
+
+    # ── Бесплатные (реестр из ai_router) ─────────────────────────────────
+    for name, spec in FREE_PROVIDERS.items():
+        key = os.getenv(spec["key_env"], "")
+        item = {"name": spec["title"], "key_env": spec["key_env"], "free": True,
+                "has_key": bool(key), "ok": False, "model": None,
+                "limits": spec.get("limits", ""), "signup": spec.get("signup", ""),
+                "error": None}
+        if key:
+            probe = await asyncio.to_thread(
+                _probe_openai_compatible, spec["base_url"], key,
+                spec.get("models_path", "/models"))
+            item["ok"] = probe["ok"]
+            item["error"] = probe.get("error")
+            if item["ok"]:
+                item["model"] = await asyncio.to_thread(resolve_free_model, name)
+        out.append(item)
+
+    working = [p["name"] for p in out if p["ok"]]
+    return {"providers": out, "working": working,
+            "ready": bool(working),
+            "agents": ["niche_analyst", "viral_hunter", "strategist", "copywriter",
+                       "reviewer", "voice_adapter", "visual_creator", "adapter",
+                       "trend_analyst", "funnel_agent", "reporter"]}
+
+
+class SkillBody(BaseModel):
+    kind: Optional[str] = "rule"
+    title: Optional[str] = None
+    body: Optional[str] = None
+
+
+@router.get("/api/agent/skills")
+async def agent_skills():
+    """Память агента: что уже сработало и чего он избегает."""
+    from core.skills_store import list_skills, stats, KINDS
+    return {"skills": list_skills(), "stats": stats(), "kinds": list(KINDS)}
+
+
+@router.post("/api/agent/skills")
+async def agent_skill_add(body: SkillBody):
+    from core.skills_store import add_skill
+    if not (body.title or "").strip():
+        return {"ok": False, "error": "нужен заголовок"}
+    return {"ok": True, "skill": add_skill(body.kind or "rule", body.title, body.body or "")}
+
+
+@router.delete("/api/agent/skills/{skill_id}")
+async def agent_skill_delete(skill_id: str):
+    from core.skills_store import delete_skill
+    return {"ok": delete_skill(skill_id)}
+
+
+class AgentConfigBody(BaseModel):
+    brand_voice: Optional[str] = None
+
+
+@router.get("/api/agent/config")
+async def agent_config():
+    """Специфика агента: голос бренда + текущее состояние возможностей."""
+    from core.brand import get_brand_voice, BRAND, PLATFORM_SPECS
+    from core.skills_store import stats
+    try:
+        from api.routes_desktop import desktop_connected
+        from core import server_browser
+        pc = desktop_connected() or server_browser.enabled()
+    except Exception:
+        pc = False
+    return {
+        "brand_voice": get_brand_voice(),
+        "brand": {"name": BRAND.get("name"), "colors": BRAND.get("colors")},
+        "platforms": list(PLATFORM_SPECS.keys()),
+        "skills": stats(),
+        "capabilities": {
+            "pc_control": pc,
+            "web_search": True,
+            "vision": bool(os.getenv("GEMINI_API_KEY") or os.getenv("OPENAI_API_KEY")
+                           or os.getenv("ANTHROPIC_API_KEY")),
+            # Публиковать можно и без API — через браузер (ПК-агент или серверный).
+            "social": bool(os.getenv("INSTAGRAM_ACCESS_TOKEN") or os.getenv("TIKTOK_ACCESS_TOKEN")
+                           or os.getenv("VK_ACCESS_TOKEN") or os.getenv("THREADS_ACCESS_TOKEN")) or pc,
+            "analysis": bool(os.getenv("IG_HANDLE") or os.getenv("TIKTOK_HANDLE")
+                             or os.getenv("YOUTUBE_HANDLE") or os.getenv("BRIGHTDATA_API_KEY")),
+            "telegram": bool(os.getenv("TELEGRAM_BOT_TOKEN")),
+            "montage": True,
+        },
+    }
+
+
+@router.post("/api/agent/config")
+async def agent_config_save(body: AgentConfigBody):
+    from core.brand import set_brand_voice
+    if body.brand_voice is not None:
+        set_brand_voice(body.brand_voice)
+    return {"ok": True}
+
+
+@router.get("/api/bot/status")
+async def bot_status(db: AsyncSession = Depends(get_db)):
+    """Статус Telegram-бота: имя, задан ли админ-чат и группа постов."""
+    db_result = await db.execute(select(Connection))
+    db_map = _plain_map(db_result.scalars())
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    admin = db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    group = db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "")
+    out = {"has_token": bool(token), "admin_chat_id": bool(admin),
+           "post_chat_id": group or "", "username": None, "ok": False}
+    if not token:
+        return out
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+            d = r.json()
+            if d.get("ok"):
+                out["ok"] = True
+                out["username"] = d["result"].get("username")
+    except Exception as e:
+        out["error"] = str(e)[:120]
+    return out
+
+
+class BotTestBody(BaseModel):
+    chat_id: Optional[str] = None
+
+
+@router.post("/api/bot/test-post")
+async def bot_test_post(body: BotTestBody, db: AsyncSession = Depends(get_db)):
+    """Отправляет тестовое сообщение в группу постов (или указанный chat_id)."""
+    db_result = await db.execute(select(Connection))
+    db_map = _plain_map(db_result.scalars())
+    token = db_map.get("telegram_bot_token") or os.getenv("TELEGRAM_BOT_TOKEN", "")
+    chat = body.chat_id or db_map.get("telegram_post_chat_id") or os.getenv("TELEGRAM_POST_CHAT_ID", "") \
+        or db_map.get("telegram_chat_id") or os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat:
+        return {"ok": False, "message": "Не задан токен бота или chat_id группы"}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                             json={"chat_id": chat, "text": "✅ NEXUS AI: группа подключена — сюда будут приходить посты."})
+            d = r.json()
+            if d.get("ok"):
+                return {"ok": True, "message": "Отправлено ✓ Проверь группу"}
+            return {"ok": False, "message": d.get("description", "Ошибка")[:150]}
+    except Exception as e:
+        return {"ok": False, "message": str(e)[:150]}
+
 
 @router.get("/api/analytics/{niche_id}")
 async def get_analytics(niche_id: str, db: AsyncSession = Depends(get_db)):

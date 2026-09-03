@@ -1,0 +1,18 @@
+# Запуск NEXUS AI одной командой на VPS (Oracle Always Free и т.п.):
+#   docker compose up -d --build
+# Ключи берутся из файла .env рядом с этим файлом (скопируй из .env.example).
+services:
+  nexus:
+    build: .
+    image: nexus-ai
+    container_name: nexus-ai
+    restart: always            # 24/7: поднимается сам после перезагрузки VM
+    ports:
+      - "80:8000"              # сайт будет доступен на http://<IP-виртуалки>/
+    env_file:
+      - .env
+    volumes:
+      - nexus_data:/data       # sqlite-база + профиль браузера (логины) сохраняются
+
+volumes:
+  nexus_data:

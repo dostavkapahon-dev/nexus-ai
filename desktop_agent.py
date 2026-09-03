@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 """
 NEXUS AI Desktop Agent
 ======================
@@ -23,8 +23,20 @@ from datetime import datetime
 try:
     import websockets
     from playwright.async_api import async_playwright
-except ImportError:
-    print("Установите зависимости: pip install websockets playwright && playwright install chromium")
+except Exception as _imp_err:
+    # Показываем НАСТОЯЩУЮ причину — иначе непонятно, что чинить.
+    print("\n[ОШИБКА] Не удалось загрузить зависимости.")
+    print(f"Причина: {type(_imp_err).__name__}: {_imp_err}")
+    print(f"Python: {sys.version.split()[0]}  ({sys.executable})")
+    if sys.version_info >= (3, 13):
+        print("\n⚠️  У тебя Python "
+              f"{sys.version_info.major}.{sys.version_info.minor} — слишком новый для Playwright.")
+        print("   Поставь Python 3.12 с https://www.python.org/downloads/release/python-3128/")
+        print("   и запусти:  py -3.12 -m pip install websockets playwright")
+        print("               py -3.12 -m playwright install chromium")
+        print("               py -3.12 desktop_agent.py --server <URL> --token <TOKEN>")
+    else:
+        print("\nПопробуй:  pip install websockets playwright && playwright install chromium")
     sys.exit(1)
 
 parser = argparse.ArgumentParser()
@@ -43,16 +55,58 @@ _playwright = None
 # Постоянный профиль браузера: вход в Instagram/VK/др. сохраняется между запусками.
 PROFILE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "browser_session")
 
+def _find_chromium() -> str | None:
+    """Ищет уже скачанный Chromium (любой версии) в кэше Playwright."""
+    import glob
+    roots = [os.getenv("PLAYWRIGHT_BROWSERS_PATH", ""),
+             os.path.expanduser("~/.cache/ms-playwright"),
+             os.path.expandvars(r"%USERPROFILE%\AppData\Local\ms-playwright")]
+    patterns = ["chromium-*/chrome-linux/chrome", "chromium-*/chrome-win/chrome.exe",
+                "chromium-*/chrome-mac/Chromium.app/Contents/MacOS/Chromium"]
+    for root in [r for r in roots if r and os.path.isdir(r)]:
+        for pat in patterns:
+            hits = sorted(glob.glob(os.path.join(root, pat)), reverse=True)
+            if hits:
+                return hits[0]
+    return None
+
+
 async def ensure_browser():
+    """Поднимает браузер с сохранением сессий. Устойчиво к рассинхрону версий
+    Playwright/Chromium: пробует бандл, системный Chrome/Edge, затем явный файл."""
     global _browser, _page, _playwright
     if _browser is None:
         _playwright = await async_playwright().start()
         os.makedirs(PROFILE_DIR, exist_ok=True)
-        # launch_persistent_context хранит cookies/сессии в PROFILE_DIR
-        _browser = await _playwright.chromium.launch_persistent_context(
-            PROFILE_DIR, headless=HEADLESS,
-            viewport={"width": 1280, "height": 800},
-        )
+        opts = {"headless": HEADLESS, "viewport": {"width": 1280, "height": 800}}
+
+        attempts = [
+            ("бандл Playwright", {}),
+            ("системный Chrome", {"channel": "chrome"}),
+            ("системный Edge", {"channel": "msedge"}),
+        ]
+        # Явный путь к браузеру — спасает при рассинхроне версий Playwright/Chromium.
+        exe = os.getenv("BROWSER_PATH") or _find_chromium()
+        if exe:
+            attempts.append((f"файл {os.path.basename(exe)}", {"executable_path": exe}))
+        errors = []
+        for label, extra in attempts:
+            try:
+                _browser = await _playwright.chromium.launch_persistent_context(
+                    PROFILE_DIR, **opts, **extra
+                )
+                print(f"🌐 Браузер запущен ({label})")
+                break
+            except Exception as e:
+                errors.append(f"{label}: {str(e)[:120]}")
+                _browser = None
+
+        if _browser is None:
+            hint = ("Не удалось запустить браузер.\n"
+                    "Выполни:  py -m playwright install chromium\n"
+                    "или установи Google Chrome.\nПодробности:\n  " + "\n  ".join(errors))
+            raise RuntimeError(hint)
+
         _page = _browser.pages[0] if _browser.pages else await _browser.new_page()
     return _page
 
@@ -190,6 +244,21 @@ async def main():
     print(f"NEXUS AI Desktop Agent")
     print(f"Server: {WS_URL}")
     print(f"Headless: {HEADLESS}")
+
+    # Открываем браузер СРАЗУ, чтобы можно было войти в аккаунты до первой задачи.
+    if not HEADLESS:
+        print("Открываю браузер...")
+        try:
+            page = await ensure_browser()
+            try:
+                await page.goto("https://www.instagram.com", timeout=30000)
+            except Exception:
+                pass  # нет сети/долго грузится — окно всё равно открыто
+            print("👉 Войди в нужные аккаунты в открывшемся окне. Окно НЕ закрывай.")
+        except Exception as e:
+            print(f"[ВНИМАНИЕ] Браузер не открылся: {str(e)[:300]}")
+            print("Агент продолжит работу — браузер попробует открыться при первой задаче.")
+
     print(f"Connecting...")
 
     while True:

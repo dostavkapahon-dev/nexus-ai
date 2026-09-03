@@ -11,7 +11,7 @@ DEFAULT_PROMPTS = {
     },
     "viral_hunter": {
         "system": "You are ViralHunter, expert at identifying viral content patterns. Respond in JSON.",
-        "template": "Find viral content patterns for niche: {niche}\nPlatforms: {platforms}\nAudience: {audience}\n\nRespond with JSON: {\"viral_topics\": [...], \"hooks\": [...], \"formats\": [...], \"hashtags\": [...]}",
+        "template": "Find viral content patterns for niche: {niche}\nPlatforms: {platforms}\nAudience: {audience}\n\nReal account data (bio, followers, and TOP performing posts by engagement — base ideas on what actually worked here):\n{account_data}\n\nRespond with JSON: {\"viral_topics\": [...], \"hooks\": [...], \"formats\": [...], \"hashtags\": [...]}",
         "model": "claude-sonnet-4-20250514"
     },
     "strategist": {
@@ -47,12 +47,12 @@ DEFAULT_PROMPTS = {
     "trend_analyst": {
         "system": "You are TrendAnalyst. Analyze trending topics and viral content patterns. Respond in JSON.",
         "template": "Analyze current trends for this niche:\nNiche: {niche}\nCity: {city}\nRaw trend data from web:\n{raw_trends}\n\nRespond with JSON: {\"top_topics\": [\"topic1\",\"topic2\",\"topic3\"], \"best_hooks\": [\"hook1\",\"hook2\"], \"recommended_format\": \"...\", \"corrections\": [\"suggestion1\"], \"summary\": \"brief summary\"}",
-        "model": "gemini-1.5-flash"
+        "model": "gemini-2.0-flash"
     },
     "funnel_agent": {
         "system": "You are SalesFunnelAgent. Generate short, friendly replies to social media comments to move users down the sales funnel. Respond in JSON.",
         "template": "Generate a reply to this comment:\nNiche: {niche}\nComment: {comment}\nDetected intent: {intent}\nFunnel stage: {funnel_stage}\nLead magnet URL: {lead_magnet_url}\nPayment URL: {payment_url}\n\nRespond with JSON: {\"reply\": \"your reply text\", \"intent\": \"{intent}\"}. Keep reply under 150 chars, friendly, no spam.",
-        "model": "gemini-1.5-flash"
+        "model": "gemini-2.0-flash"
     }
 }
 
@@ -64,9 +64,11 @@ async def get_prompt(db: AsyncSession, agent_name: str) -> dict:
         return {
             "system": custom.system_prompt or default.get("system", ""),
             "template": custom.user_prompt_template or default.get("template", ""),
-            "model": custom.ai_model or default.get("model", "claude-sonnet-4-20250514")
+            "model": custom.ai_model or default.get("model", "claude-sonnet-4-20250514"),
+            # Явный выбор пользователя — приоритетнее режима economy/premium.
+            "custom_model": bool(custom.ai_model),
         }
-    return default
+    return {**default, "custom_model": False}
 
 async def save_prompt(db: AsyncSession, agent_name: str, system_prompt: str, user_prompt_template: str, ai_model: str):
     result = await db.execute(select(CustomPrompt).where(CustomPrompt.agent_name == agent_name))

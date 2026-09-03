@@ -278,9 +278,14 @@ async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 
     """Тот же vision-loop, но на бесплатном Google Gemini (JSON-протокол действий)."""
     import json as _json
     import base64 as _b64
-    from core import gemini_rest
+    import google.generativeai as genai
 
-    system = SYSTEM_PROMPT + "\n\n" + _GEMINI_ACTIONS_DOC
+    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+    model = genai.GenerativeModel(
+        GEMINI_VISION_MODEL,
+        system_instruction=SYSTEM_PROMPT + "\n\n" + _GEMINI_ACTIONS_DOC,
+        generation_config={"response_mime_type": "application/json"},
+    )
 
     if start_url:
         await send_to_desktop({"action": "navigate", "url": start_url}, timeout=40.0)
@@ -295,9 +300,10 @@ async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 
                   f"Текущий URL: {shot.get('url', '?')}\n"
                   f"Размер экрана: {shot.get('width')}x{shot.get('height')}\n"
                   f"Реши следующее действие. Текущий скриншот:")
-        raw = (await gemini_rest.generate(
-            GEMINI_VISION_MODEL, system, prompt,
-            image_bytes=img_bytes, image_mime="image/jpeg", json_mode=True) or "").strip()
+        resp = await asyncio.to_thread(
+            model.generate_content, [prompt, {"mime_type": "image/jpeg", "data": img_bytes}]
+        )
+        raw = (getattr(resp, "text", "") or "").strip()
         try:
             s, e = raw.find("{"), raw.rfind("}") + 1
             data = _json.loads(raw[s:e])

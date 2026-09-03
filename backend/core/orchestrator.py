@@ -1,5 +1,6 @@
-﻿import os
+import os
 import json
+from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from database.db import AsyncSessionLocal
@@ -38,24 +39,6 @@ async def _send_telegram_report(text: str):
     except Exception:
         pass
 
-async def _send_telegram_preview(plan_id: str, platform: str, topic: str,
-                                 text: str, image_url: str = None):
-    """Готовый контент → в Telegram с кнопками подтверждения/правки/публикации."""
-    chat_id = os.getenv("TELEGRAM_CHAT_ID")
-    if not os.getenv("TELEGRAM_BOT_TOKEN") or not chat_id:
-        return
-    try:
-        from core.telegram_bot import send_message, send_photo, _plan_buttons
-        caption = f"📝 <b>{topic}</b>\n<i>{platform}</i>\n\n{text}"
-        buttons = _plan_buttons(plan_id)
-        if image_url:
-            await send_photo(chat_id, image_url, caption[:1024], buttons)
-        else:
-            await send_message(chat_id, caption, buttons=buttons)
-    except Exception:
-        pass
-
-
 async def _get_profile(db):
     result = await db.execute(select(UserProfile).limit(1))
     return result.scalar_one_or_none()
@@ -88,9 +71,23 @@ class NexusCore:
                 niche_profile = await analyst.analyze(db, niche_id, niche.name, niche.city or "", niche.goal, niche.tone_of_voice)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "niche_analyst"})
 
+                # Досье аккаунта (бесплатно, без сторонних сервисов: yt-dlp +
+                # опц. Bright Data) — чтобы бот планировал контент на реальных
+                # данных, а не вслепую.
+                account_intel = None
+                try:
+                    from core.social_intel import is_configured as intel_ready, get_account_intelligence
+                    if await intel_ready():
+                        ig_platforms = [p for p in (niche.platforms or []) if p in
+                                        ("instagram", "tiktok", "youtube")]
+                        account_intel = await get_account_intelligence(ig_platforms or ["instagram"])
+                        await broadcast(niche_id, {"event": "account_intel", "data": bool(account_intel)})
+                except Exception:
+                    account_intel = None
+
                 await broadcast(niche_id, {"event": "agent_start", "agent": "viral_hunter"})
                 hunter = ViralHunter()
-                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}))
+                viral_data = await hunter.hunt(db, niche_id, niche.name, niche.platforms or ["telegram"], niche_profile.get("audience", {}), account_intel)
                 await broadcast(niche_id, {"event": "agent_done", "agent": "viral_hunter"})
 
                 # Upload to Google Drive
@@ -113,7 +110,7 @@ class NexusCore:
                 db.add(NicheAnalysisCache(
                     niche_key=niche_key, drive_file_id=drive_file_id,
                     drive_url=drive_url,
-                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data}
+                    analysis_data={"niche_profile": niche_profile, "viral_data": viral_data, "account_intel": account_intel}
                 ))
                 await db.commit()
 
@@ -127,6 +124,15 @@ class NexusCore:
                 if drive_url:
                     msg += f"\n📂 <a href=\"{drive_url}\">Открыть анализ на Google Диске</a>"
                 await _send_telegram_report(msg)
+
+            # Если пользователь выбрал стратегию в Telegram (/strategy) — учитываем её.
+            try:
+                from core.strategy_advisor import get_chosen
+                chosen = await get_chosen(db)
+                if chosen:
+                    viral_data = {**(viral_data or {}), "chosen_strategy": chosen}
+            except Exception:
+                pass
 
             await broadcast(niche_id, {"event": "agent_start", "agent": "strategist"})
             strategist = Strategist()
@@ -151,7 +157,7 @@ class NexusCore:
             await db.commit()
             await broadcast(niche_id, {"event": "pipeline_complete"})
 
-    async def generate_content_for_plan(self, plan_id: str):
+    async def generate_content_for_plan(self, plan_id: str, corrections: str = None):
         async with AsyncSessionLocal() as db:
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
             plan = result.scalar_one_or_none()
@@ -163,9 +169,14 @@ class NexusCore:
             if not niche:
                 return
 
+            # Если пришли правки от админа — учитываем их в задании копирайтеру.
+            hook = plan.hook or ""
+            if corrections:
+                hook = f"{hook}\n\nУчти правки: {corrections}"
+
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "copywriter"})
             copywriter = Copywriter()
-            text = await copywriter.write(db, plan.niche_id, niche.name, plan.topic, plan.hook or "", niche.tone_of_voice, plan.platform, niche.goal)
+            text = await copywriter.write(db, plan.niche_id, niche.name, plan.topic, hook, niche.tone_of_voice, plan.platform, niche.goal)
             await broadcast(plan.niche_id, {"event": "agent_done", "agent": "copywriter"})
 
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "reviewer"})
@@ -183,7 +194,8 @@ class NexusCore:
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "visual_creator"})
             visual = VisualCreator()
             visual_result = await visual.create(db, plan.niche_id, niche.name, plan.topic, plan.platform, text_voiced)
-            # HIXIIT — приоритетный генеративный слой: сам выбирает модель под задачу.
+            # HIXIIT — генеративный слой: сам подбирает модель под задачу.
+            # Работает только когда подключён MCP; иначе остаётся визуал от visual_creator.
             try:
                 from core.hixiit import generate as hixiit_generate, mcp_configured
                 if mcp_configured():
@@ -194,9 +206,8 @@ class NexusCore:
                     )
                     if hx.get("ok"):
                         visual_result["image_url"] = hx["url"]
-                        visual_result["provider"] = hx.get("provider")
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[NEXUS] HIXIIT: {str(e)[:150]}", flush=True)
             await broadcast(plan.niche_id, {"event": "agent_done", "agent": "visual_creator"})
 
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "adapter"})
@@ -211,11 +222,20 @@ class NexusCore:
                 score=score, platform_versions=platform_versions
             )
             db.add(content)
-            plan.status = "generated"
+            plan.status = "awaiting_approval"
             await db.commit()
             await broadcast(plan.niche_id, {"event": "pipeline_complete"})
-            await _send_telegram_preview(plan_id, plan.platform, plan.topic,
-                                        text_voiced, visual_result.get("image_url"))
+
+            # На согласование в Telegram перед публикацией.
+            try:
+                from core.moderation import send_for_approval
+                await send_for_approval(
+                    text_voiced, media_url=visual_result.get("image_url"),
+                    platforms=(niche.platforms or ["instagram"]),
+                    kind="plan", ref=plan_id,
+                )
+            except Exception:
+                pass
 
     async def publish_plan(self, plan_id: str):
         """Publish a generated plan item to all configured platforms.
@@ -224,7 +244,7 @@ class NexusCore:
         где есть токен, и браузерного агента как fallback. Возвращает отчёт.
         """
         async with AsyncSessionLocal() as db:
-            from database.models import Publication, GeneratedContent
+            from database.models import Publication
             result = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
             plan = result.scalar_one_or_none()
             if not plan:
@@ -247,6 +267,15 @@ class NexusCore:
             versions = content.platform_versions or {}
             platforms = niche.platforms or ["telegram"]
 
+            # Под какой стратегией выходят посты — чтобы потом сравнить результат.
+            strategy_id = ""
+            try:
+                from core.strategy_store import current as current_strategy
+                cur = await current_strategy(plan.niche_id)
+                strategy_id = cur["id"] if cur else ""
+            except Exception:
+                pass
+
             report = {}
             for platform in platforms:
                 text = versions.get(platform) or base_text
@@ -255,47 +284,92 @@ class NexusCore:
                 except Exception as e:
                     res = {"ok": False, "error": str(e)}
                 report[platform] = res
-                status = "published" if res.get("ok") else "failed"
-                db.add(Publication(plan_id=plan_id, platform=platform, status=status))
+                # Разовый сетевой сбой не должен означать потерянный пост: неудачная
+                # публикация остаётся в очереди с текстом и картинкой, и джоб повторит её.
+                # Отказ по существу (нет прав/токена) повторять бессмысленно — BLOCKED.
+                from core.publish_queue import (PUBLISHED, RETRYING, BLOCKED,
+                                                _is_permanent, _backoff)
+                from core.cost_tracker import current_task_id
+                if res.get("ok"):
+                    status, next_retry = PUBLISHED, None
+                elif _is_permanent(res):
+                    status, next_retry = BLOCKED, None
+                else:
+                    status, next_retry = RETRYING, datetime.utcnow() + _backoff(1)
+                    report[platform] = {**res, "queued_retry": True}
+
+                # Сохраняем не только факт, но и ЧТО опубликовали: тему, хук и формат.
+                # Без этого позже невозможно связать результат с приёмом.
+                db.add(Publication(
+                    plan_id=plan_id, niche_id=plan.niche_id, platform=platform, status=status,
+                    external_id=str(res.get("post_id") or ""),
+                    post_url=str(res.get("post_url") or ""),
+                    topic=(plan.topic or "")[:300], hook=plan.hook or "",
+                    content_format=plan.format or "", strategy_id=strategy_id,
+                    attempts=1, next_retry_at=next_retry,
+                    last_error=None if res.get("ok") else
+                        str(res.get("error") or res.get("reason") or "")[:500],
+                    text=text, image_url=image_url,
+                    task_id=current_task_id.get()))
                 await broadcast(plan.niche_id, {"event": "publish_result", "platform": platform, "result": res})
 
             plan.status = "published" if any(r.get("ok") for r in report.values()) else "generated"
             await db.commit()
             return {"ok": True, "report": report}
 
-    async def _publish_one(self, platform: str, text: str, image_url: str) -> dict:
-        """Публикует на одной платформе: официальный API → fallback браузерный агент."""
+    async def _publish_one(self, platform: str, text: str, image_url: str,
+                           video_url: str = "") -> dict:
+        """Публикация одной площадки через её коннектор.
+
+        Раньше здесь была лестница if-ов по каждой площадке. Теперь все площадки
+        реализуют один контракт (`connectors/base.py::SocialConnector`), поэтому
+        маршрутизация одинаковая: коннектор → при отказе браузерный путь.
+
+        Режим NEXUS_PUBLISH_MODE: browser — всё через браузер без API;
+        api — только официальные API; auto — API если настроен, иначе браузер.
+        """
         from publishers.browser_publish import publish_via_browser
+        from connectors import get_connector
 
-        if platform == "telegram":
-            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-            if os.getenv("TELEGRAM_BOT_TOKEN") and tg_chat:
-                from publishers.telegram_pub import publish_telegram
-                r = await publish_telegram(tg_chat, text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return {"ok": False, "error": "Telegram не настроен"}
+        mode = os.getenv("NEXUS_PUBLISH_MODE", "auto").strip().lower()
 
-        if platform == "instagram":
-            if os.getenv("INSTAGRAM_ACCESS_TOKEN") and os.getenv("INSTAGRAM_ACCOUNT_ID"):
-                from publishers.instagram_pub import publish_instagram
-                r = await publish_instagram(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("instagram", text, image_url)
+        # Telegram — свой бот, а не «API площадки»: его не подменяем браузером.
+        if mode == "browser" and platform != "telegram":
+            return await publish_via_browser(platform, text, image_url)
 
-        if platform == "vk":
-            if os.getenv("VK_ACCESS_TOKEN") and os.getenv("VK_GROUP_ID"):
-                from publishers.vk_pub import publish_vk
-                r = await publish_vk(text, image_url or None)
-                return {"ok": True, "via": "api", **r}
-            return await publish_via_browser("vk", text, image_url)
+        connector = get_connector(platform)
+        if connector and connector.configured():
+            try:
+                res = await connector.publish(text, image_url=image_url or "",
+                                              video_url=video_url or "")
+            except Exception as e:
+                res = {"ok": False, "error": str(e)[:300]}
 
-        if platform == "youtube":
-            # Прямой аплоад требует OAuth → используем браузерного агента.
-            return await publish_via_browser("youtube", text, image_url)
+            if res.get("ok"):
+                return res
+            # Ограничение платформы или сбой API — уходим в браузер, но
+            # сохраняем исходную причину, чтобы она не потерялась в отчёте.
+            if mode == "api":
+                return res
+            browser = await publish_via_browser(platform, text, image_url)
+            if browser.get("ok"):
+                return {**browser, "api_note": res.get("reason") or res.get("error")}
+            return {"ok": False, "platform": platform,
+                    "error": res.get("reason") or res.get("error") or "публикация не удалась",
+                    "blocked_by_api": res.get("blocked_by_api", False),
+                    "fallback_error": browser.get("error")}
 
-        if platform == "tiktok":
-            return await publish_via_browser("tiktok", text, image_url)
+        # Telegram — свой бот, а не «API площадки». Браузерного сценария для него нет
+        # и быть не должно: без токена это «не настроено», а не повод лезть в браузер.
+        # Иначе наверх уходило «нет браузерного сценария» — причина не та, и очередь
+        # пять раз повторяла заведомо безнадёжную публикацию.
+        if mode == "api" or platform == "telegram":
+            missing = connector.missing_env() if connector else []
+            return {"ok": False, "platform": platform,
+                    "error": "площадка не настроена" + (f": не заданы {', '.join(missing)}" if missing else "")}
 
-        return {"ok": False, "error": f"Платформа '{platform}' не поддерживается"}
+        # Токенов нет — публикуем через браузер (без API).
+        return await publish_via_browser(platform, text, image_url)
+
 
 nexus_core = NexusCore()

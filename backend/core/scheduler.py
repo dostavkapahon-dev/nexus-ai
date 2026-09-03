@@ -104,44 +104,59 @@ async def run_daily_publish():
 
                 platforms = niche.platforms or ["telegram"]
 
+                strategy_id = ""
+                try:
+                    from core.strategy_store import current as current_strategy
+                    cur = await current_strategy(plan.niche_id)
+                    strategy_id = cur["id"] if cur else ""
+                except Exception:
+                    pass
+
+                # Единый диспетчер публикации (тот же, что в оркестраторе):
+                # официальный API площадки → браузерный агент.
+                awaiting = 0
+                from core.orchestrator import nexus_core
+                from core.autopublish import may_autopublish
+                from core.publish_queue import enqueue
                 for platform in platforms:
                     try:
-                        if platform == "telegram":
-                            tg_chat = os.getenv("TELEGRAM_CHAT_ID", "")
-                            if tg_chat:
-                                await publish_telegram(tg_chat, text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="telegram", status="published"))
-
-                        elif platform == "instagram":
-                            from publishers.instagram_pub import publish_instagram
-                            if os.getenv("INSTAGRAM_ACCESS_TOKEN"):
-                                await publish_instagram(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="instagram", status="published"))
-
-                        elif platform == "tiktok":
-                            from publishers.tiktok_pub import publish_tiktok_photo
-                            if os.getenv("TIKTOK_ACCESS_TOKEN") and image_url:
-                                await publish_tiktok_photo(text, image_url)
-                                db.add(Publication(plan_id=plan.id, platform="tiktok", status="published"))
-
-                        elif platform == "vk":
-                            from publishers.vk_pub import publish_vk
-                            if os.getenv("VK_ACCESS_TOKEN"):
-                                await publish_vk(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="vk", status="published"))
-
-                        elif platform == "threads":
-                            from publishers.threads_pub import publish_threads
-                            if os.getenv("THREADS_ACCESS_TOKEN"):
-                                await publish_threads(text, image_url or None)
-                                db.add(Publication(plan_id=plan.id, platform="threads", status="published"))
-
+                        # Площадка на подтверждении не выходит в свет по расписанию:
+                        # пост готовится и ложится в очередь ждать человека.
+                        if not await may_autopublish(platform):
+                            awaiting += 1
+                            pub_id = await enqueue(
+                                platform, text, image_url or "", plan_id=plan.id,
+                                niche_id=plan.niche_id, topic=plan.topic or "",
+                                hook=plan.hook or "", content_format=plan.format or "",
+                                strategy_id=strategy_id, approved=False)
+                            if chat_id:
+                                await send_message(
+                                    chat_id,
+                                    f"⏸ {platform}: пост готов и ждёт подтверждения "
+                                    f"(<code>{pub_id}</code>)")
+                            continue
+                        res = await nexus_core._publish_one(platform, text, image_url or "")
+                        status = "published" if res.get("ok") else "failed"
+                        db.add(Publication(
+                            plan_id=plan.id, niche_id=plan.niche_id, platform=platform,
+                            status=status, external_id=str(res.get("post_id") or ""),
+                            post_url=str(res.get("post_url") or ""),
+                            topic=(plan.topic or "")[:300], hook=plan.hook or "",
+                            content_format=plan.format or "",
+                            strategy_id=strategy_id))
+                        if not res.get("ok") and chat_id:
+                            await send_message(chat_id, f"⚠️ {platform}: {str(res.get('error'))[:80]}")
                     except Exception as e:
                         if chat_id:
                             await send_message(chat_id, f"⚠️ {platform}: {str(e)[:80]}")
 
-                plan.status = "published"
-                published += 1
+                # План считается опубликованным, только если хоть что-то ушло.
+                # Иначе «опубликовано» скрывало бы посты, застрявшие на подтверждении.
+                if awaiting and awaiting == len(platforms):
+                    plan.status = "awaiting_approval"
+                else:
+                    plan.status = "published"
+                    published += 1
             except Exception as e:
                 if chat_id:
                     await send_message(chat_id, f"⚠️ Ошибка публикации: {str(e)[:100]}")
@@ -173,7 +188,8 @@ async def run_daily_factory():
     from core.content_factory import run_factory
     auto = os.getenv("AUTO_PUBLISH", "0") == "1"
     try:
-        await run_factory(topic=None, dry_run=not auto)
+        # Отчёт возвращаем наверх: по нему задача узнаёт, что упёрлась в согласование.
+        return await run_factory(topic=None, dry_run=not auto)
     except Exception as e:
         chat = os.getenv("TELEGRAM_CHAT_ID", "")
         if chat:
@@ -198,6 +214,154 @@ async def run_weekly_analytics():
     await send_message(chat_id, "📊 <b>Еженедельный отчёт Pakhon Studio</b>\n\n" + report)
 
 
+async def run_metrics_collection():
+    """Собирает метрики опубликованного и учит на них агента.
+
+    Без этого шага система публикует «вслепую»: нет обратной связи о том,
+    что реально сработало.
+    """
+    from core.post_analytics import collect_metrics, learn_from_results
+    res = await collect_metrics()
+    learned = await learn_from_results()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
+        from core.telegram_bot import send_message
+        from core.post_analytics import performance
+        perf = await performance(7)
+        await send_message(chat_id,
+            f"📊 <b>Метрики обновлены</b>\n"
+            f"Обновлено публикаций: {res['updated']}\n"
+            f"За 7 дней: {perf['posts']} постов, {perf['views']} просмотров, "
+            f"средний ER {perf['avg_engagement_rate']}%\n"
+            + (f"Уроков извлечено: {learned.get('learned', 0)}" if learned.get("ok") else ""))
+    return {**res, "learned": learned}
+
+
+async def run_comments_processing():
+    """Разбирает новые комментарии и готовит ответы на согласование.
+
+    Автоотправка выключена намеренно: ответ от лица бренда — слишком дорогая
+    ошибка, чтобы публиковать его без подтверждения человека.
+    """
+    from core.engagement import process_comments
+    return await process_comments("instagram", limit=10, auto_send=False)
+
+
+async def run_competitor_tracking():
+    """Еженедельный срез метрик конкурентов — по нему видно динамику ниши."""
+    from core.research_store import refresh_all
+    res = await refresh_all()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if chat_id and os.getenv("TELEGRAM_BOT_TOKEN") and res.get("updated"):
+        from core.research_store import tracked_competitors
+        from core.telegram_bot import send_message
+        lines = ["🔍 <b>Конкуренты — недельный срез</b>", ""]
+        for c in (await tracked_competitors())[:8]:
+            delta = ""
+            if c.get("followers_delta"):
+                sign = "+" if c["followers_delta"] > 0 else ""
+                delta = f" ({sign}{c['followers_delta']})"
+            lines.append(f"@{c['handle']} [{c['platform']}]: "
+                         f"{c['followers']} подписчиков{delta}, ER {c['avg_engagement']}%")
+        await send_message(chat_id, "\n".join(lines)[:4000])
+    return res
+
+
+# Токен Instagram Login живёт 60 дней; обновляем заметно раньше, чтобы одна
+# пропущенная ночь не стоила подключения.
+TOKEN_MAX_AGE_DAYS = 45
+
+
+async def _token_is_aging(platform: str) -> bool:
+    """Давно ли сохранён ключ площадки. Для токенов без срока это единственный
+    доступный признак того, что пора продлевать."""
+    if platform != "instagram":
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection)
+                             .where(Connection.key_name == "instagram_access_token"))
+        c = r.scalar_one_or_none()
+    if not c or not c.updated_at:
+        return False
+    return (datetime.utcnow() - c.updated_at).days >= TOKEN_MAX_AGE_DAYS
+
+
+async def run_token_maintenance():
+    """Следит за токенами площадок: продлевает Instagram и предупреждает о протухании.
+
+    Раньше токен Instagram умирал через 60 дней МОЛЧА, и об этом узнавали только
+    когда падала публикация.
+    """
+    from connectors import health_all, get_connector
+    from core.telegram_bot import send_message
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    problems = []
+    for st in await health_all():
+        platform = st.get("platform", "")
+        if not st.get("configured"):
+            continue
+        days = st.get("days_left")
+
+        # Токен Instagram Login срока не сообщает: days_left у него всегда None,
+        # и условие «меньше 14 дней» не срабатывало никогда — токен тихо умирал
+        # через 60 дней. Для таких продлеваем по возрасту самого ключа.
+        if days is None and st.get("ok") and await _token_is_aging(platform):
+            res = await get_connector(platform).refresh_token()
+            if res.get("refreshed"):
+                problems.append(f"🔄 {platform}: токен продлён (плановое обновление)")
+            else:
+                problems.append(f"⚠️ {platform}: продлить токен не удалось — "
+                                f"{str(res.get('error', ''))[:80]}")
+            continue
+
+        # Меньше двух недель — пробуем продлить заранее, не дожидаясь падения.
+        if days is not None and days < 14:
+            res = await get_connector(platform).refresh_token()
+            if res.get("refreshed"):
+                problems.append(f"🔄 {platform}: токен продлён "
+                                f"(осталось было {days} дн.)")
+            else:
+                problems.append(f"⚠️ {platform}: токен истекает через {days} дн., "
+                                f"продлить не удалось — {res.get('error', '')[:80]}")
+        elif not st.get("ok"):
+            problems.append(f"❌ {platform}: {str(st.get('error'))[:100]}")
+
+    if problems and chat_id and os.getenv("TELEGRAM_BOT_TOKEN"):
+        await send_message(chat_id, "🔑 <b>Токены площадок</b>\n\n" + "\n".join(problems))
+    return {"checked": True, "problems": problems}
+
+
+async def run_publish_queue():
+    """Раз в 10 минут разбирает очередь публикаций: отложенные и повторы.
+
+    Задачу заводим только если очередь непустая — иначе журнал задач заполнился бы
+    сотнями пустых записей «ничего не делали» и перестал быть читаемым.
+    """
+    from core.publish_queue import due, process_due
+    if not await due(1):
+        return
+    from core.task_manager import create, run
+    task_id = await create("publish", "Очередь публикаций", source="scheduler")
+    await run(task_id, lambda: process_due())
+
+
+def _tracked(kind: str, goal: str, fn):
+    """Оборачивает джоб в задачу: у ночного запуска тоже есть id, статус и текст ошибки."""
+    async def job():
+        from core.task_manager import create, run
+        from core import ai_escrow
+        # Ночной запуск никто не ждёт у экрана: его сбой должен честно упасть в
+        # журнал, а не встать в очередь вопросов к Клоду.
+        ai_escrow.reset()
+        task_id = await create(kind, goal, source="scheduler")
+        await run(task_id, fn)
+    return job
+
+
 def start_scheduler():
     """Расписание по таймзоне Pakhon Studio (Asia/Almaty, UTC+5)."""
     global _scheduler
@@ -208,17 +372,47 @@ def start_scheduler():
     _scheduler = AsyncIOScheduler(timezone=TIMEZONE)
 
     # 09:00 — Research/тренды (исследование рынка)
-    _scheduler.add_job(run_daily_trends,   CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
+    _scheduler.add_job(_tracked("trends", "Ежедневный анализ трендов", run_daily_trends),
+                       CronTrigger(hour=9,  minute=0), id="trends",  replace_existing=True)
     # 09:30 — Фабрика контента (автоцикл Reels)
-    _scheduler.add_job(run_daily_factory,  CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
+    _scheduler.add_job(_tracked("factory", "Ежедневная фабрика контента", run_daily_factory),
+                       CronTrigger(hour=9,  minute=30), id="factory", replace_existing=True)
     # 10:00 — Генерация материалов на день
-    _scheduler.add_job(run_daily_generate, CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
+    _scheduler.add_job(_tracked("generate", "Ежедневная генерация материалов", run_daily_generate),
+                       CronTrigger(hour=10, minute=0), id="generate", replace_existing=True)
     # 19:00 — Публикация (пик активности IG/TG по Алматы)
-    _scheduler.add_job(run_daily_publish,  CronTrigger(hour=19, minute=0), id="publish",  replace_existing=True)
+    _scheduler.add_job(_tracked("publish", "Ежедневная публикация", run_daily_publish),
+                       CronTrigger(hour=19, minute=0), id="publish",  replace_existing=True)
     # 22:00 — Итоговый статус дня владельцу
-    _scheduler.add_job(run_daily_report,   CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
+    _scheduler.add_job(_tracked("report", "Ежедневный отчёт", run_daily_report),
+                       CronTrigger(hour=22, minute=0), id="report",   replace_existing=True)
     # Воскресенье 20:00 — еженедельная аналитика
-    _scheduler.add_job(run_weekly_analytics, CronTrigger(day_of_week="sun", hour=20, minute=0),
+    # Каждые 4 часа — разбор комментариев (ответы уходят на согласование)
+    _scheduler.add_job(_tracked("comments", "Разбор комментариев", run_comments_processing),
+                       CronTrigger(hour="10,14,18,22", minute=15),
+                       id="comments", replace_existing=True)
+    # Понедельник 07:00 — срез метрик конкурентов
+    _scheduler.add_job(_tracked("competitors", "Срез метрик конкурентов", run_competitor_tracking),
+                       CronTrigger(day_of_week="mon", hour=7, minute=0),
+                       id="competitors", replace_existing=True)
+    # 23:00 — сбор реальных метрик опубликованного и обучение на результатах
+    _scheduler.add_job(_tracked("metrics", "Сбор метрик публикаций", run_metrics_collection),
+                       CronTrigger(hour=23, minute=0), id="metrics", replace_existing=True)
+    # 08:00 — проверка и продление токенов площадок (до утренних публикаций)
+    _scheduler.add_job(_tracked("tokens", "Проверка токенов площадок", run_token_maintenance),
+                       CronTrigger(hour=8, minute=0), id="tokens", replace_existing=True)
+    # Каждые 10 минут — очередь публикаций: отложенные посты и повторы после сбоя.
+    # Без этого джоба упавшая публикация оставалась бы висеть в RETRYING навсегда.
+    # Сторож зависших задач. Без него потерянный worker висел до следующего
+    # перезапуска сервиса, а человек ждал результат, которого уже не будет.
+    from core.task_manager import watchdog
+    _scheduler.add_job(watchdog, CronTrigger(minute="*/5"),
+                       id="watchdog", replace_existing=True)
+
+    _scheduler.add_job(run_publish_queue, CronTrigger(minute="*/10"),
+                       id="publish_queue", replace_existing=True, max_instances=1)
+    _scheduler.add_job(_tracked("analytics", "Еженедельная аналитика", run_weekly_analytics),
+                       CronTrigger(day_of_week="sun", hour=20, minute=0),
                        id="weekly", replace_existing=True)
 
     _scheduler.start()

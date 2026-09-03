@@ -54,6 +54,18 @@ def detect_ratio(task: str, default: str = "9:16") -> str:
     return default
 
 
+def _reraise_control_flow(e: BaseException) -> None:
+    """Пропускает наружу отмену и остановку процесса, глушит всё остальное.
+
+    Сломанные нативные зависимости (mcp → cryptography → pyo3) бросают
+    PanicException, которая НЕ наследуется от Exception и проходит сквозь
+    обычные except, унося с собой всю задачу. Ловить её приходится явно.
+    """
+    import asyncio as _a
+    if isinstance(e, (_a.CancelledError, KeyboardInterrupt, SystemExit)):
+        raise e
+
+
 # ── MCP-путь ──────────────────────────────────────────────────────────────────
 
 def mcp_configured() -> bool:
@@ -70,8 +82,16 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     if not url:
         raise RuntimeError("HIGGSFIELD_MCP_URL не задан")
 
-    from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    # Импорт ленивый и защищённый: сломанная сборка mcp/cryptography роняет
+    # интерпретатор через pyo3 PanicException, а она НЕ наследуется от Exception
+    # и проходит сквозь обычные except — задача падала бы целиком.
+    try:
+        from mcp import ClientSession
+        from mcp.client.streamable_http import streamablehttp_client
+    except BaseException as e:
+        raise RuntimeError(
+            f"клиент mcp недоступен ({type(e).__name__}: {str(e)[:100]}); "
+            "проверь установку пакета mcp") from None
 
     headers = {}
     token = os.getenv("HIGGSFIELD_MCP_TOKEN", "")
@@ -130,7 +150,8 @@ async def pick_model(task: str, kind: str, has_reference: bool = False) -> dict:
                 "input": "image" if has_reference else "text",
                 "limit": 5,
             }, timeout=60)
-        except Exception:
+        except BaseException as e:
+            _reraise_control_flow(e)
             return {}
         models = _as_model_list(res, has_reference)
         if models:
@@ -257,8 +278,9 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     if mcp_configured():
         try:
             return await _generate_via_mcp(task, kind, ratio, image_url)
-        except Exception as e:
-            tried.append(f"MCP: {str(e)[:200]}")
+        except BaseException as e:
+            _reraise_control_flow(e)
+            tried.append(f"MCP: {type(e).__name__}: {str(e)[:180]}")
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
@@ -331,7 +353,8 @@ async def status() -> dict:
             if isinstance(bal, dict):
                 out["credits"] = bal.get("credits")
                 out["plan"] = bal.get("subscription_plan_type")
-        except Exception as e:
+        except BaseException as e:
+            _reraise_control_flow(e)
             out["mcp_ok"] = False
-            out["mcp_error"] = str(e)[:200]
+            out["mcp_error"] = f"{type(e).__name__}: {str(e)[:180]}"
     return out

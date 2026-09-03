@@ -1,75 +1,121 @@
-# ARCHITECTURE — NEXUS AI / Pakhon Studio
+# ARCHITECTURE — NEXUS AI
 
-Обновлено: 2026-09-03
-
-## Главная цепочка
+## Схема (как есть на 2026-08-11)
 
 ```
-Telegram (основной интерфейс)
-   ↓  свободный текст или команда
-Cloud Opus — core/marketing_director.py::run_director
-   ↓  решает, каких агентов и какие инструменты включить
-существующие AI-агенты  (backend/agents/*)
-   ↓  когда нужен визуал
-HIXIIT — core/hixiit.py
-   ↓  сам выбирает тип генерации и модель из доступных в аккаунте
-генерация (изображение / видео)
-   ↓
-результат возвращается в Cloud Opus (поле `media` в результате)
-   ↓
-Telegram: sendPhoto / sendVideo + inline-кнопки
+USER
+ ├── Telegram (long-polling)         core/telegram_bot.py
+ └── Web (React/Vite)                frontend/  — 7 разделов:
+      Главная · Командный центр · Подключения · Агенты · Контент ·
+      Настройки · API/Credentials
+              ↓
+   command_center.run_command        core/command_center.py   ← единая точка входа
+              ↓ intent.route()       core/intent.py
+   marketing_director.run_director   core/marketing_director.py  ← оркестратор («Cloud Code»)
+              ↓ tools
+   ┌──────────┬──────────┬───────────┬──────────┬────────┐
+ analyze   delegate   run_browser  make_video  publish  done
+   │          │           │            │          │
+   │     dispatch.delegate│            │          │
+   │          ↓           │            │          │
+   │     ai_router.call ──┘            │          │
+   │     core/ai_router.py             │          │
+   │     6 free + 5 платных провайдеров│          │
+   │                                   │          │
+ social_intel / instagram_reader /  media_generator  orchestrator._publish_one
+ youtube_reader / browser_reader    core/media_*     core/orchestrator.py
+              ↓                                          ↓
+        НОРМАЛИЗОВАННЫЕ ДАННЫЕ                  publishers/*.py (нативные API)
+                                                         ↓ фолбэк
+                                            server_browser / desktop_agent
+              ↓
+   SQLite (эфемерная!) + Connection KV + data/*.json
+   доступы: core/credentials.py → core/secrets.py (шифрование NEXUS_SECRET_KEY)
+            → os.environ на старте, весь код читает их через os.getenv
 ```
 
-**Сайт не обязателен.** Telegram-бот запускается в `main.py` (lifespan → `start_polling`)
-и работает, даже если фронтенд никто не открыл. Фронтенд — дополнительный интерфейс к тем же
-функциям через HTTP API.
+## Производство видео: два пути
+
+`core/production_queue.py::producer` решает, кто делает ролик:
+
+```
+producer=server   content_factory сам зовёт HeyGen / HiggsField / Runway / ffmpeg
+producer=claude   content_factory кладёт ТЗ в очередь production_jobs и ждёт
+                  ↓
+       GET /api/production/next          исполнитель (Claude Code) забирает ТЗ
+       генерация через Higgsfield / HeyGen
+       POST /api/production/{id}/result  возвращает ссылки
+                  ↓
+       content_factory.finalize_from_assets → монтаж (субтитры+музыка)
+                  → moderation.send_for_approval → публикация после подтверждения
+```
+
+## Второй конвейер (архитектурная развилка ⚠️)
+
+Независимо от дирижёра существует `core/orchestrator.py::run_pipeline`:
+
+```
+NicheAnalyst → ViralHunter → Strategist → Copywriter → Reviewer
+             → VoiceAdapter → VisualCreator → PlatformAdapter
+```
+
+Он делает похожую работу другими средствами и не связан с `marketing_director`.
+Две «головы» — источник рассинхронизации; требует решения: объединить или явно разделить роли.
 
 ## Слои
 
-| Слой | Файлы | Роль |
+| Слой | Модули | Назначение |
 |---|---|---|
-| Интерфейс | `core/telegram_bot.py` | Приём задач, отправка результата, кнопки |
-| Оркестратор | `core/marketing_director.py` | Cloud Opus: декомпозиция задачи, вызов инструментов |
-| Пайплайн | `core/orchestrator.py` | Ниша → анализ → план → генерация → публикация |
-| Фабрика | `core/content_factory.py` | Сквозной цикл одного ролика |
-| Агенты | `backend/agents/*` | Специализированные исполнители (см. AGENTS.md) |
-| Генеративный слой | `core/hixiit.py` | HIXIIT: выбор модели и генерация медиа |
-| Роутинг моделей | `core/ai_router.py` | Какой LLM на какого агента, фолбэки, стоимость |
-| Память | `core/memory.py`, `database/*` | Сохранённый контекст проекта |
-| Публикация | `backend/publishers/*` | Telegram / Instagram / VK / YouTube / TikTok |
-| Расписание | `core/scheduler.py` | APScheduler, TZ Asia/Almaty |
+| Вход | `telegram_bot`, `api/routes_control` | приём команд от человека |
+| Маршрутизация | `command_center`, `intent` | свободный текст → команда |
+| Оркестрация | `marketing_director`, `dispatch` | декомпозиция и делегирование |
+| AI | `ai_router` | единый вызов моделей, фолбэк, стоимость |
+| Агенты | `agents/*` | специализированные роли |
+| Пайплайн | `content_factory`, `creative_director`, `self_critique` | анализ → бриф → генерация → ревью |
+| Медиа | `media_generator`, `higgsfield`, `heygen`, `montage`, `video_*` | изображения, видео, монтаж |
+| Чтение соцсетей | `social_intel`, `instagram_reader`, `youtube_reader`, `browser_reader`, `viral_research` | сбор метрик |
+| Публикация | `orchestrator._publish_one`, `publishers/*` | постинг |
+| Браузер | `server_browser`, `browser_agent`, `desktop_agent.py` | работа без API |
+| Хранение | `database/*`, `Connection` KV, `data/*.json` | состояние |
+| Расписание | `scheduler` (APScheduler) | 6 cron-джобов |
 
-## HIXIIT — пути доступа
+## Режимы работы без API
 
-`core/hixiit.py::generate()` пробует по порядку и объясняет каждый отказ:
+| Переменная | Значения | Смысл |
+|---|---|---|
+| `NEXUS_PUBLISH_MODE` | `auto` / `browser` / `api` | как публиковать |
+| `NEXUS_ANALYZE_MODE` | `auto` / `browser` / `api` | как анализировать |
+| `NEXUS_SERVER_BROWSER` | `1` / `0` | включён ли серверный браузер |
+| `NEXUS_BROWSER_CDP` | `wss://…` | удалённый облачный браузер (разгрузка Render) |
 
-1. **MCP** — `HIGGSFIELD_MCP_URL` + `HIGGSFIELD_MCP_TOKEN`. Основной рабочий путь.
-   Модель подбирается вызовом `models_explore(action="recommend", …)` по реальному
-   каталогу аккаунта, а не по захардкоженному списку. Модели, требующие входа,
-   которого у нас нет (например YouTube-ссылку), отфильтровываются.
+`auto` = сначала официальные API/сервисы, при неудаче — браузер.
+
+## Известные архитектурные долги
+1. Эфемерное хранилище (см. `PROJECT_STATUS.md`).
+2. Две конкурирующие «головы» оркестрации.
+3. Нет базового класса `SocialConnector` — коннекторы это свободные функции.
+4. Нет системы задач: фоновые работы через `BackgroundTasks`/`asyncio.create_task` без ID.
+5. Нет миграций (alembic) ⇒ схема расширяется через KV `Connection`.
+
+## HIXIIT — генеративный слой (`core/hixiit.py`)
+
+Единая точка входа для картинок и видео. Вызывается дирижёром
+(`make_image` / `make_video`) и `orchestrator.generate_content_for_plan`.
+
+Пути доступа сверху вниз, первый доступный побеждает; каждый отказ объясняется:
+
+1. **MCP** — `HIGGSFIELD_MCP_URL` + `HIGGSFIELD_MCP_TOKEN`. Рабочее подключение
+   аккаунта. Модель подбирается по реальному каталогу (`models_explore`), а не
+   по захардкоженному списку; непригодные для задачи модели отбрасываются.
 2. **REST** — `HIGGSFIELD_API_KEY` (`core/higgsfield.py`), только видео.
 3. **Браузер-агент** — `desktop_agent.py` на включённом ПК, только видео.
-4. **Pollinations** — бесплатная картинка, чтобы визуал был хоть какой-то.
+4. **Pollinations** — бесплатная картинка как последний рубеж.
 
-Диагностика: команда `/hixiit` в Telegram.
+Диагностика — команда `/hixiit` в Telegram.
 
-## Память
+## Свободный текст из Telegram
 
-`database/db.py::_database_url()`:
-- `DATABASE_URL` → Postgres (схемы `postgres://` и `postgresql://` приводятся к `asyncpg`).
-  **Это единственный способ не терять память между рестартами на Render.**
-- иначе SQLite по пути `NEXUS_DB_PATH` (по умолчанию `./nexus.db`).
-
-⚠️ Файловая система Render эфемерна, а в `render.yaml` диск не подключён. Без `DATABASE_URL`
-вся память — ниши, контент-план, очередь, сохранённые ключи из таблицы `connections` —
-стирается при каждом деплое. См. TODO.md, пункт 1.
-
-`core/memory.py::build_context()` собирает сохранённое (профиль, ниши, план, очередь,
-последний контент, ошибки, голос бренда) и подаёт в Cloud Opus, чтобы он не анализировал
-всё заново.
-
-## Точки входа
-
-- `backend/main.py` — FastAPI: API + WebSocket + статика фронта + запуск бота и планировщика.
-- `desktop_agent.py` — агент на ПК пользователя (браузерные действия), по WebSocket `/ws/desktop`.
-- `start.sh` (`back` / `front` / `all`), деплой — `render.yaml`.
+`telegram_bot._plain_text` → `intent.route` → готовая команда, либо `/director`
+для многошаговых задач → `command_center.run_command` → `marketing_director`.
+Сайт в этой цепочке не участвует. Созданные медиа возвращаются в чат файлом
+(`telegram_bot._send_director_media`, поле `media_url` в шагах дирижёра).

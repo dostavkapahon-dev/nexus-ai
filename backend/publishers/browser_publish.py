@@ -39,8 +39,13 @@ async def publish_via_browser(platform: str, text: str, image_url: str = None,
     Возвращает {'ok': bool, 'status'|'error', ...}. Требует запущенного
     desktop_agent.py на ПК пользователя с активной сессией площадки.
     """
+    # Публикуем без API: сначала пробуем ПК-агент (если подключён), иначе —
+    # серверный браузер (Playwright на сервере). Ничего внешнего включать не нужно.
     if not desktop_connected():
-        return {"ok": False, "error": "Desktop agent не подключён. Запусти desktop_agent.py на ПК."}
+        from core import server_browser
+        if not server_browser.enabled():
+            return {"ok": False, "error": "Нет ни ПК-агента, ни серверного браузера "
+                                          "(NEXUS_SERVER_BROWSER=0)."}
 
     flow = _PLATFORM_FLOWS.get(platform)
     if not flow:

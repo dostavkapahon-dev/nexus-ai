@@ -1,5 +1,5 @@
-﻿import React, { useState, useEffect } from 'react'
-import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { Plug, Save, CheckCircle, XCircle, Loader, Eye, EyeOff, ExternalLink, ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
 import { connections as connectionsApi } from '../lib/api'
 
 const PROVIDERS = [
@@ -178,19 +178,71 @@ const PROVIDERS = [
     models: [],
   },
   {
-    id: 'instagram', name: 'Instagram Business', icon: '📸', color: 'from-pink-500 to-purple-500',
-    description: 'Публикация фото-постов в Instagram Business аккаунт',
+    id: 'analysis', name: 'Анализ аккаунтов (бесплатно)', icon: '📊', color: 'from-fuchsia-500 to-pink-600',
+    description: 'Ники ваших (или конкурентных) аккаунтов — бот бесплатно тянет метрики и топ роликов через yt-dlp. Instagram — опционально через Bright Data.',
     fields: [
-      { key: 'instagram_access_token', label: 'Page Access Token', placeholder: 'EAAo3ELgu...', secret: true },
-      { key: 'instagram_account_id', label: 'Instagram Account ID', placeholder: '17841400...', secret: false },
+      { key: 'ig_handle', label: 'Instagram ник', placeholder: 'pakhon.studio', secret: false },
+      { key: 'tiktok_handle', label: 'TikTok ник', placeholder: 'pakhon.studio', secret: false },
+      { key: 'youtube_handle', label: 'YouTube @handle', placeholder: 'pakhonstudio', secret: false },
+      { key: 'brightdata_api_key', label: 'Bright Data API Key (опц., для Instagram)', placeholder: 'bd_...', secret: true },
     ],
     steps: [
-      { text: 'Создайте Facebook Page и подключите Instagram Professional к ней' },
-      { text: 'Откройте', link: 'https://developers.facebook.com/tools/explorer', linkText: 'Graph API Explorer' },
-      { text: 'Выберите приложение → User or Page → выберите вашу Facebook Page' },
-      { text: 'Выдайте права: pages_manage_posts, instagram_basic, instagram_content_publish' },
-      { text: 'Нажмите Generate Access Token и скопируйте токен' },
-      { text: 'Account ID: выполните GET /me?fields=instagram_business_account → скопируйте id' },
+      { text: 'Укажите ники аккаунтов, которые нужно анализировать (свои или конкурентов) — без @' },
+      { text: 'YouTube и TikTok анализируются бесплатно сразу, без ключей' },
+      { text: 'Для Instagram (требует обхода логина) заведите ключ на', link: 'https://brightdata.com', linkText: 'Bright Data' },
+      { text: 'Bright Data → Web Unlocker → скопируйте API Key и вставьте сюда' },
+    ],
+    models: [],
+  },
+  {
+    id: 'browser_session', name: 'Браузерная сессия (без ключей API)', icon: '🍪',
+    color: 'from-amber-500 to-orange-500',
+    description: 'Публикация через обычный веб-интерфейс площадки, когда приложение Meta ' +
+                 'создать не получается. Работает на сервере — компьютер держать включённым не нужно.',
+    fields: [
+      { key: 'nexus_browser_storage_state', label: 'Cookies площадки (вставьте как есть)', placeholder: '[{"domain":".instagram.com","name":"sessionid",...}]', secret: true },
+      { key: 'nexus_publish_mode', label: 'Режим публикации: auto / browser / api', placeholder: 'browser', secret: false },
+    ],
+    steps: [
+      { text: 'Войдите в Instagram в обычном браузере на своём компьютере' },
+      { text: 'Поставьте расширение', link: 'https://cookie-editor.com', linkText: 'Cookie-Editor' },
+      { text: 'На вкладке с Instagram: расширение → Export → Export as JSON (скопируется в буфер)' },
+      { text: 'Вставьте скопированное в поле выше и сохраните — формат приводится автоматически' },
+      { text: 'Режим публикации поставьте browser, если ключей Meta нет совсем' },
+      { text: 'Проверка: страница «Площадки» → «Проверить сессию». Cookies живут неделями, ' +
+              'при истечении система скажет об этом прямо, а не «не смог опубликовать»' },
+    ],
+    models: [],
+  },
+  {
+    id: 'instagram', name: 'Instagram', icon: '📸', color: 'from-pink-500 to-purple-500',
+    description: 'Прямое подключение через Instagram Login. Страница Facebook не нужна — достаточно токена IGAA…',
+    fields: [
+      { key: 'instagram_access_token', label: 'Instagram User Access Token (IGAA…)', placeholder: 'IGAAxxxxxxxx...', secret: true },
+      { key: 'instagram_account_id', label: 'Account ID (заполнится сам)', placeholder: '17841400...', secret: false },
+      { key: 'instagram_app_secret', label: 'Instagram app secret (только для вебхуков)', placeholder: 'a1b2c3...', secret: true },
+      { key: 'instagram_verify_token', label: 'Токен подтверждения вебхука (придумайте сами)', placeholder: 'nexus-webhook-2026', secret: true },
+      { key: 'nexus_public_url', label: 'Публичный адрес сервиса', placeholder: 'https://nexus-ai.onrender.com', secret: false },
+    ],
+    steps: [
+      { text: 'Приложение Meta → Instagram → «API setup with Instagram login» → шаг 2 «Generate token» → кнопкой Copy скопируйте токен IGAA…' },
+      { text: 'Вставьте токен в поле выше и сохраните — Account ID, тип токена и продление настроятся сами' },
+      { text: 'Проверьте кнопкой «Проверить» — должно ответить «Аккаунт: ваш_логин ✓»' },
+      { text: 'Комментарии в реальном времени (необязательно): там же Instagram app secret → поле выше' },
+      { text: 'Webhooks → Callback URL: <ваш адрес>/api/social/webhook/instagram, Verify token — тот, что вписали выше' },
+    ],
+    models: [],
+  },
+  {
+    id: 'facebook_optional', name: 'Facebook (необязательно)', icon: '🔗', color: 'from-blue-600 to-indigo-700',
+    description: 'Нужен только для анализа чужих аккаунтов через Business Discovery. Для публикации и комментариев не требуется',
+    fields: [
+      { key: 'facebook_app_id', label: 'App ID приложения Meta', placeholder: '1234567890', secret: false },
+      { key: 'facebook_app_secret', label: 'App Secret', placeholder: 'a1b2c3...', secret: true },
+    ],
+    steps: [
+      { text: 'Заполнять не нужно, если работаете по токену IGAA… — конкуренты разбираются бесплатным путём через браузер' },
+      { text: 'Business Discovery работает только через Страницу Facebook — это ограничение Meta, не наше' },
     ],
     models: [],
   },
@@ -205,6 +257,79 @@ const PROVIDERS = [
       { text: 'Используется агентами NicheAnalyst и ViralHunter в Premium режиме' },
     ],
     models: ['sonar', 'sonar-pro', 'sonar-reasoning-pro'],
+  },
+  {
+    id: 'nvidia', name: 'NVIDIA NIM', icon: '🟩', color: 'from-green-500 to-emerald-600',
+    description: 'Бесплатные открытые модели (Llama, Nemotron, Qwen, DeepSeek-R1) на GPU NVIDIA',
+    fields: [{ key: 'nvidia_api_key', label: 'API Key', placeholder: 'nvapi-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://build.nvidia.com/settings/api-keys', linkText: 'build.nvidia.com/settings/api-keys' },
+      { text: 'Войдите (нужен только email, карта не требуется) → Generate API Key' },
+      { text: 'Скопируйте ключ — он начинается с nvapi- и действует 6 месяцев' },
+      { text: 'Бесплатно: 1000 кредитов при регистрации, лимит 40 запросов/мин' },
+      { text: 'Дирижёр берёт NVIDIA первым исполнителем, пока квота не кончится' },
+    ],
+    models: ['nvidia-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'groq', name: 'Groq', icon: '⚡', color: 'from-orange-500 to-red-500',
+    description: 'Самая быстрая бесплатная выдача — Llama 3.3 70B на чипах LPU',
+    fields: [{ key: 'groq_api_key', label: 'API Key', placeholder: 'gsk_...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://console.groq.com/keys', linkText: 'console.groq.com/keys' },
+      { text: 'Войдите через Google/GitHub → Create API Key (карта не нужна)' },
+      { text: 'Бесплатно: 30 запросов/мин, 1000 в сутки' },
+      { text: 'Лучший выбор, когда важна скорость ответа' },
+    ],
+    models: ['groq-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'cerebras', name: 'Cerebras', icon: '🧩', color: 'from-amber-500 to-orange-600',
+    description: 'Около 1 млн токенов в сутки бесплатно — для пакетной генерации',
+    fields: [{ key: 'cerebras_api_key', label: 'API Key', placeholder: 'csk-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://cloud.cerebras.ai', linkText: 'cloud.cerebras.ai' },
+      { text: 'Зарегистрируйтесь → API Keys → Create Key' },
+      { text: 'Бесплатно: ~1 млн токенов в сутки' },
+      { text: 'Берите, когда нужно много текста за раз (месячный контент-план)' },
+    ],
+    models: ['cerebras-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'openrouter', name: 'OpenRouter', icon: '🔀', color: 'from-sky-500 to-indigo-600',
+    description: 'Около 30 бесплатных моделей разных вендоров через один API',
+    fields: [{ key: 'openrouter_api_key', label: 'API Key', placeholder: 'sk-or-v1-...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://openrouter.ai/keys', linkText: 'openrouter.ai/keys' },
+      { text: 'Войдите → Create Key' },
+      { text: 'Бесплатно: 20 запросов/мин, 50 в сутки на моделях с меткой :free' },
+      { text: 'Система берёт ТОЛЬКО модели с суффиксом :free — платные не трогает' },
+    ],
+    models: ['openrouter-free (только модели :free)'],
+  },
+  {
+    id: 'mistral', name: 'Mistral', icon: '🌬️', color: 'from-yellow-500 to-orange-500',
+    description: 'Бесплатный тариф на все модели Mistral, включая крупные',
+    fields: [{ key: 'mistral_api_key', label: 'API Key', placeholder: '...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://console.mistral.ai/api-keys', linkText: 'console.mistral.ai/api-keys' },
+      { text: 'Зарегистрируйтесь → Create new key' },
+      { text: 'Бесплатно: все модели, но всего ~2 запроса/мин' },
+      { text: 'Медленный лимит — держите как резерв, не как основной' },
+    ],
+    models: ['mistral-free (модель подбирается автоматически)'],
+  },
+  {
+    id: 'github', name: 'GitHub Models', icon: '🐙', color: 'from-slate-600 to-gray-800',
+    description: '100+ моделей (GPT-4o, Llama, Phi) по обычному токену GitHub',
+    fields: [{ key: 'github_models_token', label: 'Personal Access Token', placeholder: 'ghp_...', secret: true }],
+    steps: [
+      { text: 'Откройте', link: 'https://github.com/settings/tokens', linkText: 'github.com/settings/tokens' },
+      { text: 'Generate new token (classic) → отметьте права models:read' },
+      { text: 'Скопируйте токен (начинается с ghp_)' },
+      { text: 'Бесплатно в рамках суточных лимитов GitHub' },
+    ],
+    models: ['github-free (модель подбирается автоматически)'],
   },
   {
     id: 'deepseek', name: 'DeepSeek AI', icon: '🧠', color: 'from-indigo-500 to-blue-600',
@@ -251,8 +376,10 @@ const PROVIDERS = [
   },
 ]
 
-function FieldInput({ field, value, onChange, testResult }) {
+function FieldInput({ field, value, onChange, onDelete, testResult }) {
   const [show, setShow] = React.useState(false)
+  // Пустое поле означает «не трогали» — стереть ключ можно только явной кнопкой.
+  const saved = Boolean(value)
   return (
     <div className="space-y-1">
       <label className="text-xs text-nexus-muted">{field.label}</label>
@@ -271,6 +398,12 @@ function FieldInput({ field, value, onChange, testResult }) {
           </button>
         )}
       </div>
+      {saved && (
+        <button type="button" onClick={() => onDelete(field)}
+          className="flex items-center gap-1 text-xs text-nexus-muted hover:text-red-400 transition">
+          <Trash2 className="w-3 h-3" /> Удалить ключ
+        </button>
+      )}
       {testResult && (
         <div className={'flex items-center gap-1 text-xs ' + (testResult.ok ? 'text-green-400' : 'text-red-400')}>
           {testResult.ok ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
@@ -281,7 +414,7 @@ function FieldInput({ field, value, onChange, testResult }) {
   )
 }
 
-function ProviderCard({ provider, values, onChange, testResults }) {
+function ProviderCard({ provider, values, onChange, onDelete, testResults }) {
   const [open, setOpen] = React.useState(false)
   const hasKeys = provider.fields.some(f => values[f.key])
   const tested = provider.fields.filter(f => testResults[f.key])
@@ -315,7 +448,8 @@ function ProviderCard({ provider, values, onChange, testResults }) {
           <div className="p-4 space-y-4">
             <h4 className="text-xs font-semibold text-purple-300 uppercase tracking-wider">API Ключи</h4>
             {provider.fields.map(field => (
-              <FieldInput key={field.key} field={field} value={values[field.key]} onChange={onChange} testResult={testResults[field.key]} />
+              <FieldInput key={field.key} field={field} value={values[field.key]} onChange={onChange}
+                onDelete={onDelete} testResult={testResults[field.key]} />
             ))}
           </div>
           <div className="p-4">
@@ -356,11 +490,28 @@ export default function Connections() {
     await connectionsApi.save(values)
     setSaved(true); setTimeout(() => setSaved(false), 2000); setSaving(false)
   }
+  // Проверка сперва сохраняет. Раньше зелёная галочка означала только «Meta
+  // приняла ключ» — вписанное значение при этом нигде не оставалось, и после
+  // перезагрузки страницы пропадало. Выглядело как «подключено», работало как
+  // «не подключено».
   const testAll = async () => {
     setTesting(true)
-    try { const r = await connectionsApi.test(values); setTestResults(r.data || {}) }
-    catch { setTestResults({}) }
+    try {
+      await connectionsApi.save(values)
+      setSaved(true); setTimeout(() => setSaved(false), 2000)
+      const r = await connectionsApi.test(values)
+      setTestResults(r.data || {})
+    } catch { setTestResults({}) }
     setTesting(false)
+  }
+  const removeKey = async (field) => {
+    if (!window.confirm(`Удалить ${field.label}? Ключ будет стёрт с сервера.`)) return
+    const { data } = await connectionsApi.remove(field.key)
+    if (data?.ok) {
+      setValues(p => { const next = { ...p }; delete next[field.key]; return next })
+      setTestResults(p => { const next = { ...p }; delete next[field.key]; return next })
+      if (data.note) window.alert(data.note)
+    }
   }
   const connectedCount = PROVIDERS.filter(p => p.fields.some(f => values[f.key])).length
   return (
@@ -393,13 +544,13 @@ export default function Connections() {
               ⭐ Необходимое для Reels-автоматизации
             </div>
             <div className="space-y-3">
-              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+              {ess.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} onDelete={removeKey} testResults={testResults} />)}
             </div>
             <div className="text-xs font-semibold text-[#5a5a7a] uppercase tracking-wider mt-6 mb-2">
               Опционально — можно подключить позже (есть бесплатные)
             </div>
             <div className="space-y-3 opacity-80">
-              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} testResults={testResults} />)}
+              {opt.map(p => <ProviderCard key={p.id} provider={p} values={values} onChange={onChange} onDelete={removeKey} testResults={testResults} />)}
             </div>
           </>
         )

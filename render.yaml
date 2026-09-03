@@ -4,17 +4,58 @@ services:
     runtime: python
     rootDir: backend
     # Фронт уже собран и закоммичен (frontend/dist) — npm не нужен.
-    # Сборка только Python: лёгкая и не падает.
-    buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    #
+    # Chromium нужен браузерному пути публикации (без API-ключей). Но его установка
+    # НЕ ДОЛЖНА ронять сборку: Chromium ~150 МБ, и на бесплатном тарифе он может
+    # не скачаться. Раньше такая неудача обрушивала весь деплой — исправления
+    # переставали доезжать, а снаружи это выглядело как «ошибка не чинится».
+    # Поэтому `|| echo`: не поставился браузер — сборка идёт дальше, а браузерный
+    # путь честно скажет об этом при первом обращении.
+    buildCommand: |
+      pip install -r requirements.txt
+      python -m playwright install chromium || echo "ВНИМАНИЕ: Chromium не установлен — браузерный путь публикации работать не будет, остальное работает"
+    #
+    # Миграции тоже не должны быть единой точкой отказа: при `&&` любая неудача
+    # означала, что сервис не поднимется вовсе и причину видно только в логах
+    # сборки. Теперь результат миграции запоминается и виден в /api/health,
+    # а приложение стартует и может о себе рассказать.
+    startCommand: |
+      (alembic upgrade head && echo ok > /tmp/nexus_migration || echo "FAILED" > /tmp/nexus_migration)
+      uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # ПОСТОЯННАЯ БД (Supabase Postgres) — без неё данные теряются при рестарте.
+      # Строка вида postgresql://user:pass@host:5432/postgres — код сам переведёт на asyncpg.
+      - key: DATABASE_URL
+        sync: false
       - key: ADMIN_PASSWORD
+        sync: false
+      # Ключ шифрования сохранённых доступов. Пока он не задан, ключи площадок
+      # лежат в базе открытым текстом. Задайте любую длинную строку — и НЕ теряйте
+      # её: без неё зашифрованные значения прочитать нельзя, их придётся ввести заново.
+      - key: NEXUS_SECRET_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      # Бесплатные провайдеры — любой из них включает исполнителя без оплаты.
+      - key: NVIDIA_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: CEREBRAS_API_KEY
+        sync: false
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: GITHUB_MODELS_TOKEN
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: PERPLEXITY_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -26,7 +67,49 @@ services:
         sync: false
       - key: HIGGSFIELD_MCP_TOKEN
         sync: false
-      - key: DATABASE_URL
-        sync: false
       - key: HEYGEN_API_KEY
+        sync: false
+      # Публикация (официальные API площадок; браузер-агент — fallback)
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_ACCOUNT_ID
+        sync: false
+      - key: TIKTOK_ACCESS_TOKEN
+        sync: false
+      # OAuth Meta: подключение Instagram и продление токена
+      - key: FACEBOOK_APP_ID
+        sync: false
+      - key: FACEBOOK_APP_SECRET
+        sync: false
+      - key: THREADS_ACCESS_TOKEN
+        sync: false
+      - key: THREADS_USER_ID
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+      - key: YOUTUBE_OAUTH_JSON
+        sync: false
+      # Анализ аккаунтов (бесплатно: yt-dlp; Instagram — опц. Bright Data)
+      - key: IG_HANDLE
+        sync: false
+      - key: TIKTOK_HANDLE
+        sync: false
+      - key: YOUTUBE_HANDLE
+        sync: false
+      - key: BRIGHTDATA_API_KEY
+        sync: false
+      # Публикация без API — через УДАЛЁННЫЙ браузер (онлайн, без ПК, не грузит Render)
+      - key: NEXUS_PUBLISH_MODE
+        value: auto
+      - key: NEXUS_SERVER_BROWSER
+        value: "1"
+      # Анализ без API: auto (сервисы→браузер) | browser | api
+      - key: NEXUS_ANALYZE_MODE
+        value: auto
+      # Эндпоинт облачного браузера (Bright Data Scraping Browser: wss://...@...:9222)
+      - key: NEXUS_BROWSER_CDP
+        sync: false
+      # Cookies для входа в аккаунты. Обычно задаются НЕ здесь, а в дашборде:
+      # Ключи API → Браузерная сессия (принимается экспорт расширения как есть).
+      - key: NEXUS_BROWSER_STORAGE_STATE
         sync: false

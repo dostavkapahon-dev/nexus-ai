@@ -1,51 +1,82 @@
-# AGENTS — кто есть в системе и как они связаны
+# AGENTS — реестр агентов NEXUS AI
 
-Обновлено: 2026-09-03
+## Реестр ролей (`agents/registry.py`)
 
-Все агенты наследуют `agents/base_agent.py::BaseAgent`, вызывают LLM через
-`core/ai_router.py` и логируют каждый вызов в таблицу `agent_logs`
-(модель, токены, стоимость, длительность, ошибка).
-Промпты и модели — `core/prompt_store.py::DEFAULT_PROMPTS`, переопределяются
-в таблице `custom_prompts` через `/api/prompts` или страницу PromptStudio.
+Роли из ТЗ объявлены явно; классы-агенты и core-модули не переписывались —
+роль ссылается на то, что уже работает.
 
-## Оркестраторы
+| Роль | Чем занимается | Нужен доступ | Опирается на |
+|---|---|---|---|
+| `director` | главный управляющий агент | — | `core/marketing_director.py` |
+| `research` | исследование интернета | — | `core/websearch.py`, `core/viral_research.py`, `agents/trend_analyst.py` |
+| `instagram` | работа с Instagram | `INSTAGRAM_ACCESS_TOKEN` | `connectors/instagram.py`, `core/instagram_reader.py` |
+| `tiktok` | работа с TikTok | `TIKTOK_ACCESS_TOKEN` | `connectors/tiktok.py` |
+| `telegram` | работа с Telegram | `TELEGRAM_BOT_TOKEN` | `core/telegram_channels.py`, `connectors/telegram.py` |
+| `content_strategist` | контентная стратегия | — | `agents/strategist.py`, `agents/niche_analyst.py` |
+| `script` | сценарии роликов | — | `core/creative_director.py` |
+| `video` | видео и Reels | — | `core/media_generator.py`, `core/montage.py` |
+| `copywriter` | тексты | — | `agents/copywriter.py`, `voice_adapter.py`, `adapter.py` |
+| `analytics` | аналитика | — | `core/post_analytics.py`, `agents/reporter.py` |
+| `publisher` | публикация | — | `core/publish_queue.py`, `core/autopublish.py`, `publishers/` |
 
-| Кто | Файл | Что делает |
+Роль без нужного доступа считается нерабочей: она не попадает в системный промпт
+дирижёра и отказывается запускаться с понятной причиной, а не падает по ходу дела.
+
+`delegate` дирижёра принимает и ключ роли, и имя модели-исполнителя: сначала
+проверяется реестр, затем `core/dispatch.py`.
+
+Все задачи проходят через дирижёра. Агенты не публикуют сами — это проверяется
+тестом `tests/test_agent_registry.py::test_agents_are_not_publishing_on_their_own`.
+
+API: `GET /api/agents`, `POST /api/agents/{key}/run` (запуск оформляется задачей
+и виден в общем журнале). Страница — «🤖 Агенты».
+
+## Базовый класс
+`agents/base_agent.py:8` — `BaseAgent(ABC)`, атрибут `name`.
+- `call_ai(db, niche_id, variables) -> str` — берёт промпт и модель из `core/prompt_store.py`
+  (БД `custom_prompts` → фолбэк `DEFAULT_PROMPTS`), подставляет переменные, зовёт
+  `ai_router.call`, логирует в `AgentLog`.
+- `log(db, niche_id, status, model, tokens, cost, duration, error)` — запись расхода.
+- Профиль Главного агента (`core/agent_profile.py`) подмешивается в системную часть
+  промпта здесь же — одной точкой на всех агентов.
+
+⚠️ Выбор модели у агентов идёт **только** через `prompt_store`. Словари `ECONOMY_MODELS` /
+`PREMIUM_MODELS` из `ai_router` на агентов не влияют, поэтому режим `ai_mode` не работает.
+
+## Агенты
+
+| Агент | Файл | Метод | Модель по умолчанию | Возвращает | Статус |
+|---|---|---|---|---|---|
+| NicheAnalyst | `agents/niche_analyst.py:4` | `analyze(db, niche_id, niche, city, goal, tone)` | claude-sonnet-4-20250514 | audience, pain_points, content_pillars, competitors, best_times | 🟢 |
+| ViralHunter | `agents/viral_hunter.py:4` | `hunt(db, niche_id, niche, platforms, audience, account_intel)` | claude-sonnet-4-20250514 | viral_topics, hooks, formats, hashtags | 🟢 |
+| Strategist | `agents/strategist.py:4` | `create_plan(...)` | claude-sonnet-4-20250514 | 30 × {day, platform, topic, hook, format} | 🟢 |
+| Copywriter | `agents/copywriter.py:3` | `write(...)` | gpt-4o | текст поста | 🟢 |
+| Reviewer | `agents/reviewer.py:4` | `review(...)` | claude-sonnet-4-20250514 | text_reviewed, score, improvements | 🟢 |
+| VoiceAdapter | `agents/voice_adapter.py:3` | `adapt(...)` | claude-sonnet-4-20250514 | текст под голос бренда | 🟢 |
+| VisualCreator | `agents/visual_creator.py:3` | `create(...)` | gpt-4o | image_prompt, image_url | 🟢 |
+| PlatformAdapter | `agents/adapter.py:4` | `adapt(...)` | gpt-4o-mini | версии под 6 площадок | 🟢 |
+| TrendAnalyst | `agents/trend_analyst.py:11` | `analyze_trends(...)` | **gemini-1.5-flash** | top_topics, best_hooks, … | 🔴 модели нет в роутере |
+| FunnelAgent | `agents/funnel_agent.py:22` | `generate_reply(...)`, `get_funnel_stats(...)` | **gemini-1.5-flash** | reply, intent, should_reply | 🔴 модель + не вызывается нигде |
+| Reporter | `agents/reporter.py:11` | `build_status_report`, `build_trend_report` | — (без AI) | HTML-отчёт | 🟢 |
+
+## Core-«мозги» (не наследуют BaseAgent, не логируются в AgentLog)
+
+| Модуль | Функции | Модель |
 |---|---|---|
-| **Cloud Opus** | `core/marketing_director.py` | Главный. Принимает задачу словами, сам выбирает инструменты: `run_browser`, `make_video`, `make_image`, `publish`, `done`. Работает на Claude tool-use; при отсутствии ключа Anthropic — на Gemini по JSON-протоколу. |
-| NexusCore | `core/orchestrator.py` | Детерминированный пайплайн ниши: анализ → план → генерация → публикация. |
-| Content Factory | `core/content_factory.py` | Сквозной цикл одного ролика: анализ → бриф → стратегия → обложка → раскадровка → видео → проверка → публикация. |
-| Creative Director | `core/creative_director.py` | Выбор стратегии, бриф, финальная проверка «вау», подсказки по стоимости. |
-| Browser Agent | `core/browser_agent.py` | Vision-цикл: скриншот → решение → действие на ПК пользователя. |
+| `core/marketing_director.py` | `run_director(goal, context, max_steps)` — tool-loop оркестратора | claude-sonnet-4-6 → Gemini-фолбэк |
+| `core/creative_director.py` | `build_brief`, `choose_strategy`, `wow_review` | claude-sonnet-4-6 (хардкод) |
+| `core/self_critique.py` | `pre_check(agent, task, context)` — уточнение задачи до дорогой генерации | `ECONOMY_MODELS['reviewer']` |
+| `core/skills_store.py` | `context_for`, `learn_from` — память уроков | `ECONOMY_MODELS['reviewer']` |
+| `core/strategy_advisor.py` | `build_options`, `choose_option` | `ECONOMY_MODELS['strategist']` |
+| `core/autopilot.py` | `deep_analysis`, `build_questions`, `build_strategies`, `build_week_plan`, `predict_virality` | `ECONOMY_MODELS[*]` |
+| `core/intent.py` | `route`, `chat_reply` | `ECONOMY_MODELS['adapter']` |
 
-## Специализированные агенты
+## Инструменты оркестратора (`marketing_director.TOOLS`)
+`analyze` (досье аккаунта / разбор ролика) · `delegate` (подзадача другой модели) ·
+`run_browser` (действия на сайте) · `make_video` · `publish` · `done`.
 
-| Агент | Файл | Вход → выход |
-|---|---|---|
-| `niche_analyst` | `agents/niche_analyst.py` | ниша, город, цель → профиль ниши и аудитории |
-| `viral_hunter` | `agents/viral_hunter.py` | ниша, площадки, аудитория → вирусные паттерны |
-| `strategist` | `agents/strategist.py` | ниша + вирусные данные → контент-план (строки `content_plans`) |
-| `copywriter` | `agents/copywriter.py` | тема, хук, ToV → текст поста |
-| `reviewer` | `agents/reviewer.py` | текст → отредактированный текст + оценка |
-| `voice_adapter` | `agents/voice_adapter.py` | текст → текст голосом автора |
-| `visual_creator` | `agents/visual_creator.py` | тема, текст → промпт визуала + изображение |
-| `adapter` | `agents/adapter.py` | текст → версии под каждую площадку |
-| `trend_analyst` | `agents/trend_analyst.py` | ниша → свежие тренды (ежедневно в 09:00) |
-| `funnel_agent` | `agents/funnel_agent.py` | ниша, цель → воронка |
-| `reporter` | `agents/reporter.py` | БД → отчёт о состоянии (`/status`, `/report`) |
-
-## Связи
-
-```
-run_full_pipeline:   niche_analyst → viral_hunter → [кэш Google Drive] → strategist → content_plans
-generate_for_plan:   copywriter → reviewer → voice_adapter → visual_creator (+HIXIIT) → adapter
-                     → generated_content → превью в Telegram с кнопками
-publish_plan:        platform_versions → официальный API площадки → фолбэк браузер-агент
-```
-
-## Генеративный слой
-
-**HIXIIT** (`core/hixiit.py`) — не агент, а слой под агентами. Его вызывают
-`visual_creator` (через оркестратор) и Cloud Opus (инструменты `make_image` / `make_video`).
-Он сам определяет тип генерации, подбирает модель из каталога аккаунта и возвращает
-либо ссылку на медиа, либо внятную причину отказа.
+## Взаимодействие агентов
+Структурированная передача данных существует внутри `orchestrator.run_pipeline`
+(результат одного агента идёт во входные переменные следующего) и внутри
+`content_factory.run_factory` (plan → brief → assets → review).
+⚠️ Единого протокола agent-to-agent (типизированные контракты, confidence, sources) нет.
