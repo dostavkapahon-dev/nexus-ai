@@ -67,6 +67,40 @@ def ask_claude(prompt: str) -> str:
     return out.stdout.strip()
 
 
+def preflight() -> str:
+    """Проверяет, что Claude Code на месте и залогинен. Возвращает описание ошибки.
+
+    Без этой проверки воркер стартовал «успешно», брал задание и заваливал его —
+    и по логам выглядело, будто сломана система, а не отсутствует вход.
+    """
+    try:
+        out = subprocess.run([CLAUDE, "--version"], capture_output=True, text=True,
+                             timeout=60)
+    except FileNotFoundError:
+        return (f"Claude Code не найден ({CLAUDE}). Установите его на этом хосте "
+                "или укажите путь в CLAUDE_BIN.")
+    except Exception as e:
+        return f"Не удалось запустить {CLAUDE}: {e}"
+    if out.returncode != 0:
+        return (out.stderr or "claude --version завершился с ошибкой")[:200]
+
+    # Пробный вызов заодно проверяет вход. Долгоживущий токен подписки живёт
+    # в окружении (создаётся командой `claude setup-token` на машине с браузером),
+    # поэтому отдельной переменной здесь заводить не нужно.
+    try:
+        probe = subprocess.run([CLAUDE, "-p", "ответь одним словом: готов"],
+                               capture_output=True, text=True, timeout=180)
+    except Exception as e:
+        return f"Пробный запрос не прошёл: {str(e)[:200]}"
+    if probe.returncode != 0 or not probe.stdout.strip():
+        detail = (probe.stdout or probe.stderr or "").strip()[:300]
+        return ("Claude Code установлен, но не отвечает — обычно это отсутствие входа.\n"
+                "На машине с браузером выполните `claude setup-token` и перенесите "
+                "выданный токен в окружение этого хоста.\n"
+                f"Ответ команды: {detail or '(пусто)'}")
+    return ""
+
+
 def main() -> int:
     global TOKEN
 
@@ -78,6 +112,11 @@ def main() -> int:
     if not TOKEN:
         print("Задайте NEXUS_TOKEN или NEXUS_PASSWORD", file=sys.stderr)
         return 2
+
+    problem = preflight()
+    if problem:
+        print(f"Не могу начать работу:\n{problem}", file=sys.stderr)
+        return 3
 
     print(f"Клод-исполнитель на связи: {URL}")
     last_beat = 0.0
