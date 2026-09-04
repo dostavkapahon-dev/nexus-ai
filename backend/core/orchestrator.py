@@ -194,6 +194,20 @@ class NexusCore:
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "visual_creator"})
             visual = VisualCreator()
             visual_result = await visual.create(db, plan.niche_id, niche.name, plan.topic, plan.platform, text_voiced)
+            # HIXIIT — генеративный слой: сам подбирает модель под задачу.
+            # Работает только когда подключён MCP; иначе остаётся визуал от visual_creator.
+            try:
+                from core.hixiit import generate as hixiit_generate, mcp_configured
+                if mcp_configured():
+                    hx = await hixiit_generate(
+                        visual_result.get("image_prompt") or plan.topic,
+                        kind="video" if (plan.format or "").lower() in ("reels", "video", "shorts") else "image",
+                        allow_free=False,
+                    )
+                    if hx.get("ok"):
+                        visual_result["image_url"] = hx["url"]
+            except Exception as e:
+                print(f"[NEXUS] HIXIIT: {str(e)[:150]}", flush=True)
             await broadcast(plan.niche_id, {"event": "agent_done", "agent": "visual_creator"})
 
             await broadcast(plan.niche_id, {"event": "agent_start", "agent": "adapter"})

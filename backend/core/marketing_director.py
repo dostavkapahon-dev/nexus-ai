@@ -30,7 +30,8 @@ SYSTEM = """\
   сперва ищи, а не выдумывай.
 - run_browser: автономный браузерный агент на ПК пользователя (живые сессии
   Instagram/OLX/VK/YouTube). Используй для действий, у которых нет API.
-- make_video: генерация короткого видео (аватар-озвучка или кинематографичный клип).
+- make_video: короткое видео. HIXIIT сам подбирает модель; аватар-озвучка — HeyGen.
+- make_image: изображение/кадр/обложка через HIXIIT.
 - publish: публикация готового текста (+картинки) на площадку через API или браузер.
 - done: заверши работу с кратким отчётом для пользователя.
 
@@ -175,6 +176,19 @@ TOOLS = [
         },
     },
     {
+        "name": "make_image",
+        "description": "Сгенерировать изображение (кадр, обложка, визуал поста) через HIXIIT. "
+                       "Модель HIXIIT подбирает сам под задачу.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "Визуальное описание кадра."},
+                "ratio": {"type": "string", "enum": ["9:16", "16:9", "1:1"]},
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
         "name": "publish",
         "description": "Опубликовать текст (+картинку) на площадке.",
         "input_schema": {
@@ -251,9 +265,19 @@ async def _exec_tool(name: str, inp: dict) -> dict:
         from core.social_intel import get_account_intelligence
         return await get_account_intelligence([target] if target else None)
     if name == "make_video":
-        from core.media_generator import generate_clip
-        return await generate_clip(prompt=inp["prompt"], script=inp.get("script", ""),
-                                   provider=inp.get("provider", "auto"))
+        provider = inp.get("provider", "auto")
+        # Говорящий аватар умеет только HeyGen — там generate_clip незаменим.
+        # Всё остальное ведёт HIXIIT: он сам выбирает модель под задачу.
+        voiceover = bool(inp.get("script")) and bool(os.getenv("HEYGEN_API_KEY"))
+        if provider in ("heygen", "runway") or voiceover:
+            from core.media_generator import generate_clip
+            return await generate_clip(prompt=inp["prompt"], script=inp.get("script", ""),
+                                       provider="heygen" if voiceover else provider)
+        from core.hixiit import generate as hixiit_generate
+        return await hixiit_generate(inp["prompt"], kind="video", ratio=inp.get("ratio"))
+    if name == "make_image":
+        from core.hixiit import generate as hixiit_generate
+        return await hixiit_generate(inp["prompt"], kind="image", ratio=inp.get("ratio"))
     if name == "publish":
         from core.orchestrator import nexus_core
         return await nexus_core._publish_one(inp["platform"], inp["text"], inp.get("image_url", ""))
@@ -292,6 +316,10 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
             step.update({"executor": result.get("executor"),
                          "model_used": result.get("model_used"),
                          "cost": result.get("cost")})
+        # Ссылку на готовое медиа несём в шаге — иначе картинка и видео
+        # остаются только внутри дирижёра и до человека не доходят.
+        if name in ("make_image", "make_video") and result.get("url"):
+            step["media_url"] = result["url"]
         steps.append(step)
         messages.append({
             "role": "user",
@@ -316,6 +344,7 @@ _GEMINI_DIRECTOR_DOC = """\
 {"tool":"research","args":{"topic":"тема исследования","pages":3}}
 {"tool":"run_browser","args":{"task":"...","start_url":"..."}}
 {"tool":"make_video","args":{"prompt":"...","script":"...","provider":"auto"}}
+{"tool":"make_image","args":{"prompt":"...","ratio":"9:16"}}
 {"tool":"publish","args":{"platform":"instagram","text":"...","image_url":"..."}}
 {"tool":"done","args":{"summary":"..."}}
 Можно добавить поле "thought" с кратким планом/обоснованием.
@@ -357,6 +386,8 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
             step.update({"executor": result.get("executor"),
                          "model_used": result.get("model_used"),
                          "cost": result.get("cost")})
+        if tool in ("make_image", "make_video") and result.get("url"):
+            step["media_url"] = result["url"]
         steps.append(step)
         history += f"\n- {tool}: {'ok' if ok else 'ошибка'} :: {json.dumps(result, ensure_ascii=False)[:400]}"
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}

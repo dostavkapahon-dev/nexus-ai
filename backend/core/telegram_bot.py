@@ -126,6 +126,7 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
+        {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
@@ -578,8 +579,18 @@ async def _dispatch_command(chat_id: str, text: str):
         st = await ap.get_state()
         strat = st.get("chosen")
         if not strat:
-            await send_message(chat_id, "❗ Сначала пройди /auto и выбери стратегию")
-            return
+            # Стратегия могла быть выбрана давно: она лежит в strategy_store и
+            # переживает перезапуск, тогда как состояние автопилота — нет.
+            # Требовать пройти /auto заново, когда стратегия уже сохранена,
+            # значит терять готовую работу.
+            from core import strategy_store
+            saved = await strategy_store.current()
+            if saved:
+                strat = saved
+            else:
+                await send_message(chat_id, "❗ Стратегии пока нет. Пройди /auto — "
+                                            "система разберёт аккаунт и предложит варианты.")
+                return
         await send_message(chat_id, "🗓 Составляю план на 7 дней...")
         days = await ap.build_week_plan(strat, st.get("analysis", {}))
         if not days:
@@ -593,6 +604,15 @@ async def _dispatch_command(chat_id: str, text: str):
                          f"   {d.get('topic', '')}\n   <i>Хук: {d.get('hook', '')}</i>")
         st["week_plan"] = days
         await ap.set_state(st)
+
+        # План должен стать рабочей очередью, а не просто сообщением в чате.
+        saved_n = await ap.persist_week_plan(days)
+        if saved_n:
+            lines += ["", f"💾 Сохранено в контент-план: {saved_n} пунктов.",
+                      "Дальше: /create — создать публикации, /queue — очередь."]
+        else:
+            lines += ["", "⚠️ Ниша не задана, план сохранён только в этом чате. "
+                          "Добавь нишу, чтобы из плана создавались публикации."]
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
@@ -686,6 +706,27 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"⚠️ Ошибка агента: {str(e)[:200]}")
         return
 
+    if cmd == "director":
+        # Cloud Opus как оркестратор прямо из Telegram: сайт для этого не нужен.
+        # Переиспользуем command_center.run_command — он заводит задачу,
+        # ведёт её через marketing_director и пишет в общую ленту.
+        task = " ".join(args)
+        if not task:
+            await send_message(chat_id, "❗ Что сделать? Напр.:\n"
+                               "<code>/director разбери мою нишу и сделай план на неделю</code>")
+            return
+        await send_message(chat_id, f"🧠 Дирижёр взял задачу: <i>{task[:120]}</i>\n"
+                                    "Подключаю агентов, это может занять пару минут...")
+        try:
+            from core.command_center import run_command
+            res = await run_command(task, source="telegram", mirror=False)
+        except Exception as e:
+            await send_message(chat_id, f"⚠️ Ошибка дирижёра: {str(e)[:200]}")
+            return
+        await send_message(chat_id, res.get("reply") or "Готово.")
+        await _send_director_media(chat_id, res)
+        return
+
     if cmd == "music":
         from core import music_library as ml
         if not args:
@@ -734,6 +775,26 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"✅ Ролик собран ({res.get('clips')} сцен), но не отправился: {res.get('send_error', 'неизвестно')}")
         else:
             await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
+        return
+
+    if cmd in ("hixiit", "hixit", "higgsfield"):
+        from core.hixiit import status as hixiit_status
+        st = await hixiit_status()
+        mcp_mark = "✅" if st.get("mcp_ok") else ("⚠️" if st["mcp_configured"] else "❌")
+        lines = [
+            "🎨 <b>HIXIIT — генеративный слой</b>", "",
+            f"{mcp_mark} MCP — основной путь"
+            + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>" if st.get("mcp_error") else ""),
+            f"{'✅' if st['api_key'] else '❌'} API-ключ HIGGSFIELD_API_KEY",
+            f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
+            "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
+        ]
+        if st.get("credits") is not None:
+            lines.append(f"💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}")
+        if not st["mcp_configured"]:
+            lines += ["", "⚠️ MCP не настроен. Добавь в Render → Environment:",
+                      "<code>HIGGSFIELD_MCP_URL</code> и <code>HIGGSFIELD_MCP_TOKEN</code>"]
+        await send_message(chat_id, "\n".join(lines))
         return
 
     if cmd == "diag":
@@ -1221,6 +1282,28 @@ async def _dispatch_command(chat_id: str, text: str):
             "/config   — настройки",
         ]
         await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
+
+async def _send_director_media(chat_id: str, res: dict):
+    """Медиа, созданные дирижёром через HIXIIT, отправляем в чат.
+
+    Без этого картинка и видео остаются ссылкой в тексте отчёта: человек
+    просил контент, а получал URL.
+    """
+    from publishers.telegram_pub import send_photo, send_video
+    for step in (res.get("steps") or []):
+        if step.get("action") not in ("make_image", "make_video"):
+            continue
+        url = step.get("media_url")
+        if not url:
+            continue
+        try:
+            if step["action"] == "make_video":
+                await send_video(chat_id, url, "")
+            else:
+                await send_photo(chat_id, url, "")
+        except Exception as e:
+            await send_message(chat_id, f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>")
+
 
 async def _handle_media(chat_id: str, msg: dict):
     """Голос → расшифровка → обычная обработка. Медиа → сохранение + разбор зрением."""

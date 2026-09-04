@@ -184,6 +184,52 @@ async def build_week_plan(strategy: dict, analysis: dict) -> list[dict]:
         return []
 
 
+async def persist_week_plan(days: list[dict]) -> int:
+    """Кладёт план недели в таблицу content_plans и возвращает число пунктов.
+
+    Без этого шага план существовал только текстом в чате и в KV-состоянии
+    автопилота: генерация, очередь, публикация и планировщик читают
+    `content_plans` и о нём не знали, поэтому «создать публикацию из плана»
+    было невозможно. Старые незапущенные пункты убираем, иначе каждый вызов
+    /plan7 копил дубли.
+    """
+    from database.models import ContentPlan
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Niche).where(Niche.status == "active").limit(1))
+        niche = r.scalar_one_or_none()
+        if not niche:
+            return 0
+
+        old_r = await db.execute(
+            select(ContentPlan).where(ContentPlan.niche_id == niche.id,
+                                      ContentPlan.status == "pending"))
+        for item in old_r.scalars():
+            await db.delete(item)
+
+        platforms = niche.platforms or ["instagram"]
+        saved = 0
+        for d in days:
+            fmt = str(d.get("format") or "post").lower()
+            # Куда пойдёт публикация: формат подсказывает площадку, но выбираем
+            # только из тех, что человек реально подключил для этой ниши.
+            wanted = {"reels": "instagram", "stories": "instagram",
+                      "threads": "threads", "post": "telegram",
+                      "carousel": "instagram"}.get(fmt, platforms[0])
+            db.add(ContentPlan(
+                niche_id=niche.id,
+                day_number=int(d.get("day") or (saved + 1)),
+                platform=wanted if wanted in platforms else platforms[0],
+                topic=str(d.get("topic") or "")[:500],
+                hook=str(d.get("hook") or ""),
+                format=fmt,
+                status="pending",
+            ))
+            saved += 1
+        await db.commit()
+    return saved
+
+
 # ─────────────────────────── 5. прогноз виральности ───────────────────────────
 
 PREDICT_SYSTEM = (

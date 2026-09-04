@@ -96,3 +96,29 @@ NicheAnalyst → ViralHunter → Strategist → Copywriter → Reviewer
 3. Нет базового класса `SocialConnector` — коннекторы это свободные функции.
 4. Нет системы задач: фоновые работы через `BackgroundTasks`/`asyncio.create_task` без ID.
 5. Нет миграций (alembic) ⇒ схема расширяется через KV `Connection`.
+
+## HIXIIT — генеративный слой (`core/hixiit.py`)
+
+Единая точка входа для картинок и видео. Вызывается дирижёром
+(`make_image` / `make_video`) и `orchestrator.generate_content_for_plan`.
+
+Пути доступа сверху вниз, первый доступный побеждает; каждый отказ объясняется:
+
+1. **MCP** — `HIGGSFIELD_MCP_URL` + `HIGGSFIELD_MCP_TOKEN` (`mcp.higgsfield.ai/mcp`).
+   Модель подбирается по реальному каталогу (`models_explore`), а не по
+   захардкоженному списку; непригодные для задачи модели отбрасываются.
+   Авторизация OAuth-токеном — он истекает, поэтому для сервера это не основной путь.
+2. **REST** — `HIGGSFIELD_API_KEY` + `HIGGSFIELD_SECRET` из cloud.higgsfield.ai
+   (`core/higgsfield.py`), только видео. Заголовок `Authorization: Key ключ:секрет`.
+   **Основной путь для сервера:** ключи не истекают.
+3. **Браузер-агент** — `desktop_agent.py` на включённом ПК, только видео.
+4. **Pollinations** — бесплатная картинка как последний рубеж.
+
+Диагностика — команда `/hixiit` в Telegram.
+
+## Свободный текст из Telegram
+
+`telegram_bot._plain_text` → `intent.route` → готовая команда, либо `/director`
+для многошаговых задач → `command_center.run_command` → `marketing_director`.
+Сайт в этой цепочке не участвует. Созданные медиа возвращаются в чат файлом
+(`telegram_bot._send_director_media`, поле `media_url` в шагах дирижёра).

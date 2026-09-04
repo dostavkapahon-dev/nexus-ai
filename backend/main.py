@@ -213,4 +213,7 @@ if os.path.exists(frontend_dist):
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str):
+        # Неизвестный API-путь — честный 404, а не HTML-страница фронта.
+        if full_path.startswith("api/"):
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
         return FileResponse(os.path.join(frontend_dist, "index.html"))
