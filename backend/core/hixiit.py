@@ -284,8 +284,9 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
-    # 2. REST по API-ключу
-    if os.getenv("HIGGSFIELD_API_KEY"):
+    # 2. REST по ключу+секрету из Higgsfield Cloud
+    from core.higgsfield import credentials as _hf_credentials
+    if _hf_credentials():
         if kind == "video":
             try:
                 from core.higgsfield import create_video, poll_video
@@ -303,7 +304,7 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
         else:
             tried.append("REST: генерация изображений через API не поддерживается")
     else:
-        tried.append("REST: не настроен (нет HIGGSFIELD_API_KEY)")
+        tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
     # 3. Браузер-агент в залогиненном аккаунте (только видео)
     if kind == "video":
@@ -335,9 +336,10 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
 
 async def status() -> dict:
     """Диагностика генеративного слоя — для команды /hixiit в Telegram."""
+    from core.higgsfield import credentials as _hf_creds
     out = {
         "mcp_configured": mcp_configured(),
-        "api_key": bool(os.getenv("HIGGSFIELD_API_KEY")),
+        "api_key": bool(_hf_creds()),
         "default_model": os.getenv("HIGGSFIELD_MODEL", "auto"),
     }
     try:

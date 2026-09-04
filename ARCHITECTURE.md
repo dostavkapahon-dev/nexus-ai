@@ -104,10 +104,13 @@ NicheAnalyst → ViralHunter → Strategist → Copywriter → Reviewer
 
 Пути доступа сверху вниз, первый доступный побеждает; каждый отказ объясняется:
 
-1. **MCP** — `HIGGSFIELD_MCP_URL` + `HIGGSFIELD_MCP_TOKEN`. Рабочее подключение
-   аккаунта. Модель подбирается по реальному каталогу (`models_explore`), а не
-   по захардкоженному списку; непригодные для задачи модели отбрасываются.
-2. **REST** — `HIGGSFIELD_API_KEY` (`core/higgsfield.py`), только видео.
+1. **MCP** — `HIGGSFIELD_MCP_URL` + `HIGGSFIELD_MCP_TOKEN` (`mcp.higgsfield.ai/mcp`).
+   Модель подбирается по реальному каталогу (`models_explore`), а не по
+   захардкоженному списку; непригодные для задачи модели отбрасываются.
+   Авторизация OAuth-токеном — он истекает, поэтому для сервера это не основной путь.
+2. **REST** — `HIGGSFIELD_API_KEY` + `HIGGSFIELD_SECRET` из cloud.higgsfield.ai
+   (`core/higgsfield.py`), только видео. Заголовок `Authorization: Key ключ:секрет`.
+   **Основной путь для сервера:** ключи не истекают.
 3. **Браузер-агент** — `desktop_agent.py` на включённом ПК, только видео.
 4. **Pollinations** — бесплатная картинка как последний рубеж.
 

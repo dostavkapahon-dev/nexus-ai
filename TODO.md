@@ -119,17 +119,23 @@
 - [ ] Блокировки при read-modify-write KV `Connection` (гонки scheduler/telegram/dashboard)
 - [ ] Ограничение роста `moderation_queue`, `autopilot_state`, `viral_recipe`
 
-## HIXIIT через MCP — нужно действие владельца
+## Подключить Higgsfield на сервере — нужно действие владельца
 
-Код готов, но процессу на Render нужен собственный доступ к MCP: сессия Claude
-Code, где Higgsfield подключён, — это не то же самое, что сервер.
+Для неприсмотренного сервера правильный путь — **ключ + секрет**, а не MCP:
+MCP-подключение (`mcp.higgsfield.ai/mcp`) авторизуется по OAuth-токену, который
+со временем истекает, и продлить его на Render некому.
 
-1. Render → сервис `nexus-ai` → Environment.
-2. Добавить `HIGGSFIELD_MCP_URL` и `HIGGSFIELD_MCP_TOKEN`.
-3. После деплоя проверить командой `/hixiit` в Telegram — она покажет активный
-   путь и остаток кредитов.
+1. Открыть https://cloud.higgsfield.ai → раздел API keys → создать ключ.
+   Выдаётся **пара**: key и secret. Секрет показывается один раз.
+2. Render → сервис `nexus-ai` → Environment → Add Environment Variable:
+   - `HIGGSFIELD_API_KEY` = key
+   - `HIGGSFIELD_SECRET` = secret
+3. Save changes — Render передеплоит сервис сам.
+4. Проверить в Telegram командой `/hixiit`: строка «API-ключ» должна стать ✅.
 
-До этого HIXIIT работает по запасным путям и честно сообщает, чего не хватает.
+Одного ключа без секрета недостаточно — запрос отклоняется, и `/hixiit`
+покажет это прямо.
+
 После подключения можно вернуть `producer=server`: отдавать видео внешнему
 исполнителю (`producer=claude`) станет необязательно.
 

@@ -89,3 +89,48 @@ async def test_broken_mcp_client_does_not_kill_the_task(monkeypatch):
 
     res = await hixiit.generate("ролик", kind="video")
     assert res["ok"] is False
+
+
+def test_api_auth_uses_the_documented_scheme(monkeypatch):
+    """Higgsfield ждёт `Authorization: Key ключ:секрет`.
+
+    Раньше уходил `Bearer ключ` плюс отдельный заголовок `hf-secret` — такой
+    запрос не принимается, поэтому REST-путь не работал ни при каких настройках.
+    """
+    from core import higgsfield as hf
+
+    monkeypatch.delenv("HF_KEY", raising=False)
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "key123")
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "secret456")
+
+    headers = hf._headers()
+    assert headers["Authorization"] == "Key key123:secret456"
+    assert "hf-secret" not in headers
+
+
+def test_key_without_secret_is_not_a_working_credential(monkeypatch):
+    """Один ключ без секрета — заведомо отклонённый запрос: лучше сказать сразу."""
+    from core import higgsfield as hf
+
+    monkeypatch.delenv("HF_KEY", raising=False)
+    monkeypatch.delenv("HF_API_SECRET", raising=False)
+    monkeypatch.delenv("HIGGSFIELD_SECRET", raising=False)
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "key123")
+
+    assert hf.credentials() == ""
+
+
+def test_credentials_accept_sdk_names_and_joined_pair(monkeypatch):
+    """Ключ, скопированный из документации Higgsfield, должен работать как есть."""
+    from core import higgsfield as hf
+
+    for var in ("HF_KEY", "HIGGSFIELD_API_KEY", "HIGGSFIELD_SECRET",
+                "HF_API_KEY", "HF_API_SECRET"):
+        monkeypatch.delenv(var, raising=False)
+
+    monkeypatch.setenv("HF_API_KEY", "k")
+    monkeypatch.setenv("HF_API_SECRET", "s")
+    assert hf.credentials() == "k:s"
+
+    monkeypatch.setenv("HF_KEY", "one:two")
+    assert hf.credentials() == "one:two"
