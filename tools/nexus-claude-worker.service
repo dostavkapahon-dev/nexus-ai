@@ -1,0 +1,37 @@
+# Клод-исполнитель как системная служба: работает 24/7, переживает перезагрузку.
+#
+# Установка (Ubuntu, от root):
+#   cp tools/nexus-claude-worker.service /etc/systemd/system/
+#   systemctl edit nexus-claude-worker    # вписать переменные, см. ниже
+#   systemctl enable --now nexus-claude-worker
+#   journalctl -u nexus-claude-worker -f  # смотреть логи
+#
+# Переменные задавать через `systemctl edit` (файл override.conf), а не здесь —
+# токен подписки не должен попасть в git:
+#   [Service]
+#   Environment=NEXUS_URL=https://ваш-сервис.onrender.com
+#   Environment=NEXUS_PASSWORD=<пароль администратора>
+#   Environment=<переменная токена из `claude setup-token`>=<значение>
+
+[Unit]
+Description=NEXUS AI — Клод-исполнитель на подписке
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/nexus-ai
+ExecStart=/usr/bin/python3 /opt/nexus-ai/tools/claude_worker.py
+
+# Воркер живёт долго и переживает обрывы сети, поэтому перезапускаем всегда.
+# StartLimit не ставим: при недоступном сервере служба иначе замолчала бы
+# насовсем, и это выглядело бы как «Claude перестал отвечать».
+Restart=always
+RestartSec=15
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
