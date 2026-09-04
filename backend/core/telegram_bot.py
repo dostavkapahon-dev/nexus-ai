@@ -579,8 +579,18 @@ async def _dispatch_command(chat_id: str, text: str):
         st = await ap.get_state()
         strat = st.get("chosen")
         if not strat:
-            await send_message(chat_id, "❗ Сначала пройди /auto и выбери стратегию")
-            return
+            # Стратегия могла быть выбрана давно: она лежит в strategy_store и
+            # переживает перезапуск, тогда как состояние автопилота — нет.
+            # Требовать пройти /auto заново, когда стратегия уже сохранена,
+            # значит терять готовую работу.
+            from core import strategy_store
+            saved = await strategy_store.current()
+            if saved:
+                strat = saved
+            else:
+                await send_message(chat_id, "❗ Стратегии пока нет. Пройди /auto — "
+                                            "система разберёт аккаунт и предложит варианты.")
+                return
         await send_message(chat_id, "🗓 Составляю план на 7 дней...")
         days = await ap.build_week_plan(strat, st.get("analysis", {}))
         if not days:
@@ -594,6 +604,15 @@ async def _dispatch_command(chat_id: str, text: str):
                          f"   {d.get('topic', '')}\n   <i>Хук: {d.get('hook', '')}</i>")
         st["week_plan"] = days
         await ap.set_state(st)
+
+        # План должен стать рабочей очередью, а не просто сообщением в чате.
+        saved_n = await ap.persist_week_plan(days)
+        if saved_n:
+            lines += ["", f"💾 Сохранено в контент-план: {saved_n} пунктов.",
+                      "Дальше: /create — создать публикации, /queue — очередь."]
+        else:
+            lines += ["", "⚠️ Ниша не задана, план сохранён только в этом чате. "
+                          "Добавь нишу, чтобы из плана создавались публикации."]
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
