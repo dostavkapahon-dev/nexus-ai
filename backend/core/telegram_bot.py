@@ -844,9 +844,20 @@ async def _dispatch_command(chat_id: str, text: str):
             "API по ключу и секрету"
             + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
                if st.get("api_error") else ""),
+        ]
+        # Сразу под строкой про API — откуда взялись ключ и секрет.
+        for src in st.get("key_sources") or []:
+            mark = "✅" if src["filled"] else "❌"
+            tail = f" …{src['tail']}" if src.get("tail") else ""
+            lines.append(f"   {mark} {src['name']}{tail} — {src['source']}")
+        lines += [
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
         ]
+        if any("перекрывает" in (s0.get("source") or "") for s0 in st.get("key_sources") or []):
+            lines += ["", "⚠️ Значение из дашборда перекрывает переменную Render. "
+                          "Новый ключ в Render не подействует, пока в дашборде лежит старый — "
+                          "исправьте в дашборде или удалите там это поле."]
         if st.get("credits") is not None:
             lines.append(f"💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}")
         if not st["mcp_configured"]:

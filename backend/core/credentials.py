@@ -175,6 +175,11 @@ async def record_check(key_name: str, ok: bool, error: str = ""):
 
 # ─────────────────────────── старт приложения ───────────────────────────
 
+# Итог последней загрузки доступов. Нужен не для красоты: перекрытие переменной
+# хостинга значением из дашборда — самая частая причина «ключ вписан, а ничего
+# не работает», и увидеть её человек должен в Telegram, а не в логах Render.
+LAST_LOAD: dict = {"loaded": 0, "unreadable": 0, "encrypted_now": 0, "shadowed": []}
+
 async def load_into_env() -> dict:
     """Выгружает сохранённые доступы в окружение процесса.
 
@@ -221,8 +226,10 @@ async def load_into_env() -> dict:
     if shadowed:
         print(f"[NEXUS] заданы и в дашборде, и в переменных хостинга — "
               f"используется дашборд: {', '.join(shadowed)}", flush=True)
-    return {"loaded": loaded, "unreadable": unreadable, "encrypted_now": re_encrypted,
-            "shadowed": shadowed}
+    result = {"loaded": loaded, "unreadable": unreadable,
+              "encrypted_now": re_encrypted, "shadowed": shadowed}
+    LAST_LOAD.update(result)
+    return result
 
 
 async def overview() -> dict:

@@ -414,6 +414,40 @@ async def available_models(kind: str = "image") -> list[dict]:
              "connected": True} for m in _as_model_list(res)]
 
 
+async def _key_sources() -> list[dict]:
+    """Для каждой половины доступа: заполнена ли, откуда и последние 4 символа."""
+    from core import credentials
+    shadowed = set(credentials.LAST_LOAD.get("shadowed") or [])
+    out = []
+    for env_name, human in (("HIGGSFIELD_API_KEY", "ключ"),
+                            ("HIGGSFIELD_SECRET", "секрет")):
+        value = (os.getenv(env_name) or "").strip()
+        # Именно запись в базе, а не credentials.get(): тот при отсутствии
+        # записи возвращает значение окружения, и источник всегда выглядел бы
+        # как «дашборд».
+        try:
+            from sqlalchemy import select
+            from database.db import AsyncSessionLocal
+            from database.models import Connection
+            async with AsyncSessionLocal() as db:
+                r = await db.execute(select(Connection).where(
+                    Connection.key_name == env_name.lower()))
+                saved = r.scalar_one_or_none() is not None
+        except Exception:
+            saved = False
+        if not value:
+            source = "не задан"
+        elif env_name in shadowed:
+            source = "дашборд (перекрывает Render)"
+        elif saved:
+            source = "дашборд"
+        else:
+            source = "переменная хостинга"
+        out.append({"name": human, "env": env_name, "filled": bool(value),
+                    "source": source, "tail": value[-4:] if len(value) > 4 else ""})
+    return out
+
+
 async def status() -> dict:
     """Диагностика генеративного слоя — для команды /hixiit в Telegram."""
     from core.higgsfield import credentials as _hf_creds
@@ -422,6 +456,11 @@ async def status() -> dict:
         "api_key": bool(_hf_creds()),
         "default_model": os.getenv("HIGGSFIELD_MODEL", "auto"),
     }
+    # Откуда приехали ключ и секрет и чем заканчиваются: без этого нельзя
+    # понять, почему «в Render всё вписано», а запрос отклонён — значение из
+    # дашборда молча перекрывает переменную хостинга.
+    out["key_sources"] = await _key_sources()
+
     # Наличие ключа ничего не доказывает: он бывает от другого аккаунта, без
     # кредитов или просрочен. Поэтому спрашиваем сам Higgsfield.
     if out["api_key"]:
