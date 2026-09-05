@@ -295,6 +295,46 @@ for _name, _spec in FREE_PROVIDERS.items():
 # Бесплатное пробуем раньше платного.
 FALLBACK_CHAIN = [s["alias"] for s in FREE_PROVIDERS.values()] + PAID_FALLBACK_CHAIN
 
+# Каталог моделей для интерфейса. Раньше список жил в React отдельной копией и
+# отставал: бесплатных провайдеров в нём не было вовсе, поэтому выбрать Groq или
+# Cerebras в настройках агента было нельзя, хотя роутер их поддерживает.
+CATALOG: tuple[tuple[str, str, str], ...] = (
+    # (значение, что показать, группа)
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6", "Anthropic"),
+    ("claude-sonnet-4-20250514", "Claude Sonnet 4", "Anthropic"),
+    ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "Anthropic"),
+    ("gpt-4o", "GPT-4o", "OpenAI"),
+    ("gpt-4o-mini", "GPT-4o Mini", "OpenAI"),
+    ("gemini-2.0-flash", "Gemini 2.0 Flash", "Google"),
+    ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Google"),
+    ("gemini-flash-latest", "Gemini Flash (последняя)", "Google"),
+    ("sonar-reasoning-pro", "Perplexity Sonar Reasoning Pro", "Perplexity"),
+    ("sonar-pro", "Perplexity Sonar Pro", "Perplexity"),
+    ("sonar", "Perplexity Sonar", "Perplexity"),
+    ("deepseek-chat", "DeepSeek Chat", "DeepSeek"),
+    ("deepseek-reasoner", "DeepSeek Reasoner (R1)", "DeepSeek"),
+)
+
+
+def catalog() -> list[dict]:
+    """Модели для выбора в интерфейсе, с пометкой, какие реально доступны.
+
+    Доступность считается по наличию ключа у провайдера: выбрать модель, для
+    которой ключа нет, можно, но человек сразу видит, что она не заработает.
+    Бесплатные провайдеры добавляются из FREE_PROVIDERS — их конкретные модели
+    определяются на лету, поэтому в списке они представлены псевдонимом.
+    """
+    out = []
+    for value, label, group in CATALOG:
+        out.append({"value": value, "label": label, "group": group,
+                    "connected": _has_key(value)})
+    for name, spec in FREE_PROVIDERS.items():
+        out.append({"value": spec["alias"], "label": f"{spec['title']} (бесплатно)",
+                    "group": "Бесплатные", "connected": bool(os.getenv(spec["key_env"], "")),
+                    "hint": spec["limits"]})
+    return out
+
+
 def estimate_cost(ai_mode: str, posts_per_day: int, days: int) -> float:
     models = PREMIUM_MODELS if ai_mode == "premium" else ECONOMY_MODELS
     avg_tokens = 2000

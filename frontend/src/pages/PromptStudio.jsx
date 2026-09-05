@@ -15,20 +15,9 @@ const AGENTS = [
   { key: 'funnel_agent',  label: 'FunnelAgent',    desc: 'Ответы в воронке продаж' },
 ]
 
-const MODELS = [
-  { value: 'claude-sonnet-4-6',        label: 'Claude Sonnet 4.6',      group: 'Anthropic' },
-  { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4',        group: 'Anthropic' },
-  { value: 'claude-haiku-4-5-20251001',label: 'Claude Haiku 4.5',       group: 'Anthropic' },
-  { value: 'gpt-4o',                   label: 'GPT-4o',                  group: 'OpenAI' },
-  { value: 'gpt-4o-mini',              label: 'GPT-4o Mini',             group: 'OpenAI' },
-  { value: 'gemini-1.5-pro',           label: 'Gemini 1.5 Pro',          group: 'Google' },
-  { value: 'gemini-1.5-flash',         label: 'Gemini 1.5 Flash',        group: 'Google' },
-  { value: 'sonar-reasoning-pro',      label: 'Perplexity Sonar Reasoning Pro', group: 'Perplexity' },
-  { value: 'sonar-pro',                label: 'Perplexity Sonar Pro',    group: 'Perplexity' },
-  { value: 'sonar',                    label: 'Perplexity Sonar',        group: 'Perplexity' },
-  { value: 'deepseek-chat',            label: 'DeepSeek Chat',           group: 'DeepSeek' },
-  { value: 'deepseek-reasoner',        label: 'DeepSeek Reasoner (R1)',  group: 'DeepSeek' },
-]
+// Список моделей приходит с сервера. Своя копия здесь отставала: бесплатных
+// провайдеров в ней не было вовсе, и выбрать их было нельзя, хотя система их
+// поддерживает. Сервер же знает и то, для каких моделей реально есть ключ.
 
 export default function PromptStudio() {
   const [selected, setSelected] = useState('copywriter')
@@ -36,6 +25,13 @@ export default function PromptStudio() {
   const [editing, setEditing] = useState(null)
   const [saving, setSaving] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [models, setModels] = useState([])
+
+  useEffect(() => {
+    promptsApi.models()
+      .then(r => setModels(r.data.models || []))
+      .catch(() => setModels([]))
+  }, [])
 
   useEffect(() => {
     promptsApi.list().then(r => {
@@ -99,13 +95,20 @@ export default function PromptStudio() {
         {editing ? (
           <div className="flex-1 overflow-y-auto p-4 space-y-4">
             <div>
-              <label className="text-xs text-nexus-muted mb-1 block">AI Модель</label>
+              <label className="text-xs text-nexus-muted mb-1 block">
+                AI Модель <span className="text-nexus-muted/70">· ✅ ключ есть, ○ ключа нет</span>
+              </label>
               <select value={editing.model || ''} onChange={e => setEditing(p => ({ ...p, model: e.target.value }))}
                 className="w-full bg-nexus-card border border-nexus-border rounded-lg px-3 py-2 text-sm text-nexus-text focus:border-purple-500 outline-none">
-                {['Anthropic','OpenAI','Google','Perplexity','DeepSeek'].map(group => (
+                {editing.model && !models.some(m => m.value === editing.model) && (
+                  <option value={editing.model}>{editing.model}</option>
+                )}
+                {[...new Set(models.map(m => m.group))].map(group => (
                   <optgroup key={group} label={group}>
-                    {MODELS.filter(m => m.group === group).map(m => (
-                      <option key={m.value} value={m.value}>{m.label}</option>
+                    {models.filter(m => m.group === group).map(m => (
+                      <option key={m.value} value={m.value}>
+                        {m.connected ? '✅ ' : '○ '}{m.label}
+                      </option>
                     ))}
                   </optgroup>
                 ))}
