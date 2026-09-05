@@ -830,6 +830,20 @@ async def _dispatch_command(chat_id: str, text: str):
             f"{yn(os.getenv('TIKTOK_ACCESS_TOKEN'))} TikTok API",
             f"{yn(os.getenv('IG_HANDLE') or os.getenv('TIKTOK_HANDLE') or os.getenv('YOUTUBE_HANDLE'))} Ники для анализа",
         ]
+
+        # Диагностику открывают именно тогда, когда ключи «опять слетели».
+        # Здесь и надо сказать, почему это повторяется и чем лечится, — иначе
+        # человек будет вводить их заново после каждого перезапуска.
+        from database.db import storage_info
+        store = storage_info()
+        if not store["persistent"]:
+            lines += [
+                "",
+                "⚠️ <b>Ключи и данные не переживут перезапуск.</b>",
+                store["warning"],
+                "Лечится один раз: задайте <code>DATABASE_URL</code> (Postgres) "
+                "в переменных сервиса — данные перестанут теряться.",
+            ]
         await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю ключи ИИ вживую...")
 
         # Реальная проверка: ключ может быть задан, но невалиден/без квоты.
@@ -876,9 +890,17 @@ async def _dispatch_command(chat_id: str, text: str):
 
     if cmd == "strategy":
         await send_message(chat_id, "🧠 Анализирую свой аккаунт и тренды, готовлю варианты стратегии...")
-        async with AsyncSessionLocal() as db:
-            from core.strategy_advisor import build_options
-            data = await build_options(db)
+        try:
+            async with AsyncSessionLocal() as db:
+                from core.strategy_advisor import build_options
+                data = await build_options(db)
+        except Exception as e:
+            # Стратегию строит модель. Без ключей команда падала необработанным
+            # исключением: человек видел «Анализирую...» и больше ничего, а
+            # остальные команды в таком случае объясняют причину.
+            from core.errors import human as human_error
+            await send_message(chat_id, f"⚠️ Не смог собрать стратегию.\n{human_error(e)}")
+            return
         analysis = data.get("analysis", [])
         options = data.get("options", [])
         lines = ["📊 <b>Анализ</b>"] + [f"• {a}" for a in analysis]
@@ -1307,6 +1329,9 @@ async def _send_director_media(chat_id: str, res: dict):
 
 async def _handle_media(chat_id: str, msg: dict):
     """Голос → расшифровка → обычная обработка. Медиа → сохранение + разбор зрением."""
+    # Расшифровка голоса и разбор зрением тоже идут через модели — им нужны
+    # те же ключи из дашборда, что и остальным путям.
+    await _refresh_env_from_db()
     from core import tg_input
     try:
         res = await tg_input.handle_media(msg)
@@ -1411,6 +1436,11 @@ async def _handle_plain_text(chat_id: str, text: str):
     гасло: человек писал сообщение и не получал вообще ничего.
     """
     try:
+        # Ключи из дашборда должны работать и здесь. Раньше окружение
+        # обновлялось только в обработчике слэш-команд, поэтому свободный текст
+        # («проанализируй...») отвечал «нет ни одной модели», хотя в Подключениях
+        # ключи стояли: процесс просто не видел добавленное после старта.
+        await _refresh_env_from_db()
         from core import ai_escrow
         ai_escrow.interactive(source="telegram", chat_id=chat_id)
         await _plain_text(chat_id, text)
