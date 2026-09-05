@@ -14,6 +14,18 @@ class PromptUpdate(BaseModel):
     user_prompt_template: Optional[str] = None
     ai_model: Optional[str] = None
 
+@router.get("/models")
+async def list_models():
+    """Каталог моделей для выбора в настройках агента.
+
+    Список берётся у роутера, а не дублируется в интерфейсе: раньше копия в
+    React отставала, и бесплатных провайдеров в ней не было вовсе — выбрать их
+    было нельзя, хотя система их поддерживает.
+    """
+    from core.ai_router import catalog
+    return {"models": catalog()}
+
+
 @router.get("")
 async def list_prompts(db: AsyncSession = Depends(get_db)):
     result = {}

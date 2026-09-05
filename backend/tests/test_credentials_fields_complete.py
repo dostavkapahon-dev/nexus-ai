@@ -49,3 +49,34 @@ async def test_saved_field_reaches_the_process(client):
     os.environ["HIGGSFIELD_API_KEY"] = "key-123"
     os.environ.pop("HF_KEY", None)
     assert hf_credentials() == "key-123:secret-123"
+
+
+def test_every_field_can_be_saved_from_the_site():
+    """Поле, которого нет в форме сохранения, молча теряется при отправке.
+
+    Форма собрана вручную отдельным списком, поэтому расхождение с FIELDS
+    появлялось незаметно: человек вводит значение, видит «Сохранено» — и ничего
+    не сохранилось.
+    """
+    import pathlib
+    import re
+
+    src = (pathlib.Path(__file__).resolve().parents[1] / "api" / "routes_settings.py").read_text(encoding="utf-8")
+    accepted = set(re.findall(r"^\s{4}([a-z_0-9]+): Optional", src, re.M))
+
+    missing = sorted({f.key for f in credentials.FIELDS} - accepted)
+    assert not missing, f"эти доступы форма сохранения не примет: {missing}"
+
+
+def test_site_does_not_offer_unknown_fields():
+    """Обратная сторона: поле на сайте, которого не знает бэкенд, тоже теряется."""
+    import pathlib
+    import re
+
+    page = pathlib.Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "Connections.jsx"
+    if not page.exists():
+        return  # фронт не собирают в этом окружении — проверять нечего
+
+    shown = set(re.findall(r"key: '([a-z_0-9]+)'", page.read_text(encoding="utf-8")))
+    unknown = sorted(shown - {f.key for f in credentials.FIELDS})
+    assert not unknown, f"сайт предлагает поля, которых нет в FIELDS: {unknown}"

@@ -41,6 +41,44 @@ const PROVIDERS = [
     models: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
   },
   {
+    id: 'threads', name: 'Threads', icon: '🧵', color: 'from-zinc-500 to-slate-700',
+    description: 'Публикация в Threads по официальному API',
+    fields: [
+      { key: 'threads_access_token', label: 'Access Token', placeholder: 'THQ...', secret: true },
+      { key: 'threads_user_id', label: 'User ID', placeholder: '1784...', secret: false },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://developers.facebook.com', linkText: 'developers.facebook.com' },
+      { text: 'Приложение → Threads API → сгенерируйте токен' },
+      { text: 'User ID берётся там же, рядом с токеном' },
+    ],
+    models: [],
+  },
+  {
+    id: 'elevenlabs', name: 'ElevenLabs', icon: '🔊', color: 'from-emerald-500 to-teal-600',
+    description: 'Озвучка роликов: естественный голос вместо синтетического',
+    fields: [
+      { key: 'elevenlabs_api_key', label: 'API Key', placeholder: 'sk_...', secret: true },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://elevenlabs.io/app/settings/api-keys', linkText: 'elevenlabs.io' },
+      { text: 'Create API key → скопируйте' },
+    ],
+    models: [],
+  },
+  {
+    id: 'runway', name: 'Runway', icon: '🎞', color: 'from-orange-500 to-red-600',
+    description: 'Видео из картинки — запасной путь, если HiggsField недоступен',
+    fields: [
+      { key: 'runway_api_key', label: 'API Key', placeholder: 'key_...', secret: true },
+    ],
+    steps: [
+      { text: 'Откройте', link: 'https://dev.runwayml.com', linkText: 'dev.runwayml.com' },
+      { text: 'API Keys → New key → скопируйте' },
+    ],
+    models: [],
+  },
+  {
     id: 'heygen', name: 'HeyGen AI', icon: '🎭', color: 'from-violet-500 to-fuchsia-500',
     description: 'AI-аватары: говорящие видео для Reels / Shorts / TikTok',
     fields: [
@@ -119,6 +157,7 @@ const PROVIDERS = [
     fields: [
       { key: 'telegram_bot_token', label: 'Bot Token', placeholder: '123456789:ABCdef...', secret: true },
       { key: 'telegram_chat_id', label: 'Chat ID', placeholder: '-1001234567890', secret: false },
+      { key: 'telegram_post_chat_id', label: 'Канал для публикаций (опц.)', placeholder: '-1001234567890', secret: false },
     ],
     steps: [
       { text: 'Найдите в Telegram', link: 'https://t.me/BotFather', linkText: '@BotFather' },

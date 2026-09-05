@@ -46,6 +46,7 @@ export const queue = {
 
 export const prompts = {
   list: () => api.get('/prompts'),
+  models: () => api.get('/prompts/models'),
   get: (name) => api.get(`/prompts/${name}`),
   update: (name, data) => api.patch(`/prompts/${name}`, data),
   reset: (name) => api.post(`/prompts/${name}/reset`),
