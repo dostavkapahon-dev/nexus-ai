@@ -71,11 +71,14 @@ async def _probe_hixiit() -> dict:
     st = await hixiit_status()
     if st.get("mcp_ok"):
         return {"ok": True, "detail": f"MCP, кредитов: {st.get('credits', '—')}"}
-    if st.get("api_key"):
-        return {"ok": True, "detail": "ключ и секрет заданы"}
+    if st.get("api_ok"):
+        return {"ok": True, "detail": "API отвечает по ключу и секрету"}
     if st.get("browser_agent"):
         return {"ok": True, "detail": "через браузер-агент на ПК"}
-    return {"ok": False, "detail": st.get("mcp_error") or "доступа нет"}
+    # «Ключ есть» зелёным не считаем: запрос с ним не прошёл, значит генерации
+    # не будет, и человек должен увидеть причину, а не галочку.
+    return {"ok": False, "detail": (st.get("api_error") or st.get("mcp_error")
+                                    or "доступа нет")[:160]}
 
 
 async def _probe_web() -> dict:

@@ -70,7 +70,8 @@ async def higgsfield_reel(motion_prompt: str, seed_image: str = None,
     """
     seed = seed_image or free_image(fallback_image_prompt or "dark cinematic AI tech, gold neon")
 
-    if not os.getenv("HIGGSFIELD_API_KEY"):
+    from core.higgsfield import credentials as _hf_creds
+    if not _hf_creds():
         # Путь через браузер-агента и ваш залогиненный аккаунт higgsfield.ai
         return await higgsfield_via_browser(motion_prompt or "", seed)
 

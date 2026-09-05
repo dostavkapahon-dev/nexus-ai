@@ -839,7 +839,11 @@ async def _dispatch_command(chat_id: str, text: str):
             "🎨 <b>HIXIIT — генеративный слой</b>", "",
             f"{mcp_mark} MCP — основной путь"
             + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>" if st.get("mcp_error") else ""),
-            f"{'✅' if st['api_key'] else '❌'} API-ключ HIGGSFIELD_API_KEY",
+            # Не «ключ вписан», а «запрос с ним прошёл» — иначе галочка врёт.
+            f"{'✅' if st.get('api_ok') else ('⚠️' if st['api_key'] else '❌')} "
+            "API по ключу и секрету"
+            + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
+               if st.get("api_error") else ""),
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
         ]

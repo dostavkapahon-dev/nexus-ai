@@ -92,10 +92,11 @@ async def test_broken_mcp_client_does_not_kill_the_task(monkeypatch):
 
 
 def test_api_auth_uses_the_documented_scheme(monkeypatch):
-    """Higgsfield ждёт `Authorization: Key ключ:секрет`.
+    """Оба варианта авторизации сразу — так, как их шлёт официальный SDK.
 
-    Раньше уходил `Bearer ключ` плюс отдельный заголовок `hf-secret` — такой
-    запрос не принимается, поэтому REST-путь не работал ни при каких настройках.
+    v1 (job-sets, /v1/text2image/soul) читает заголовки `hf-api-key` и
+    `hf-secret`; v2 — `Authorization: Key ключ:секрет`. Раньше уходил
+    `Bearer ключ`, который не принимается ни там, ни там.
     """
     from core import higgsfield as hf
 
@@ -105,7 +106,8 @@ def test_api_auth_uses_the_documented_scheme(monkeypatch):
 
     headers = hf._headers()
     assert headers["Authorization"] == "Key key123:secret456"
-    assert "hf-secret" not in headers
+    assert headers["hf-api-key"] == "key123"
+    assert headers["hf-secret"] == "secret456"
 
 
 def test_key_without_secret_is_not_a_working_credential(monkeypatch):
