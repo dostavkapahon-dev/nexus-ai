@@ -274,6 +274,16 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     ratio = ratio or detect_ratio(task)
     tried = []
 
+    # Тип генерации и формат определяем по ИСХОДНОМУ тексту — по-русски в нём и
+    # написано «ролик» или «вертикально». А в саму модель уходит английское
+    # описание: генеративные модели обучены на нём. Уже английский и подробный
+    # запрос переписан не будет, поэтому двойной обработки не происходит.
+    try:
+        from core.media_generator import enrich_image_prompt
+        task = await enrich_image_prompt(task)
+    except Exception:
+        pass
+
     # 1. MCP — основной рабочий путь
     if mcp_configured():
         try:
