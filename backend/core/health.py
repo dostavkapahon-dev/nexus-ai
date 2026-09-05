@@ -22,6 +22,110 @@ SILENT_AFTER_HOURS = 24
 DEGRADED_BELOW = 0.8
 
 
+async def _probe_telegram() -> dict:
+    import os
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    if not token:
+        return {"ok": False, "detail": "токен не задан"}
+    import httpx
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get(f"https://api.telegram.org/bot{token}/getMe")
+    data = r.json()
+    if data.get("ok"):
+        return {"ok": True, "detail": "@" + data["result"].get("username", "")}
+    return {"ok": False, "detail": str(data.get("description", "отказ"))[:120]}
+
+
+async def _probe_memory() -> dict:
+    """Записать и прочитать обратно. Наличие таблицы — ещё не рабочая память."""
+    from sqlalchemy import select
+    from database.models import Connection
+    from datetime import datetime as _dt
+
+    key = "__healthcheck__"
+    stamp = _dt.utcnow().isoformat()
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = stamp
+        else:
+            db.add(Connection(key_name=key, key_value=stamp))
+        await db.commit()
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key))
+        row = r.scalar_one_or_none()
+    if not row or row.key_value != stamp:
+        return {"ok": False, "detail": "записанное не читается обратно"}
+
+    from database.db import storage_info
+    store = storage_info()
+    if not store["persistent"]:
+        return {"ok": False, "detail": "работает, но данные исчезнут при перезапуске"}
+    return {"ok": True, "detail": "запись и чтение подтверждены"}
+
+
+async def _probe_hixiit() -> dict:
+    from core.hixiit import status as hixiit_status
+    st = await hixiit_status()
+    if st.get("mcp_ok"):
+        return {"ok": True, "detail": f"MCP, кредитов: {st.get('credits', '—')}"}
+    if st.get("api_key"):
+        return {"ok": True, "detail": "ключ и секрет заданы"}
+    if st.get("browser_agent"):
+        return {"ok": True, "detail": "через браузер-агент на ПК"}
+    return {"ok": False, "detail": st.get("mcp_error") or "доступа нет"}
+
+
+async def _probe_web() -> dict:
+    from core.websearch import search
+    res = await search("test", 1)
+    if res.get("ok") and res.get("results"):
+        return {"ok": True, "detail": "поиск отвечает"}
+    return {"ok": False, "detail": str(res.get("error") or "пустая выдача")[:120]}
+
+
+async def _probe_instagram() -> dict:
+    from connectors import get_connector
+    conn = get_connector("instagram")
+    if not conn or not conn.configured():
+        return {"ok": False, "detail": "не подключён"}
+    res = await conn.health()
+    if res.get("ok"):
+        return {"ok": True, "detail": str(res.get("account") or "подключён")}
+    return {"ok": False, "detail": str(res.get("error") or "отказ")[:120]}
+
+
+PROBES = {
+    "Telegram": _probe_telegram,
+    "Память": _probe_memory,
+    "HIXIIT": _probe_hixiit,
+    "Интернет-поиск": _probe_web,
+    "Instagram": _probe_instagram,
+}
+
+
+async def probe_all() -> list[dict]:
+    """Живая проверка сервисов: каждый статус — результат настоящего вызова.
+
+    Наличие ключа ничего не доказывает: он может быть просрочен, без квоты или
+    от другого аккаунта. Зелёный статус здесь означает, что запрос прошёл.
+    """
+    import asyncio
+
+    async def one(name, fn):
+        try:
+            res = await asyncio.wait_for(fn(), timeout=45)
+        except asyncio.TimeoutError:
+            res = {"ok": False, "detail": "не ответил за 45 секунд"}
+        except Exception as e:
+            res = {"ok": False, "detail": f"{type(e).__name__}: {str(e)[:110]}"}
+        return {"name": name, **res}
+
+    return list(await asyncio.gather(*(one(n, f) for n, f in PROBES.items())))
+
+
 async def agents(hours: int = 24) -> list[dict]:
     """Состояние агентов из журнала вызовов: доля успеха, расход, последний запуск."""
     since = datetime.utcnow() - timedelta(hours=hours)
