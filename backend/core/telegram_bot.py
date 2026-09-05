@@ -716,16 +716,28 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, "❗ Что сделать? Напр.:\n"
                                "<code>/director разбери мою нишу и сделай план на неделю</code>")
             return
+        _last_task[chat_id] = task
         await send_message(chat_id, f"🧠 Дирижёр взял задачу: <i>{task[:120]}</i>\n"
                                     "Подключаю агентов, это может занять пару минут...")
         try:
             from core.command_center import run_command
-            res = await run_command(task, source="telegram", mirror=False)
+            from core import dialog
+            # Разговор — не набор изолированных команд: «сделай пост», «теперь
+            # картинку», «переделай второй вариант» связаны между собой.
+            # Без истории дирижёр каждый раз начинает с чистого листа.
+            history = await dialog.history(chat_id)
+            res = await run_command(task, source="telegram", mirror=False,
+                                    context=history)
         except Exception as e:
             await send_message(chat_id, f"⚠️ Ошибка дирижёра: {str(e)[:200]}")
             return
-        await send_message(chat_id, res.get("reply") or "Готово.")
+        reply = res.get("reply") or "Готово."
+        await send_message(chat_id, reply, reply_markup=_feedback_kb())
         await _send_director_media(chat_id, res)
+        # В историю кладём и задачу, и ответ: без ответа следующая реплика
+        # («переделай второй вариант») не к чему привязать.
+        await dialog.remember(chat_id, "user", task)
+        await dialog.remember(chat_id, "agent", reply)
         return
 
     if cmd == "music":
@@ -776,6 +788,10 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"✅ Ролик собран ({res.get('clips')} сцен), но не отправился: {res.get('send_error', 'неизвестно')}")
         else:
             await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
+        return
+
+    if cmd.startswith("fb_"):
+        await _handle_feedback(chat_id, cmd[len("fb_"):])
         return
 
     if cmd.startswith("genplan_"):
@@ -1373,6 +1389,55 @@ async def _dispatch_command(chat_id: str, text: str):
             "/config   — настройки",
         ]
         await send_message(chat_id, "🤖 <b>Pakhon Studio · NEXUS AI</b>\n\n" + "\n".join(cmds))
+
+# Последняя задача дирижёра в этом чате — для кнопки «Ещё вариант».
+# Живёт в памяти процесса: переживать перезапуск ей незачем, а после него
+# кнопка честно скажет, что задачу не помнит.
+_last_task: dict[str, str] = {}
+
+
+def _feedback_kb() -> dict:
+    """Оценка результата. Кнопки короче, чем описывать словами, что не так."""
+    return {"inline_keyboard": [[
+        {"text": "👍 Хорошо", "callback_data": "fb_good"},
+        {"text": "👎 Не то", "callback_data": "fb_bad"},
+    ], [
+        {"text": "🔄 Ещё вариант", "callback_data": "fb_again"},
+        {"text": "✏️ Изменить", "callback_data": "fb_edit"},
+    ]]}
+
+
+async def _handle_feedback(chat_id: str, action: str):
+    """Оценку запоминаем в разговоре: она пригодится следующей задаче.
+
+    «Не то» без объяснения бесполезно для будущей генерации, поэтому просим
+    сказать, что именно не подошло, — и это тоже уходит в историю.
+    """
+    from core import dialog
+
+    if action == "good":
+        await dialog.remember(chat_id, "user", "оценка: понравилось")
+        await send_message(chat_id, "👍 Запомнил — буду держаться этого направления.")
+        return
+
+    if action == "bad":
+        await dialog.remember(chat_id, "user", "оценка: не понравилось")
+        await send_message(chat_id, "Понял. Что именно не подошло? "
+                                    "Напиши одной строкой — учту в следующей попытке.")
+        return
+
+    if action == "again":
+        task = _last_task.get(chat_id)
+        if not task:
+            await send_message(chat_id, "❗ Не помню исходную задачу — сформулируй заново.")
+            return
+        await send_message(chat_id, "🔄 Делаю другой вариант…")
+        await _dispatch_command(chat_id, "/director " + task)
+        return
+
+    if action == "edit":
+        await send_message(chat_id, "✏️ Напиши, что поменять — переделаю с учётом этого.")
+
 
 async def _send_director_media(chat_id: str, res: dict):
     """Медиа, созданные дирижёром через HIXIIT, отправляем в чат.
