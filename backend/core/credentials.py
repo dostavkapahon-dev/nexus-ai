@@ -59,7 +59,10 @@ FIELDS: tuple[Field, ...] = (
     Field("nvidia_api_key", "NVIDIA NIM", "ai"),
     Field("github_models_token", "GitHub Models", "ai"),
     Field("heygen_api_key", "HeyGen (аватары)", "ai"),
-    Field("higgsfield_api_key", "HiggsField (видео)", "ai"),
+    Field("higgsfield_api_key", "HiggsField: ключ", "ai",
+          hint="Пара ключ+секрет из cloud.higgsfield.ai. Без секрета запрос отклоняется."),
+    Field("higgsfield_secret", "HiggsField: секрет", "ai",
+          hint="Вторая половина пары. Показывается один раз при создании ключа."),
     Field("runway_api_key", "Runway", "ai"),
     Field("elevenlabs_api_key", "ElevenLabs (озвучка)", "ai"),
     # Telegram
