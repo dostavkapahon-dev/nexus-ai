@@ -152,6 +152,34 @@ NO_AI_REPLY = (
 )
 
 
+async def memory_block() -> str:
+    """Что система про пользователя уже знает — профиль и разборы аккаунтов.
+
+    Без этого на вопрос «какая у меня ниша?» модель отвечала догадкой: ниша
+    хранилась в базе, но в разговор не попадала.
+    """
+    parts = []
+    try:
+        from core import agent_profile
+        prof = await agent_profile.as_prompt()
+        if prof:
+            parts.append(prof)
+    except Exception:
+        pass
+    try:
+        from core.research_store import account_memory
+        acc = await account_memory()
+        if acc:
+            parts.append("--- РАЗБОР АККАУНТОВ (из памяти) ---\n" + acc)
+    except Exception:
+        pass
+    if not parts:
+        return ""
+    return ("\n\nЭто известно о пользователе из памяти системы — отвечай на "
+            "вопросы о нише, бренде и аккаунте по этим данным, не выдумывай:\n"
+            + "\n\n".join(parts))
+
+
 async def chat_reply(text: str, history: str = "") -> str:
     """Свободный ответ, когда это просто вопрос/разговор.
 
@@ -166,7 +194,8 @@ async def chat_reply(text: str, history: str = "") -> str:
         from core import ai_escrow
         if ai_escrow.wanted():
             try:
-                answer = await ai_escrow.ask(CHAT_SYSTEM, text, role="chat",
+                answer = await ai_escrow.ask(CHAT_SYSTEM + await memory_block(),
+                                             text, role="chat",
                                              errors="нет ни одного ключа ИИ")
                 return f"{answer}\n\n{FREE_SIGNUP_HINT}"
             except Exception:
@@ -176,9 +205,10 @@ async def chat_reply(text: str, history: str = "") -> str:
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
         model = ECONOMY_MODELS.get("copywriter", "gemini-2.0-flash")
+        system = CHAT_SYSTEM + await memory_block()
         prompt = (f"Предыдущий разговор:\n{history}\n\nНовое сообщение: {text[:1500]}"
                   if history else text[:1500])
-        res = await ai_router.call(model, CHAT_SYSTEM, prompt)
+        res = await ai_router.call(model, system, prompt)
         return (res.get("text") or "").strip()[:3000] or EMPTY_REPLY
     except Exception as e:
         return f"⚠️ Не смог ответить: {str(e)[:150]}"

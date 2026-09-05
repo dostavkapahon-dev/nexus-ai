@@ -251,15 +251,22 @@ async def _exec_tool(name: str, inp: dict) -> dict:
         # Явный ник конкурента — разбираем именно его; иначе свой из настроек.
         if handle:
             try:
+                from core.social_intel import _remember
+                data = None
                 if target == "instagram":
                     from core.instagram_reader import analyze as ig
-                    return await ig(handle)
-                if target == "youtube":
+                    data = await ig(handle)
+                elif target == "youtube":
                     from core.youtube_reader import analyze as yt
-                    return await yt(handle)
-                if target == "tiktok":
+                    data = await yt(handle)
+                elif target == "tiktok":
                     from core.social_intel import _fetch_channel
-                    return await _fetch_channel("tiktok", handle.lstrip("@"))
+                    data = await _fetch_channel("tiktok", handle.lstrip("@"))
+                if data is not None:
+                    # Разбор по явному нику тоже остаётся в памяти — к нему
+                    # возвращаются вопросом «что там у конкурента».
+                    await _remember(data)
+                    return data
             except Exception as e:
                 return {"ok": False, "error": str(e)[:200]}
         from core.social_intel import get_account_intelligence

@@ -15,7 +15,13 @@ from sqlalchemy import select, func, desc
 from database.db import AsyncSessionLocal
 from database.models import Research, Competitor
 
-KINDS = ("trends", "viral", "competitor", "market")
+KINDS = ("trends", "viral", "competitor", "market", "account")
+
+# Разбор аккаунта живёт в той же истории, что и остальная разведка: иначе
+# результат анализа Instagram виден один раз в чате и пропадает — на следующий
+# вопрос «что у меня с аккаунтом» отвечать уже нечем.
+ACCOUNT_KIND = "account"
+ACCOUNT_TTL_HOURS = 6   # чаще одного раза в 6 часов один и тот же аккаунт не пишем
 
 
 # ─────────────────────────── исследования ───────────────────────────
@@ -266,4 +272,84 @@ async def market_context(niche_id: str = "") -> str:
                          f"вовлечённость {c['avg_engagement']}%")
         parts.append("КОНКУРЕНТЫ:\n" + "\n".join(lines))
 
+    mine = await account_memory(niche_id)
+    if mine:
+        parts.append("МОИ АККАУНТЫ:\n" + mine)
+
     return "\n\n".join(parts)
+
+
+# ─────────────────────────── разбор своего аккаунта ───────────────────────────
+
+def _account_summary(data: dict) -> str:
+    """Человекочитаемая выжимка разбора — она же попадает в промпты агентов."""
+    platform = data.get("platform") or "—"
+    handle = (data.get("handle") or "").lstrip("@")
+    head = f"@{handle} [{platform}]" if handle else platform
+    bits = []
+    if data.get("followers") is not None:
+        bits.append(f"{data['followers']} подписчиков")
+    if data.get("posts_count"):
+        bits.append(f"{data['posts_count']} публикаций")
+    lines = [head + (": " + ", ".join(bits) if bits else "")]
+    for p in (data.get("top_posts") or [])[:3]:
+        title = (p.get("title") or "").replace("\n", " ")[:80]
+        metrics = []
+        for label, key in (("👍", "likes"), ("💬", "comments"), ("👁", "views")):
+            if p.get(key):
+                metrics.append(f"{label}{p[key]}")
+        lines.append(f"  • {title or '—'} {' '.join(metrics)}".rstrip())
+    if data.get("insights_error"):
+        lines.append(f"  ⚠️ метрики неполные: {str(data['insights_error'])[:120]}")
+    return "\n".join(lines)
+
+
+async def remember_account(data: dict, niche_id: str = "") -> str:
+    """Кладёт результат разбора аккаунта в память.
+
+    Без этого анализ Instagram оставался разовым сообщением: стратег и копирайтер
+    на следующем шаге снова работали вслепую, а на вопрос «что у меня в аккаунте»
+    ответить было нечем.
+
+    Возвращает id записи или "" — если разбор неуспешный или такой же свежий
+    срез уже сохранён (иначе плановые прогоны засоряют историю).
+    """
+    if not isinstance(data, dict) or not data.get("ok"):
+        return ""
+    platform = (data.get("platform") or "").strip()
+    if not platform:
+        return ""
+    handle = (data.get("handle") or "").lstrip("@").strip()
+    query = f"{platform}:{handle}"
+
+    async with AsyncSessionLocal() as db:
+        fresh = await db.execute(
+            select(Research)
+            .where(Research.kind == ACCOUNT_KIND, Research.query == query,
+                   Research.created_at >= datetime.utcnow() - timedelta(hours=ACCOUNT_TTL_HOURS))
+            .limit(1))
+        if fresh.scalar_one_or_none():
+            return ""
+
+    findings = {"platform": platform, "handle": handle,
+                "followers": data.get("followers"),
+                "posts_count": data.get("posts_count"),
+                "bio": data.get("bio"),
+                "source": data.get("source"),
+                "top_posts": (data.get("top_posts") or [])[:5]}
+    return await save(kind=ACCOUNT_KIND, query=query,
+                      summary=_account_summary(data), findings=findings,
+                      niche_id=niche_id)
+
+
+async def account_memory(niche_id: str = "", limit: int = 3) -> str:
+    """Свежие разборы аккаунтов одной строкой на площадку — для промптов."""
+    items = await history(ACCOUNT_KIND, niche_id, limit=20)
+    seen: dict[str, dict] = {}
+    for item in items:                      # history отсортирована свежими вперёд
+        seen.setdefault(item.get("query") or "", item)
+    parts = []
+    for item in list(seen.values())[:limit]:
+        stamp = (item.get("created_at") or "")[:10]
+        parts.append(f"(разбор от {stamp})\n{item.get('summary') or ''}")
+    return "\n".join(parts)
