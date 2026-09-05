@@ -180,6 +180,7 @@ async def load_into_env() -> dict:
     открытым текстом, а пользователь считал бы, что защитил их.
     """
     loaded = unreadable = re_encrypted = 0
+    shadowed: list[str] = []
     async with AsyncSessionLocal() as db:
         r = await db.execute(select(Connection))
         rows = list(r.scalars())
@@ -195,7 +196,16 @@ async def load_into_env() -> dict:
                 print(f"[NEXUS] доступ {conn.key_name} зашифрован, но NEXUS_SECRET_KEY "
                       f"не задан или не тот — значение недоступно", flush=True)
                 continue
-            os.environ[conn.key_name.upper()] = value
+            env_name = conn.key_name.upper()
+            # Значение из дашборда перекрывает переменную хостинга. Само по себе
+            # это правильно — человек редактирует именно в дашборде. Но молчать
+            # об этом нельзя: положив новый ключ в Render поверх старого,
+            # сохранённого на сайте, человек не увидит никакого эффекта и будет
+            # искать поломку там, где её нет.
+            previous = os.environ.get(env_name)
+            if previous and previous != value:
+                shadowed.append(env_name)
+            os.environ[env_name] = value
             loaded += 1
             if secrets.enabled() and not secrets.is_encrypted(raw):
                 conn.key_value = secrets.encrypt(value)
@@ -204,7 +214,11 @@ async def load_into_env() -> dict:
             await db.commit()
     if re_encrypted:
         print(f"[NEXUS] зашифровано сохранённых доступов: {re_encrypted}", flush=True)
-    return {"loaded": loaded, "unreadable": unreadable, "encrypted_now": re_encrypted}
+    if shadowed:
+        print(f"[NEXUS] заданы и в дашборде, и в переменных хостинга — "
+              f"используется дашборд: {', '.join(shadowed)}", flush=True)
+    return {"loaded": loaded, "unreadable": unreadable, "encrypted_now": re_encrypted,
+            "shadowed": shadowed}
 
 
 async def overview() -> dict:
