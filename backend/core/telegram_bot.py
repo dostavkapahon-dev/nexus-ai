@@ -778,6 +778,24 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
         return
 
+    if cmd.startswith("genplan_"):
+        plan_id = cmd[len("genplan_"):]
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(ContentPlan).where(ContentPlan.id == plan_id))
+            plan = r.scalar_one_or_none()
+        if not plan:
+            await send_message(chat_id, "❌ Пункт плана не найден — возможно, он уже создан.")
+            return
+        from core.orchestrator import nexus_core
+        from core.task_manager import spawn
+        await send_message(chat_id, f"✍️ Создаю по плану: <b>{plan.topic[:80]}</b>\n"
+                                    f"День {plan.day_number} · {plan.platform}\n"
+                                    "Готовое придёт на согласование.")
+        await spawn("content", f"план: {plan.topic[:60]}",
+                    lambda pid=plan_id: nexus_core.generate_content_for_plan(pid),
+                    source="telegram")
+        return
+
     if cmd in ("model", "models", "модель"):
         await _show_model_menu(chat_id)
         return
@@ -1190,12 +1208,20 @@ async def _dispatch_command(chat_id: str, text: str):
             )
             plans = result.scalars().all()
         if not plans:
-            await send_message(chat_id, "📋 Контент-план пуст")
+            await send_message(chat_id, "📋 Контент-план пуст.\nСоставить: /plan7")
             return
-        lines = ["📋 <b>Контент-план (ближайшие 7)</b>", ""]
+        lines = ["📋 <b>Контент-план</b>", ""]
         for p in plans:
-            lines.append(f"День {p.day_number} · {p.platform} · {p.topic[:50]}")
-        await send_message(chat_id, "\n".join(lines))
+            lines.append(f"День {p.day_number} · {p.platform} · {p.topic[:60]}")
+        lines += ["", "Нажми день — создам публикацию по этому пункту."]
+
+        # Раньше пункт можно было запустить только командой /generate с UUID:
+        # такое никто не наберёт, и план оставался списком, из которого ничего
+        # не создать. Кнопка ведёт к тому же существующему генератору.
+        buttons = [[{"text": f"▶️ День {p.day_number}: {p.topic[:28]}",
+                     "callback_data": f"genplan_{p.id}"}] for p in plans]
+        await send_message(chat_id, "\n".join(lines),
+                           reply_markup={"inline_keyboard": buttons[:10]})
 
     elif cmd == "report":
         async with AsyncSessionLocal() as db:
