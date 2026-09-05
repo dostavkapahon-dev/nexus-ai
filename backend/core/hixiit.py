@@ -334,6 +334,25 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
             "error": "HIXIIT недоступен ни одним путём:\n• " + "\n• ".join(tried)}
 
 
+async def available_models(kind: str = "image") -> list[dict]:
+    """Модели HIXIIT, доступные аккаунту, — для выбора в настройках.
+
+    Список берётся у аккаунта, а не из зашитого перечня: каталог Higgsfield
+    меняется, и зашитые id рано или поздно перестают существовать. Если MCP
+    недоступен, честно возвращаем пусто — выбирать не из чего.
+    """
+    if not mcp_configured():
+        return []
+    try:
+        res = await _mcp_call("models_explore", {"action": "list", "type": kind,
+                                                 "limit": 50}, timeout=60)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return []
+    return [{"value": m["id"], "label": m["name"], "group": "HIXIIT",
+             "connected": True} for m in _as_model_list(res)]
+
+
 async def status() -> dict:
     """Диагностика генеративного слоя — для команды /hixiit в Telegram."""
     from core.higgsfield import credentials as _hf_creds

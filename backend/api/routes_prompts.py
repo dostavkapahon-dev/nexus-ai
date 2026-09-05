@@ -23,7 +23,19 @@ async def list_models():
     было нельзя, хотя система их поддерживает.
     """
     from core.ai_router import catalog
-    return {"models": catalog()}
+    models = catalog()
+
+    # Модели изображений и видео живут у HIXIIT и меняются на его стороне,
+    # поэтому спрашиваем их у аккаунта, а не держим второй зашитый список.
+    try:
+        from core.hixiit import available_models
+        for kind, group in (("image", "HIXIIT · изображения"), ("video", "HIXIIT · видео")):
+            for m in await available_models(kind):
+                models.append({**m, "group": group})
+    except Exception:
+        pass
+
+    return {"models": models}
 
 
 @router.get("")
