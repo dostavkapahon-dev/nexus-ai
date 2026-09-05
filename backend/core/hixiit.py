@@ -299,25 +299,29 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
-    # 2. REST по ключу+секрету из Higgsfield Cloud
+    # 2. REST по ключу+секрету из Higgsfield Cloud.
+    # Картинки идут сюда же: Soul умеет text2image, и раньше этот путь просто
+    # отказывался их делать, из-за чего визуал уезжал на бесплатный Pollinations.
     from core.higgsfield import credentials as _hf_credentials
     if _hf_credentials():
-        if kind == "video":
-            try:
-                from core.higgsfield import create_video, poll_video
-                started = await create_video(prompt=task, image_url=image_url, ratio=ratio)
-                if started.get("ok"):
-                    done = await poll_video(started["job_id"])
-                    if done.get("ok") and done.get("url"):
-                        return {"ok": True, "url": done["url"], "provider": "higgsfield_api",
-                                "kind": "video", "model": os.getenv("HIGGSFIELD_MODEL", "default")}
-                    tried.append(f"REST: {done.get('error', 'нет ссылки на видео')}")
-                else:
-                    tried.append(f"REST: {started.get('error', 'запуск не удался')}")
-            except Exception as e:
-                tried.append(f"REST: {str(e)[:200]}")
-        else:
-            tried.append("REST: генерация изображений через API не поддерживается")
+        try:
+            from core import higgsfield as hf
+            if kind == "video":
+                done = await hf.generate_video(task, image_url=image_url or "", ratio=ratio)
+                model = os.getenv("HIGGSFIELD_MODEL", "dop-turbo")
+            else:
+                done = await hf.generate_image(task, ratio=ratio)
+                model = "soul"
+            if done.get("ok") and done.get("url"):
+                out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
+                       "kind": kind, "model": model}
+                if done.get("preview_image"):
+                    out["preview_image"] = done["preview_image"]
+                return out
+            tried.append(f"REST: {done.get('error', 'нет ссылки на результат')}")
+        except BaseException as e:
+            _reraise_control_flow(e)
+            tried.append(f"REST: {type(e).__name__}: {str(e)[:200]}")
     else:
         tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
@@ -418,6 +422,19 @@ async def status() -> dict:
         "api_key": bool(_hf_creds()),
         "default_model": os.getenv("HIGGSFIELD_MODEL", "auto"),
     }
+    # Наличие ключа ничего не доказывает: он бывает от другого аккаунта, без
+    # кредитов или просрочен. Поэтому спрашиваем сам Higgsfield.
+    if out["api_key"]:
+        try:
+            from core.higgsfield import check as _hf_check
+            res = await _hf_check()
+            out["api_ok"] = bool(res.get("ok"))
+            if not res.get("ok"):
+                out["api_error"] = res.get("error", "")
+        except BaseException as e:
+            _reraise_control_flow(e)
+            out["api_ok"] = False
+            out["api_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     try:
         from api.routes_desktop import desktop_connected
         out["browser_agent"] = desktop_connected()

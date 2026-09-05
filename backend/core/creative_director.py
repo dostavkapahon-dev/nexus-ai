@@ -103,14 +103,17 @@ def choose_strategy(content_type: str = "auto") -> dict:
             return desktop_connected()
         except Exception:
             return False
-    has_hf = bool(os.getenv("HIGGSFIELD_API_KEY")) or _agent_on()
+    # Ключ без секрета Higgsfield не принимает: считать его доступом — значит
+    # выбрать путь, который гарантированно упадёт на 401 вместо запасного.
+    from core.higgsfield import credentials as _hf_creds
+    has_hf = bool(_hf_creds()) or _agent_on()
     has_hg = bool(os.getenv("HEYGEN_API_KEY"))
     has_rw = bool(os.getenv("RUNWAY_API_KEY"))
 
     # Принудительный выбор провайдера видео через env VIDEO_PROVIDER.
     forced = os.getenv("VIDEO_PROVIDER", "").lower().strip()
     if forced == "higgsfield":
-        via = "API" if os.getenv("HIGGSFIELD_API_KEY") else "ваш аккаунт (браузер-агент)"
+        via = "API" if _hf_creds() else "ваш аккаунт (браузер-агент)"
         return {"strategy": "storyboard_to_higgsfield",
                 "reason": f"HiggsField ({via}) — принудительно (VIDEO_PROVIDER)",
                 "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
@@ -121,7 +124,7 @@ def choose_strategy(content_type: str = "auto") -> dict:
                 "est_cost": COST_HINT["heygen_avatar"], "needs": "HEYGEN_API_KEY", "fallback": False}
 
     if has_hf:
-        via = "API" if os.getenv("HIGGSFIELD_API_KEY") else "ваш аккаунт (браузер-агент)"
+        via = "API" if _hf_creds() else "ваш аккаунт (браузер-агент)"
         return {"strategy": "storyboard_to_higgsfield",
                 "reason": f"HiggsField ({via}): раскадровка (безлимит фото) → анимация image2video",
                 "est_cost": COST_HINT["imagen_image"] * 4 + COST_HINT["higgsfield_video"],
