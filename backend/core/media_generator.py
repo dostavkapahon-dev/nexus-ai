@@ -39,12 +39,71 @@ async def _track_media(provider: str, kind: str, ok: bool,
     except Exception:
         pass
 
+_PROMPT_SYSTEM = (
+    "Ты — художник-постановщик. Преврати запрос в короткое английское описание "
+    "КАДРА для генератора изображений: что в кадре, ракурс, свет, стиль, фон. "
+    "Без вступлений и пояснений — только само описание, одной строкой."
+)
+
+
+def _needs_enrichment(prompt: str) -> bool:
+    """Короткий запрос или кириллица — генератору этого мало.
+
+    Модели изображений обучены на английских описаниях. Русское слово из одного
+    корня даёт случайную картинку, и со стороны это выглядит как «система не
+    понимает, что я прошу».
+    """
+    text = (prompt or "").strip()
+    if len(text.split()) >= 12:
+        return False
+    return bool(text) and (len(text.split()) < 6
+                           or any("а" <= c.lower() <= "я" for c in text))
+
+
+async def enrich_image_prompt(prompt: str) -> str:
+    """Разворачивает короткий запрос в описание кадра. Не вышло — вернёт исходный."""
+    if not _needs_enrichment(prompt):
+        return prompt
+    try:
+        from core.skills import smart_text
+        better = (await smart_text("bulk", _PROMPT_SYSTEM, prompt or "")).strip()
+    except Exception:
+        return prompt
+    # Модель иногда отвечает рассуждением: слишком длинный ответ доверия не вызывает.
+    if better and 3 <= len(better.split()) <= 80:
+        return better.strip('"').strip()
+    return prompt
+
+
 async def generate_image(prompt: str, provider: str = "auto", platform: str = "telegram") -> str:
     """Returns image URL. Provider: auto/imagen/dalle3/stability/pollinations.
 
     По ТЗ Pakhon Studio primary — Gemini Imagen, fallback — остальные.
     """
     size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
+    prompt = await enrich_image_prompt(prompt)
+
+    # HIXIIT (Higgsfield) — основной генеративный слой: он сам подбирает модель
+    # под задачу. Раньше его здесь не было вовсе, и картинки шли мимо него:
+    # без ключей Gemini/OpenAI цепочка сразу падала на бесплатный Pollinations,
+    # который по короткому запросу выдаёт что угодно.
+    if provider in ("auto", "hixiit", "higgsfield"):
+        t0 = time.time()
+        try:
+            from core.hixiit import generate as hixiit_generate
+            res = await hixiit_generate(prompt, kind="image",
+                                        ratio="9:16" if size == "1080x1920" else "1:1",
+                                        allow_free=False)
+        except Exception as e:
+            res = {"ok": False, "error": str(e)[:200]}
+        if res.get("ok") and res.get("url"):
+            await _track_media("hixiit", "image", True, time.time() - t0)
+            return res["url"]
+        await _track_media("hixiit", "image", False, time.time() - t0,
+                           str(res.get("error"))[:200])
+        if provider in ("hixiit", "higgsfield"):
+            # Провайдер выбран явно — молча подменять его другим нельзя.
+            raise RuntimeError(f"HIXIIT недоступен: {res.get('error')}")
 
     # Порядок: платные по наличию ключа → бесплатный Pollinations как гарантия.
     chain = []

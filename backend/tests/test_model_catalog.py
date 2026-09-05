@@ -38,3 +38,32 @@ async def test_models_route_is_not_swallowed_by_agent_route(auth_client):
     """`/prompts/models` не должен попасть в обработчик `/prompts/{agent_name}`."""
     r = await auth_client.get("/api/prompts/models")
     assert "models" in r.json(), "маршрут перехвачен обработчиком агента"
+
+
+@pytest.mark.asyncio
+async def test_hixiit_models_appear_when_account_is_connected(auth_client, monkeypatch):
+    """Модели изображений и видео берутся у аккаунта HIXIIT, а не из зашитого списка."""
+    async def fake_models(kind="image"):
+        return [{"value": f"model-{kind}", "label": f"Модель {kind}",
+                 "group": "HIXIIT", "connected": True}]
+
+    monkeypatch.setattr("core.hixiit.available_models", fake_models)
+
+    r = await auth_client.get("/api/prompts/models")
+    groups = {m["group"] for m in r.json()["models"]}
+
+    assert "HIXIIT · изображения" in groups
+    assert "HIXIIT · видео" in groups
+
+
+@pytest.mark.asyncio
+async def test_catalog_survives_hixiit_being_down(auth_client, monkeypatch):
+    """Недоступный HIXIIT не должен ломать весь список моделей."""
+    async def boom(kind="image"):
+        raise RuntimeError("MCP недоступен")
+
+    monkeypatch.setattr("core.hixiit.available_models", boom)
+
+    r = await auth_client.get("/api/prompts/models")
+    assert r.status_code == 200
+    assert any(m["value"] == "claude-sonnet-4-6" for m in r.json()["models"])
