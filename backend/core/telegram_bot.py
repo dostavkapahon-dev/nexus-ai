@@ -127,6 +127,7 @@ async def setup_bot_commands():
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
+        {"command": "model", "description": "Выбор моделей: AI, изображения, видео"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
@@ -777,6 +778,25 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, f"⚠️ Монтаж не удался: {res.get('error')}")
         return
 
+    if cmd in ("model", "models", "модель"):
+        await _show_model_menu(chat_id)
+        return
+
+    if cmd.startswith("setai_"):
+        value = cmd[len("setai_"):]
+        await _save_ai_model(chat_id, "" if value == "auto" else value)
+        return
+
+    if cmd.startswith(("setimg_", "setvid_")):
+        kind = "image" if cmd.startswith("setimg_") else "video"
+        value = cmd.split("_", 1)[1]
+        from core.hixiit import set_preferred_model
+        await set_preferred_model(kind, "" if value == "auto" else value)
+        human = "изображений" if kind == "image" else "видео"
+        await send_message(chat_id, f"💾 Модель {human}: <b>{value}</b>\nСохранено — "
+                                    "используется и после перезапуска.")
+        return
+
     if cmd in ("hixiit", "hixit", "higgsfield"):
         from core.hixiit import status as hixiit_status
         st = await hixiit_status()
@@ -859,7 +879,15 @@ async def _dispatch_command(chat_id: str, text: str):
                 "Лечится один раз: задайте <code>DATABASE_URL</code> (Postgres) "
                 "в переменных сервиса — данные перестанут теряться.",
             ]
-        await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю ключи ИИ вживую...")
+        await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю сервисы вживую...")
+
+        # Наличие ключа ничего не доказывает: он может быть просрочен, без квоты
+        # или от другого аккаунта. Здесь каждый статус — результат настоящего
+        # вызова, а не записи в настройках.
+        from core.health import probe_all
+        probes = await probe_all()
+        await send_message(chat_id, "🩺 <b>Живая проверка</b>\n" + "\n".join(
+            f"{'🟢' if p['ok'] else '🔴'} {p['name']} — {p['detail']}" for p in probes))
 
         # Реальная проверка: ключ может быть задан, но невалиден/без квоты.
         checks = []
@@ -1340,6 +1368,74 @@ async def _send_director_media(chat_id: str, res: dict):
                 await send_photo(chat_id, url, "")
         except Exception as e:
             await send_message(chat_id, f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>")
+
+
+def _model_rows(models: list, prefix: str, current: str) -> list:
+    """Кнопки моделей. Показываем только те, что реально заработают.
+
+    Модель без ключа в списке — это обещание, которое система не выполнит:
+    человек её выберет и получит отказ вместо результата.
+    """
+    rows = [[{"text": ("✅ " if not current else "") + "AUTO — решает система",
+              "callback_data": f"{prefix}auto"}]]
+    for m in models:
+        if not m.get("connected"):
+            continue
+        mark = "✅ " if m["value"] == current else ""
+        rows.append([{"text": f"{mark}{m['label']}"[:60],
+                      "callback_data": f"{prefix}{m['value']}"}])
+    return rows
+
+
+async def _show_model_menu(chat_id: str):
+    """Три уровня выбора: мозг, изображения, видео — это разные модели."""
+    from core.ai_router import catalog, chosen_model
+    from core.hixiit import available_models, preferred_model
+
+    current_ai = await chosen_model()
+    ai_rows = _model_rows(catalog(), "setai_", current_ai)
+
+    lines = ["🤖 <b>Модели</b>", "",
+             f"🧠 AI (тексты, анализ, решения): "
+             f"<b>{current_ai or 'AUTO'}</b>"]
+
+    img_models = await available_models("image")
+    vid_models = await available_models("video")
+    cur_img = await preferred_model("image")
+    cur_vid = await preferred_model("video")
+    lines.append(f"🎨 Изображения: <b>{cur_img or 'AUTO'}</b>")
+    lines.append(f"🎬 Видео: <b>{cur_vid or 'AUTO'}</b>")
+
+    if not img_models and not vid_models:
+        lines += ["", "⚠️ Модели HIXIIT недоступны — проверь /hixiit.",
+                  "Пока выбирать можно только AI-модель."]
+    lines += ["", "AUTO — система подбирает модель под задачу.",
+              "Показаны только модели, для которых есть доступ."]
+
+    await send_message(chat_id, "\n".join(lines),
+                       reply_markup={"inline_keyboard": ai_rows[:12]})
+
+    for models, prefix, title, current in (
+            (img_models, "setimg_", "🎨 Модель изображений", cur_img),
+            (vid_models, "setvid_", "🎬 Модель видео", cur_vid)):
+        if models:
+            await send_message(chat_id, f"<b>{title}</b>", reply_markup={
+                "inline_keyboard": _model_rows(models, prefix, current)[:12]})
+
+
+async def _save_ai_model(chat_id: str, value: str):
+    """Сохраняет выбор AI-модели в профиль — тот же, что читает роутер."""
+    from database.models import UserProfile
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(UserProfile).limit(1))
+        prof = r.scalar_one_or_none()
+        if not prof:
+            prof = UserProfile()
+            db.add(prof)
+        prof.active_ai = value or "auto"
+        await db.commit()
+    await send_message(chat_id, f"💾 AI-модель: <b>{value or 'AUTO'}</b>\n"
+                                "Сохранено — используется и после перезапуска.")
 
 
 async def _handle_media(chat_id: str, msg: dict):

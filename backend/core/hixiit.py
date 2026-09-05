@@ -132,10 +132,15 @@ def _text_of(res) -> str:
 
 
 async def pick_model(task: str, kind: str, has_reference: bool = False) -> dict:
-    """Авто-выбор модели: спрашиваем РЕАЛЬНЫЙ каталог аккаунта, а не хардкод.
+    """Модель для генерации: ручной выбор пользователя → авто-подбор по каталогу.
 
-    Возвращает {'id': ..., 'name': ...} либо {} если каталог недоступен.
+    Раньше выбор был только автоматическим. Если человек указал модель явно,
+    подбирать другую нельзя — он ждёт именно её.
     """
+    manual = await preferred_model(kind)
+    if manual:
+        return {"id": manual, "name": manual}
+
     key = (kind, "image" if has_reference else "text")
     now = time.time()
     cached = _models_cache.get(key)
@@ -342,6 +347,48 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
 
     return {"ok": False, "kind": kind, "tried": tried,
             "error": "HIXIIT недоступен ни одним путём:\n• " + "\n• ".join(tried)}
+
+
+# Выбранные пользователем модели HIXIIT. Хранятся там же, где остальное
+# состояние системы (KV в таблице Connection), поэтому переживают перезапуск
+# и не требуют миграции схемы.
+PREF_KEYS = {"image": "hixiit_image_model", "video": "hixiit_video_model"}
+
+
+async def preferred_model(kind: str) -> str:
+    """Модель, выбранная пользователем для этого вида генерации. Пусто — «авто»."""
+    key = PREF_KEYS.get(kind)
+    if not key:
+        return ""
+    try:
+        from sqlalchemy import select
+        from database.db import AsyncSessionLocal
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(Connection.key_name == key))
+            row = r.scalar_one_or_none()
+        return (row.key_value or "").strip() if row else ""
+    except Exception:
+        return ""
+
+
+async def set_preferred_model(kind: str, value: str) -> bool:
+    """Запоминает выбор модели. Пустое значение возвращает режим «авто»."""
+    key = PREF_KEYS.get(kind)
+    if not key:
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=key, key_value=value))
+        await db.commit()
+    return True
 
 
 async def available_models(kind: str = "image") -> list[dict]:

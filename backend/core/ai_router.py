@@ -343,13 +343,51 @@ def estimate_cost(ai_mode: str, posts_per_day: int, days: int) -> float:
     return round(total_tokens / 1000 * avg_cost, 2)
 
 
-async def pick_model(role: str, default: str = "", mode: str = "") -> str:
-    """Модель для роли с учётом режима экономии.
+# Значения active_ai из старых версий — это названия провайдеров, а не моделей.
+# Считаем их «авто»: раньше поле всё равно ни на что не влияло, и трактовать
+# «claude» как конкретную модель значило бы менять поведение задним числом.
+_LEGACY_ACTIVE_AI = {"", "auto", "claude", "gpt4o", "openai", "gemini", "google",
+                     "deepseek", "sonar", "perplexity"}
 
-    Раньше переключатель `ai_mode` в профиле ни на что не влиял: агенты брали модель
-    только из prompt_store. Теперь economy/premium реально выбирает набор моделей,
-    а явно заданная пользователем модель (кастомный промпт) остаётся приоритетнее.
+
+def _catalog_values() -> set:
+    return {v for v, _, _ in CATALOG} | {s["alias"] for s in FREE_PROVIDERS.values()}
+
+
+async def chosen_model() -> str:
+    """Модель, которую пользователь выбрал вручную. Пусто — режим «авто».
+
+    Раньше выбор в профиле (`active_ai`) записывался, но не читался никем:
+    человек выбирал Gemini, а работала прежняя модель. Пустая строка здесь
+    означает именно «решай сам», а не «нет настройки».
     """
+    try:
+        from database.db import AsyncSessionLocal
+        from database.models import UserProfile
+        from sqlalchemy import select as _select
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(_select(UserProfile).limit(1))
+            prof = r.scalar_one_or_none()
+        value = ((prof.active_ai if prof else "") or "").strip()
+    except Exception:
+        return ""
+    if value.lower() in _LEGACY_ACTIVE_AI or value not in _catalog_values():
+        return ""
+    # Выбранная модель без ключа не заработает — молча пробовать её значит
+    # получить отказ вместо результата.
+    return value if _has_key(value) else ""
+
+
+async def pick_model(role: str, default: str = "", mode: str = "") -> str:
+    """Модель для роли: ручной выбор пользователя → режим экономии → умолчание.
+
+    Ручной выбор приоритетнее набора economy/premium: если человек выбрал
+    модель, система должна использовать именно её. Кастомный промпт агента
+    по-прежнему приоритетнее всего — он задаётся точечно для одной роли.
+    """
+    manual = await chosen_model()
+    if manual:
+        return manual
     if not mode:
         try:
             from database.db import AsyncSessionLocal
