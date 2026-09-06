@@ -299,6 +299,8 @@ async def generate_clip(prompt: str, script: str = "", image_url: str = None,
     )
     # Раньше причина отказа каждого провайдера терялась, и наверх уходило общее
     # «нет провайдера» — чинить по такому сообщению было невозможно.
+    from core.higgsfield import credentials as hf_credentials
+
     attempts = {}
     for p in order:
         t0 = time.time()
@@ -314,17 +316,16 @@ async def generate_clip(prompt: str, script: str = "", image_url: str = None,
                         await _track_media(p, "video", True, time.time() - t0)
                         return {"ok": True, "url": done["url"], "provider": "heygen"}
                     attempts[p] = str(done.get("error", "видео не готово"))[:200]
-            elif p == "higgsfield" and os.getenv("HIGGSFIELD_API_KEY"):
-                from core.higgsfield import create_video, poll_video as hf_poll
-                started = await create_video(prompt, image_url=image_url, ratio=ratio, model=model)
-                if not started.get("ok"):
-                    attempts[p] = str(started.get("error", "не удалось запустить"))[:200]
-                else:
-                    done = await hf_poll(started["job_id"])
-                    if done.get("ok"):
-                        await _track_media(p, "video", True, time.time() - t0)
-                        return {"ok": True, "url": done["url"], "provider": "higgsfield"}
-                    attempts[p] = str(done.get("error", "видео не готово"))[:200]
+            elif p == "higgsfield" and hf_credentials():
+                # generate_video сам нарисует кадр, если его нет: DoP оживляет
+                # картинку и без неё работать не может.
+                from core.higgsfield import generate_video as hf_video
+                done = await hf_video(prompt, image_url=image_url or "",
+                                      ratio=ratio, model=model)
+                if done.get("ok"):
+                    await _track_media(p, "video", True, time.time() - t0)
+                    return {"ok": True, "url": done["url"], "provider": "higgsfield"}
+                attempts[p] = str(done.get("error", "видео не готово"))[:200]
             elif p == "runway" and os.getenv("RUNWAY_API_KEY"):
                 task_id = await generate_video(prompt, image_url)
                 if not task_id:

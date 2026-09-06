@@ -299,25 +299,34 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
-    # 2. REST по ключу+секрету из Higgsfield Cloud
+    # 2. REST по ключу+секрету из Higgsfield Cloud.
+    # Картинки идут сюда же: Soul умеет text2image, и раньше этот путь просто
+    # отказывался их делать, из-за чего визуал уезжал на бесплатный Pollinations.
     from core.higgsfield import credentials as _hf_credentials
     if _hf_credentials():
-        if kind == "video":
-            try:
-                from core.higgsfield import create_video, poll_video
-                started = await create_video(prompt=task, image_url=image_url, ratio=ratio)
-                if started.get("ok"):
-                    done = await poll_video(started["job_id"])
-                    if done.get("ok") and done.get("url"):
-                        return {"ok": True, "url": done["url"], "provider": "higgsfield_api",
-                                "kind": "video", "model": os.getenv("HIGGSFIELD_MODEL", "default")}
-                    tried.append(f"REST: {done.get('error', 'нет ссылки на видео')}")
-                else:
-                    tried.append(f"REST: {started.get('error', 'запуск не удался')}")
-            except Exception as e:
-                tried.append(f"REST: {str(e)[:200]}")
-        else:
-            tried.append("REST: генерация изображений через API не поддерживается")
+        try:
+            from core import higgsfield as hf
+            # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
+            # ждёт именно её.
+            chosen = await preferred_model(kind)
+            if kind == "video":
+                model = chosen if chosen in hf.DOP_MODELS else os.getenv(
+                    "HIGGSFIELD_MODEL", "dop-turbo")
+                done = await hf.generate_video(task, image_url=image_url or "",
+                                               ratio=ratio, model=model)
+            else:
+                done = await hf.generate_image(task, ratio=ratio)
+                model = "soul"
+            if done.get("ok") and done.get("url"):
+                out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
+                       "kind": kind, "model": model}
+                if done.get("preview_image"):
+                    out["preview_image"] = done["preview_image"]
+                return out
+            tried.append(f"REST: {done.get('error', 'нет ссылки на результат')}")
+        except BaseException as e:
+            _reraise_control_flow(e)
+            tried.append(f"REST: {type(e).__name__}: {str(e)[:200]}")
     else:
         tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
@@ -392,22 +401,60 @@ async def set_preferred_model(kind: str, value: str) -> bool:
 
 
 async def available_models(kind: str = "image") -> list[dict]:
-    """Модели HIXIIT, доступные аккаунту, — для выбора в настройках.
+    """Модели, из которых можно выбирать для этого вида генерации.
 
-    Список берётся у аккаунта, а не из зашитого перечня: каталог Higgsfield
-    меняется, и зашитые id рано или поздно перестают существовать. Если MCP
-    недоступен, честно возвращаем пусто — выбирать не из чего.
+    Два источника: каталог аккаунта через MCP (он меняется, поэтому не зашит) и
+    модели REST-пути. Раньше без MCP список был пустым, и меню отвечало «нет ни
+    одной модели», хотя ключ Higgsfield работал и генерация шла.
     """
-    if not mcp_configured():
-        return []
-    try:
-        res = await _mcp_call("models_explore", {"action": "list", "type": kind,
-                                                 "limit": 50}, timeout=60)
-    except BaseException as e:
-        _reraise_control_flow(e)
-        return []
-    return [{"value": m["id"], "label": m["name"], "group": "HIXIIT",
-             "connected": True} for m in _as_model_list(res)]
+    out: list[dict] = []
+    if mcp_configured():
+        try:
+            res = await _mcp_call("models_explore", {"action": "list", "type": kind,
+                                                     "limit": 50}, timeout=60)
+            out += [{"value": m["id"], "label": m["name"], "group": "HIXIIT",
+                     "connected": True} for m in _as_model_list(res)]
+        except BaseException as e:
+            _reraise_control_flow(e)
+
+    from core.higgsfield import catalog as hf_catalog
+    seen = {m["value"] for m in out}
+    out += [m for m in hf_catalog(kind) if m["value"] not in seen]
+    return out
+
+
+async def _key_sources() -> list[dict]:
+    """Для каждой половины доступа: заполнена ли, откуда и последние 4 символа."""
+    from core import credentials
+    shadowed = set(credentials.LAST_LOAD.get("shadowed") or [])
+    out = []
+    for env_name, human in (("HIGGSFIELD_API_KEY", "ключ"),
+                            ("HIGGSFIELD_SECRET", "секрет")):
+        value = (os.getenv(env_name) or "").strip()
+        # Именно запись в базе, а не credentials.get(): тот при отсутствии
+        # записи возвращает значение окружения, и источник всегда выглядел бы
+        # как «дашборд».
+        try:
+            from sqlalchemy import select
+            from database.db import AsyncSessionLocal
+            from database.models import Connection
+            async with AsyncSessionLocal() as db:
+                r = await db.execute(select(Connection).where(
+                    Connection.key_name == env_name.lower()))
+                saved = r.scalar_one_or_none() is not None
+        except Exception:
+            saved = False
+        if not value:
+            source = "не задан"
+        elif env_name in shadowed:
+            source = "дашборд (перекрывает Render)"
+        elif saved:
+            source = "дашборд"
+        else:
+            source = "переменная хостинга"
+        out.append({"name": human, "env": env_name, "filled": bool(value),
+                    "source": source, "tail": value[-4:] if len(value) > 4 else ""})
+    return out
 
 
 async def status() -> dict:
@@ -418,6 +465,24 @@ async def status() -> dict:
         "api_key": bool(_hf_creds()),
         "default_model": os.getenv("HIGGSFIELD_MODEL", "auto"),
     }
+    # Откуда приехали ключ и секрет и чем заканчиваются: без этого нельзя
+    # понять, почему «в Render всё вписано», а запрос отклонён — значение из
+    # дашборда молча перекрывает переменную хостинга.
+    out["key_sources"] = await _key_sources()
+
+    # Наличие ключа ничего не доказывает: он бывает от другого аккаунта, без
+    # кредитов или просрочен. Поэтому спрашиваем сам Higgsfield.
+    if out["api_key"]:
+        try:
+            from core.higgsfield import check as _hf_check
+            res = await _hf_check()
+            out["api_ok"] = bool(res.get("ok"))
+            if not res.get("ok"):
+                out["api_error"] = res.get("error", "")
+        except BaseException as e:
+            _reraise_control_flow(e)
+            out["api_ok"] = False
+            out["api_error"] = f"{type(e).__name__}: {str(e)[:150]}"
     try:
         from api.routes_desktop import desktop_connected
         out["browser_agent"] = desktop_connected()

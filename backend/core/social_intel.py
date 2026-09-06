@@ -280,7 +280,22 @@ async def get_account_intelligence(platforms: list[str] | None = None) -> dict:
             continue
         out["accounts"][p] = await _fetch_channel(p, handle)
 
+    # Разбор уходит в память: иначе он виден один раз и пропадает, а стратег и
+    # копирайтер на следующем шаге снова работают вслепую.
+    for data in out["accounts"].values():
+        await _remember(data)
+
     return out
+
+
+async def _remember(data: dict):
+    """Сохраняет удачный разбор в историю исследований. Сбой памяти не должен
+    рушить сам разбор — он уже получен и нужен вызывающему."""
+    try:
+        from core.research_store import remember_account
+        await remember_account(data)
+    except Exception:
+        pass
 
 
 # ─────────── совместимость со старыми роутами /api/social/* ───────────

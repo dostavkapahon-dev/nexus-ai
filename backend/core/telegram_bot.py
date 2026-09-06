@@ -244,8 +244,9 @@ async def _provider_lines() -> list:
     """Все ИИ-провайдеры с ключами и источником ключа.
 
     Источник важнее галочки: ключ из переменных окружения переживёт деплой, а
-    сохранённый в базе — нет, пока не подключена постоянная БД. Без этой пометки
-    «ключи пропали сами» выглядит мистикой.
+    сохранённый в базе — только если база постоянная. Без этой пометки «ключи
+    пропали сами» выглядит мистикой; с неверной — наоборот, заставляет чинить
+    уже настроенное.
     """
     from sqlalchemy import select
 
@@ -256,13 +257,22 @@ async def _provider_lines() -> list:
         r = await db.execute(select(Connection.key_name))
         in_db = {row[0].upper() for row in r.all()}
 
+    from database.db import storage_info
+    persistent = bool(storage_info().get("persistent"))
+
     lines = []
     for provider, env in sorted(PROVIDER_KEY_ENV.items()):
         if not env or provider in ("openai", "gemini"):
             continue                       # эти два проверяются выше, живьём
         if not os.getenv(env):
             continue                       # не задан — не шумим, их два десятка
-        where = "база (пропадёт при деплое)" if env in in_db else "переменные Render"
+        # «Пропадёт при деплое» — правда только для временного хранилища. При
+        # подключённой внешней базе такая приписка пугает зря и толкает чинить
+        # то, что уже настроено.
+        if env in in_db:
+            where = "база" if persistent else "база (пропадёт при деплое)"
+        else:
+            where = "переменные Render"
         lines.append(f"✅ {provider.title()} — задан · {where}")
     if not lines:
         lines.append("⬜ Бесплатные провайдеры (Groq, Cerebras, NVIDIA…) — не заданы")
@@ -834,20 +844,41 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd in ("hixiit", "hixit", "higgsfield"):
         from core.hixiit import status as hixiit_status
         st = await hixiit_status()
-        mcp_mark = "✅" if st.get("mcp_ok") else ("⚠️" if st["mcp_configured"] else "❌")
         lines = [
             "🎨 <b>HIXIIT — генеративный слой</b>", "",
-            f"{mcp_mark} MCP — основной путь"
-            + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>" if st.get("mcp_error") else ""),
-            f"{'✅' if st['api_key'] else '❌'} API-ключ HIGGSFIELD_API_KEY",
+            # Первым — путь по ключу: он основной, потому что ключ и секрет не
+            # протухают. Не «ключ вписан», а «запрос с ним прошёл»: иначе врёт.
+            f"{'✅' if st.get('api_ok') else ('⚠️' if st['api_key'] else '❌')} "
+            "API по ключу и секрету — основной путь"
+            + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
+               if st.get("api_error") else ""),
+        ]
+        # Сразу под строкой про API — откуда взялись ключ и секрет.
+        for src in st.get("key_sources") or []:
+            mark = "✅" if src["filled"] else "❌"
+            tail = f" …{src['tail']}" if src.get("tail") else ""
+            lines.append(f"   {mark} {src['name']}{tail} — {src['source']}")
+        # MCP — необязательное дополнение: он даёт весь каталог аккаунта, но
+        # держится на OAuth-сессии, которая протухает. Поэтому упоминаем его
+        # строкой состояния, а не требованием что-то настроить.
+        if st["mcp_configured"]:
+            lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
+                         + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>"
+                            if st.get("mcp_error") else ""))
+        lines += [
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
         ]
+        if any("перекрывает" in (s0.get("source") or "") for s0 in st.get("key_sources") or []):
+            lines += ["", "⚠️ Значение из дашборда перекрывает переменную Render. "
+                          "Новый ключ в Render не подействует, пока в дашборде лежит старый — "
+                          "исправьте в дашборде или удалите там это поле."]
         if st.get("credits") is not None:
             lines.append(f"💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}")
-        if not st["mcp_configured"]:
-            lines += ["", "⚠️ MCP не настроен. Добавь в Render → Environment:",
-                      "<code>HIGGSFIELD_MCP_URL</code> и <code>HIGGSFIELD_MCP_TOKEN</code>"]
+        if not st.get("api_ok") and not st["api_key"]:
+            lines += ["", "Нужны <code>HIGGSFIELD_API_KEY</code> и "
+                          "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
+                          "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
         return
 
@@ -913,6 +944,18 @@ async def _dispatch_command(chat_id: str, text: str):
                 "Лечится один раз: задайте <code>DATABASE_URL</code> (Postgres) "
                 "в переменных сервиса — данные перестанут теряться.",
             ]
+        # Второй повод для «всё отвалилось»: бесплатный Render усыпляет сервис,
+        # и Telegram молчит, пока кто-нибудь не откроет адрес.
+        from core import keepalive
+        ka = keepalive.status()
+        lines.append("")
+        if ka["on"]:
+            lines.append(f"🔄 Самоподдержка: включена (пинг раз в "
+                         f"{keepalive.INTERVAL // 60} мин) — сервис не засыпает")
+        else:
+            lines += [f"⚠️ Самоподдержка выключена: {ka['reason']}",
+                      "На бесплатном Render сервис засыпает без запросов, и бот "
+                      "молчит, пока кто-то не откроет адрес."]
         await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю сервисы вживую...")
 
         # Наличие ключа ничего не доказывает: он может быть просрочен, без квоты

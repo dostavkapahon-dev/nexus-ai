@@ -76,12 +76,16 @@ def redirect_allowed(url: str) -> bool:
 
 # ─────────────────────────── поиск ───────────────────────────
 
+class NoKey(Exception):
+    """Источник не настроен. Это не «пусто» — чинится добавлением ключа."""
+
+
 async def _search_perplexity(query: str, max_results: int) -> list[dict]:
     """Живой поиск через Perplexity — единственный источник, который сам читает
     сеть и возвращает актуальные ссылки."""
     import os
     if not os.getenv("PERPLEXITY_API_KEY"):
-        return []
+        raise NoKey("нет ключа PERPLEXITY_API_KEY")
     from core.ai_router import ai_router
     res = await ai_router.call(
         "sonar-pro",
@@ -99,12 +103,14 @@ async def _search_perplexity(query: str, max_results: int) -> list[dict]:
 
 
 async def _search_ddg(query: str, max_results: int) -> list[dict]:
-    from core.duckduckgo import search as ddg_search
-    items = await ddg_search(query, max_results)
-    # duckduckgo.search на сбое возвращает псевдорезультат «Search error» —
-    # он не должен утекать наверх как найденная страница.
-    return [{**i, "source": "duckduckgo"} for i in items
-            if i.get("url", "").startswith("http") and i.get("title") != "Search error"]
+    """Бесплатный источник. Причину отказа поднимаем наверх: DuckDuckGo часто
+    блокирует запросы с серверных адресов, и это лечится не тем же, чем «пусто»."""
+    from core.duckduckgo import search_detailed
+    res = await search_detailed(query, max_results)
+    if not res["ok"]:
+        raise RuntimeError(res.get("error") or "результатов нет")
+    return [{**i, "source": "duckduckgo"} for i in res["items"]
+            if i.get("url", "").startswith("http")]
 
 
 async def search(query: str, max_results: int = 8) -> dict:
@@ -113,19 +119,24 @@ async def search(query: str, max_results: int = 8) -> dict:
     if not query:
         return {"ok": False, "error": "пустой запрос", "items": []}
 
+    # Причина по каждому источнику — словами, а не «пусто»: «нет ключа» и
+    # «нас заблокировали» чинятся совершенно по-разному.
     tried = []
     for name, fn in (("perplexity", _search_perplexity), ("duckduckgo", _search_ddg)):
         try:
             items = await fn(query, max_results)
+        except NoKey as e:
+            tried.append(f"{name}: {e}")
+            continue
         except Exception as e:
-            tried.append(f"{name}: {type(e).__name__}")
+            tried.append(f"{name}: {str(e)[:160] or type(e).__name__}")
             continue
         if items:
             return {"ok": True, "query": query, "provider": name, "items": items}
         tried.append(f"{name}: пусто")
 
     return {"ok": False, "query": query, "items": [],
-            "error": "ни один источник не дал результатов (" + "; ".join(tried) + ")"}
+            "error": "поиск не дал результатов — " + "; ".join(tried)}
 
 
 # ─────────────────────────── чтение страницы ───────────────────────────
