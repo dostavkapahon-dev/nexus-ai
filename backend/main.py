@@ -121,6 +121,11 @@ async def lifespan(app: FastAPI):
     await recover_stuck()
     start_scheduler()
     start_polling()
+    # Бесплатный Render усыпляет сервис без входящих запросов, а вместе с ним
+    # замолкает Telegram-бот. Сервис будит сам себя, чтобы это не выглядело как
+    # «работает, только пока открыт сайт».
+    from core import keepalive
+    keepalive.start()
     # Сервер сам делает разбор аккаунта и шлёт в Telegram (раз в сутки).
     from core.auto_report import auto_analyze_on_start
     asyncio.create_task(auto_analyze_on_start())

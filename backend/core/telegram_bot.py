@@ -934,6 +934,18 @@ async def _dispatch_command(chat_id: str, text: str):
                 "Лечится один раз: задайте <code>DATABASE_URL</code> (Postgres) "
                 "в переменных сервиса — данные перестанут теряться.",
             ]
+        # Второй повод для «всё отвалилось»: бесплатный Render усыпляет сервис,
+        # и Telegram молчит, пока кто-нибудь не откроет адрес.
+        from core import keepalive
+        ka = keepalive.status()
+        lines.append("")
+        if ka["on"]:
+            lines.append(f"🔄 Самоподдержка: включена (пинг раз в "
+                         f"{keepalive.INTERVAL // 60} мин) — сервис не засыпает")
+        else:
+            lines += [f"⚠️ Самоподдержка выключена: {ka['reason']}",
+                      "На бесплатном Render сервис засыпает без запросов, и бот "
+                      "молчит, пока кто-то не откроет адрес."]
         await send_message(chat_id, "\n".join(lines) + "\n\n⏳ Проверяю сервисы вживую...")
 
         # Наличие ключа ничего не доказывает: он может быть просрочен, без квоты
