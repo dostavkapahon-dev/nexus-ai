@@ -244,8 +244,9 @@ async def _provider_lines() -> list:
     """Все ИИ-провайдеры с ключами и источником ключа.
 
     Источник важнее галочки: ключ из переменных окружения переживёт деплой, а
-    сохранённый в базе — нет, пока не подключена постоянная БД. Без этой пометки
-    «ключи пропали сами» выглядит мистикой.
+    сохранённый в базе — только если база постоянная. Без этой пометки «ключи
+    пропали сами» выглядит мистикой; с неверной — наоборот, заставляет чинить
+    уже настроенное.
     """
     from sqlalchemy import select
 
@@ -256,13 +257,22 @@ async def _provider_lines() -> list:
         r = await db.execute(select(Connection.key_name))
         in_db = {row[0].upper() for row in r.all()}
 
+    from database.db import storage_info
+    persistent = bool(storage_info().get("persistent"))
+
     lines = []
     for provider, env in sorted(PROVIDER_KEY_ENV.items()):
         if not env or provider in ("openai", "gemini"):
             continue                       # эти два проверяются выше, живьём
         if not os.getenv(env):
             continue                       # не задан — не шумим, их два десятка
-        where = "база (пропадёт при деплое)" if env in in_db else "переменные Render"
+        # «Пропадёт при деплое» — правда только для временного хранилища. При
+        # подключённой внешней базе такая приписка пугает зря и толкает чинить
+        # то, что уже настроено.
+        if env in in_db:
+            where = "база" if persistent else "база (пропадёт при деплое)"
+        else:
+            where = "переменные Render"
         lines.append(f"✅ {provider.title()} — задан · {where}")
     if not lines:
         lines.append("⬜ Бесплатные провайдеры (Groq, Cerebras, NVIDIA…) — не заданы")
