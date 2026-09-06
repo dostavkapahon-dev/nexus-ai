@@ -175,10 +175,48 @@ async def record_check(key_name: str, ok: bool, error: str = ""):
 
 # ─────────────────────────── старт приложения ───────────────────────────
 
+# Таблица `connections` служит и хранилищем доступов, и KV-складом внутреннего
+# состояния: лента Командного центра, история диалога, состояние автопилота,
+# выбранные модели. Всё это — не ключи, и в переменные окружения ему не место:
+# оно туда не читается никем, зато раздувает окружение и подделывается под
+# конфликт настроек (лента меняется каждую минуту, и её новое значение выглядит
+# как «ключ задан в двух местах»).
+CREDENTIAL_SUFFIXES = ("_api_key", "_key", "_token", "_secret", "_id", "_json",
+                       "_state", "_url", "_mode")
+
+
+def is_credential(key_name: str) -> bool:
+    """Доступ это или внутреннее состояние.
+
+    Известные поля — по списку. Незнакомое имя считаем доступом только если оно
+    похоже на доступ по окончанию: пропустить чужой ключ хуже, чем вынести в
+    окружение лишнюю строку.
+    """
+    key = (key_name or "").strip().lower()
+    if key in BY_KEY:
+        return True
+    if key in INTERNAL_STATE:
+        return False
+    return key.endswith(CREDENTIAL_SUFFIXES)
+
+
+# Внутреннее состояние, которое заведомо не доступ. Список нужен для имён,
+# попадающих под общее правило окончаний (например, `*_state`).
+INTERNAL_STATE = {
+    "control_feed",             # лента Командного центра
+    "autopilot_state",          # состояние автопилота
+    "nexus_last_auto_report",   # отметка о последнем отчёте
+}
+
 # Итог последней загрузки доступов. Нужен не для красоты: перекрытие переменной
 # хостинга значением из дашборда — самая частая причина «ключ вписан, а ничего
 # не работает», и увидеть её человек должен в Telegram, а не в логах Render.
 LAST_LOAD: dict = {"loaded": 0, "unreadable": 0, "encrypted_now": 0, "shadowed": []}
+
+# Что в окружение положили мы сами. Загрузка вызывается не только на старте, и
+# без этой памяти обновлённое в дашборде значение сравнивалось бы с прошлым
+# нашим же — то есть каждая правка ключа выглядела бы как конфликт с хостингом.
+_EXPORTED: dict = {}
 
 async def load_into_env() -> dict:
     """Выгружает сохранённые доступы в окружение процесса.
@@ -205,6 +243,8 @@ async def load_into_env() -> dict:
                 print(f"[NEXUS] доступ {conn.key_name} зашифрован, но NEXUS_SECRET_KEY "
                       f"не задан или не тот — значение недоступно", flush=True)
                 continue
+            if not is_credential(conn.key_name):
+                continue                # внутреннее состояние — не в окружение
             env_name = conn.key_name.upper()
             # Значение из дашборда перекрывает переменную хостинга. Само по себе
             # это правильно — человек редактирует именно в дашборде. Но молчать
@@ -212,9 +252,11 @@ async def load_into_env() -> dict:
             # сохранённого на сайте, человек не увидит никакого эффекта и будет
             # искать поломку там, где её нет.
             previous = os.environ.get(env_name)
-            if previous and previous != value:
+            if (previous and previous != value
+                    and _EXPORTED.get(env_name) != previous):
                 shadowed.append(env_name)
             os.environ[env_name] = value
+            _EXPORTED[env_name] = value
             loaded += 1
             if secrets.enabled() and not secrets.is_encrypted(raw):
                 conn.key_value = secrets.encrypt(value)
