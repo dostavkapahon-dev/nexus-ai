@@ -91,7 +91,7 @@ NicheAnalyst → ViralHunter → Strategist → Copywriter → Reviewer
 `auto` = сначала официальные API/сервисы, при неудаче — браузер.
 
 ## Известные архитектурные долги
-1. Эфемерное хранилище (см. `PROJECT_STATUS.md`).
+1. Эфемерное хранилище без `DATABASE_URL` (см. `PROJECT_STATE.md`).
 2. Две конкурирующие «головы» оркестрации.
 3. Нет базового класса `SocialConnector` — коннекторы это свободные функции.
 4. Нет системы задач: фоновые работы через `BackgroundTasks`/`asyncio.create_task` без ID.
