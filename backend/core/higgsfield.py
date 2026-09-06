@@ -26,6 +26,10 @@ import asyncio
 import httpx
 
 DEFAULT_BASE = "https://platform.higgsfield.ai"
+# Запасной адрес: в документации и SDK встречаются оба хоста. Ошибиться хостом —
+# это молчаливое «не работает», поэтому пробуем второй, а рабочий запоминаем.
+FALLBACK_BASE = "https://api.higgsfield.ai"
+_working_base: str = ""
 
 # Пути официального API. Вынесены в константы, чтобы их нельзя было «подправить»
 # наугад: каждый проверен по SDK.
@@ -47,7 +51,21 @@ DOP_MODELS = ("dop-lite", "dop-turbo", "dop-standard")
 
 
 def _base() -> str:
-    return os.getenv("HIGGSFIELD_API_BASE", DEFAULT_BASE).rstrip("/")
+    forced = os.getenv("HIGGSFIELD_API_BASE", "").strip()
+    if forced:
+        return forced.rstrip("/")
+    return (_working_base or DEFAULT_BASE).rstrip("/")
+
+
+def _bases() -> list[str]:
+    """Адреса в порядке проверки. Явно заданный в окружении — единственный."""
+    forced = os.getenv("HIGGSFIELD_API_BASE", "").strip()
+    if forced:
+        return [forced.rstrip("/")]
+    if _working_base:
+        return [_working_base] + [b for b in (DEFAULT_BASE, FALLBACK_BASE)
+                                  if b != _working_base]
+    return [DEFAULT_BASE, FALLBACK_BASE]
 
 
 def _pair() -> tuple[str, str]:
@@ -119,26 +137,45 @@ def _error_text(status: int, data) -> str:
 
 
 async def _post(path: str, params: dict) -> dict:
-    """Запускает задачу. Возвращает {'ok': True, 'job_id': ...} либо причину."""
+    """Запускает задачу. Возвращает {'ok': True, 'job_id': ...} либо причину.
+
+    Если первый адрес отвечает 404 или недоступен, пробуем второй: ошибиться
+    хостом — это то же самое «не генерируется», только без объяснения.
+    """
+    global _working_base
     if not credentials():
         return {"ok": False, "error": NO_KEY}
-    try:
-        async with httpx.AsyncClient(timeout=60) as c:
-            r = await c.post(f"{_base()}{path}", headers=_headers(),
-                             json={"params": params})
-            try:
-                data = r.json()
-            except Exception:
-                data = r.text[:300]
-            if r.status_code >= 400:
-                return {"ok": False, "error": _error_text(r.status_code, data)}
-    except Exception as e:
-        return {"ok": False, "error": f"Higgsfield недоступен: {type(e).__name__}: {str(e)[:200]}"}
 
-    job_id = (data or {}).get("id") if isinstance(data, dict) else None
-    if not job_id:
-        return {"ok": False, "error": f"Higgsfield не вернул id задачи: {str(data)[:200]}"}
-    return {"ok": True, "job_id": job_id}
+    last = {"ok": False, "error": "Higgsfield не ответил"}
+    for base in _bases():
+        try:
+            async with httpx.AsyncClient(timeout=60) as c:
+                r = await c.post(f"{base}{path}", headers=_headers(),
+                                 json={"params": params})
+                try:
+                    data = r.json()
+                except Exception:
+                    data = r.text[:300]
+        except Exception as e:
+            last = {"ok": False,
+                    "error": f"Higgsfield недоступен ({base}): "
+                             f"{type(e).__name__}: {str(e)[:150]}"}
+            continue
+
+        if r.status_code == 404:
+            last = {"ok": False, "error": _error_text(404, f"{base}{path}")}
+            continue                      # адрес не тот — пробуем следующий
+        if r.status_code >= 400:
+            return {"ok": False, "error": _error_text(r.status_code, data)}
+
+        job_id = data.get("id") if isinstance(data, dict) else None
+        if not job_id:
+            return {"ok": False,
+                    "error": f"Higgsfield не вернул id задачи: {str(data)[:200]}"}
+        _working_base = base              # адрес рабочий — дальше идём сразу сюда
+        return {"ok": True, "job_id": job_id, "base": base}
+
+    return last
 
 
 def _job_url(job: dict) -> str:
@@ -250,19 +287,47 @@ async def check() -> dict:
     """Живая проверка доступа: один настоящий запрос, а не «ключ есть».
 
     Спрашиваем список стилей Soul — это дешёвый GET, который проходит только с
-    верной парой ключ+секрет.
+    верной парой ключ+секрет. Заодно определяем рабочий адрес API.
     """
+    global _working_base
     if not credentials():
         return {"ok": False, "error": NO_KEY}
-    try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            r = await c.get(f"{_base()}/v1/text2image/soul-styles", headers=_headers())
+    last = {"ok": False, "error": "Higgsfield не ответил"}
+    for base in _bases():
+        try:
+            async with httpx.AsyncClient(timeout=20) as c:
+                r = await c.get(f"{base}/v1/text2image/soul-styles",
+                                headers=_headers())
+        except Exception as e:
+            last = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"}
+            continue
         if r.status_code < 400:
-            return {"ok": True, "detail": "ключ принят"}
+            _working_base = base
+            return {"ok": True, "detail": f"ключ принят ({base})", "base": base}
+        if r.status_code == 404:
+            last = {"ok": False, "error": _error_text(404, base)}
+            continue
         return {"ok": False, "error": _error_text(r.status_code, r.text[:200])}
-    except Exception as e:
-        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+    return last
 
 
 # Модели, которые реально существуют у Higgsfield по этому API.
 MODELS = list(DOP_MODELS) + ["soul"]
+
+# Каталог для выбора в интерфейсе. Раньше модели можно было выбрать только через
+# MCP: без него меню отвечало «нет ни одной модели», хотя ключ работал.
+CATALOG = {
+    "image": [{"value": "soul", "label": "Soul — фотореализм (text2image)"}],
+    "video": [
+        {"value": "dop-turbo", "label": "DoP Turbo — быстро, хорошее качество"},
+        {"value": "dop-standard", "label": "DoP Standard — лучшее качество"},
+        {"value": "dop-lite", "label": "DoP Lite — самый дешёвый"},
+    ],
+}
+
+
+def catalog(kind: str = "image") -> list[dict]:
+    """Модели REST-пути. `connected` = есть ключ и секрет, то есть выбор сработает."""
+    ok = bool(credentials())
+    return [{**m, "group": "Higgsfield API", "connected": ok}
+            for m in CATALOG.get(kind, [])]

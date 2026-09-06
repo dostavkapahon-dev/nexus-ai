@@ -155,3 +155,80 @@ async def test_hixiit_uses_higgsfield_for_images(monkeypatch):
     assert res["ok"] and res["provider"] == "higgsfield_api"
     assert res["url"] == "https://cdn/x.png"
     assert res["model"] == "soul"
+
+
+@pytest.mark.asyncio
+async def test_models_are_selectable_without_mcp(client, monkeypatch):
+    """Без MCP меню отвечало «нет ни одной модели», хотя ключ работал."""
+    from core import hixiit
+
+    monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
+
+    img = await hixiit.available_models("image")
+    vid = await hixiit.available_models("video")
+
+    assert [m["value"] for m in img] == ["soul"]
+    assert "dop-turbo" in [m["value"] for m in vid]
+    assert all(m["connected"] for m in img + vid), "с ключом выбор должен работать"
+
+
+@pytest.mark.asyncio
+async def test_models_are_marked_unavailable_without_key(client, monkeypatch):
+    """Без доступа модель показывать нельзя: выбор закончится отказом."""
+    from core import hixiit
+
+    monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
+    monkeypatch.delenv("HIGGSFIELD_API_KEY", raising=False)
+    monkeypatch.delenv("HIGGSFIELD_SECRET", raising=False)
+
+    assert all(not m["connected"] for m in await hixiit.available_models("video"))
+
+
+@pytest.mark.asyncio
+async def test_chosen_video_model_is_actually_used(client, monkeypatch):
+    """Выбор модели должен доезжать до запроса, иначе это украшение."""
+    from core import hixiit
+
+    monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
+    await hixiit.set_preferred_model("video", "dop-standard")
+
+    video = {"id": "js2", "jobs": [{"status": "completed",
+                                    "results": {"raw": {"url": "https://cdn/v.mp4"}}}]}
+    fake = _install(monkeypatch, {"/v1/text2image/soul": (200, {"id": "js1"}),
+                                  "/v1/job-sets/js1": (200, DONE),
+                                  "/v1/image2video/dop": (200, {"id": "js2"}),
+                                  "/v1/job-sets/js2": (200, video)})
+
+    res = await hixiit.generate("ролик про кофе", kind="video")
+
+    assert res["ok"] and res["model"] == "dop-standard"
+    dop = [c for c in fake.calls if "image2video" in c["url"]][0]
+    assert dop["json"]["params"]["model"] == "dop-standard"
+    await hixiit.set_preferred_model("video", "")
+
+
+@pytest.mark.asyncio
+async def test_wrong_host_falls_back_instead_of_failing(client, monkeypatch):
+    """Источники расходятся в адресе API. 404 на первом хосте — не повод
+    сдаваться: второй пробуется автоматически, рабочий запоминается."""
+    hf._working_base = ""
+    calls = []
+
+    class Router(_Fake):
+        def _respond(self, method, url, json_body=None):
+            calls.append(url)
+            if url.startswith("https://platform.higgsfield.ai"):
+                return httpx.Response(404, json={"detail": "not found"},
+                                      request=httpx.Request(method, url))
+            payload = DONE if "job-sets" in url else {"id": "js1"}
+            return httpx.Response(200, json=payload,
+                                  request=httpx.Request(method, url))
+
+    monkeypatch.setattr(httpx, "AsyncClient", Router({}))
+
+    res = await hf.generate_image("кот")
+
+    assert res["ok"] and res["url"] == "https://cdn/x.png"
+    assert any(u.startswith("https://api.higgsfield.ai") for u in calls)
+    assert hf._working_base == "https://api.higgsfield.ai"
+    hf._working_base = ""

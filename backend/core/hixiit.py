@@ -306,9 +306,14 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     if _hf_credentials():
         try:
             from core import higgsfield as hf
+            # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
+            # ждёт именно её.
+            chosen = await preferred_model(kind)
             if kind == "video":
-                done = await hf.generate_video(task, image_url=image_url or "", ratio=ratio)
-                model = os.getenv("HIGGSFIELD_MODEL", "dop-turbo")
+                model = chosen if chosen in hf.DOP_MODELS else os.getenv(
+                    "HIGGSFIELD_MODEL", "dop-turbo")
+                done = await hf.generate_video(task, image_url=image_url or "",
+                                               ratio=ratio, model=model)
             else:
                 done = await hf.generate_image(task, ratio=ratio)
                 model = "soul"
@@ -396,22 +401,26 @@ async def set_preferred_model(kind: str, value: str) -> bool:
 
 
 async def available_models(kind: str = "image") -> list[dict]:
-    """Модели HIXIIT, доступные аккаунту, — для выбора в настройках.
+    """Модели, из которых можно выбирать для этого вида генерации.
 
-    Список берётся у аккаунта, а не из зашитого перечня: каталог Higgsfield
-    меняется, и зашитые id рано или поздно перестают существовать. Если MCP
-    недоступен, честно возвращаем пусто — выбирать не из чего.
+    Два источника: каталог аккаунта через MCP (он меняется, поэтому не зашит) и
+    модели REST-пути. Раньше без MCP список был пустым, и меню отвечало «нет ни
+    одной модели», хотя ключ Higgsfield работал и генерация шла.
     """
-    if not mcp_configured():
-        return []
-    try:
-        res = await _mcp_call("models_explore", {"action": "list", "type": kind,
-                                                 "limit": 50}, timeout=60)
-    except BaseException as e:
-        _reraise_control_flow(e)
-        return []
-    return [{"value": m["id"], "label": m["name"], "group": "HIXIIT",
-             "connected": True} for m in _as_model_list(res)]
+    out: list[dict] = []
+    if mcp_configured():
+        try:
+            res = await _mcp_call("models_explore", {"action": "list", "type": kind,
+                                                     "limit": 50}, timeout=60)
+            out += [{"value": m["id"], "label": m["name"], "group": "HIXIIT",
+                     "connected": True} for m in _as_model_list(res)]
+        except BaseException as e:
+            _reraise_control_flow(e)
+
+    from core.higgsfield import catalog as hf_catalog
+    seen = {m["value"] for m in out}
+    out += [m for m in hf_catalog(kind) if m["value"] not in seen]
+    return out
 
 
 async def _key_sources() -> list[dict]:
