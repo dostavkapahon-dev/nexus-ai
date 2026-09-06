@@ -834,14 +834,12 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd in ("hixiit", "hixit", "higgsfield"):
         from core.hixiit import status as hixiit_status
         st = await hixiit_status()
-        mcp_mark = "✅" if st.get("mcp_ok") else ("⚠️" if st["mcp_configured"] else "❌")
         lines = [
             "🎨 <b>HIXIIT — генеративный слой</b>", "",
-            f"{mcp_mark} MCP — основной путь"
-            + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>" if st.get("mcp_error") else ""),
-            # Не «ключ вписан», а «запрос с ним прошёл» — иначе галочка врёт.
+            # Первым — путь по ключу: он основной, потому что ключ и секрет не
+            # протухают. Не «ключ вписан», а «запрос с ним прошёл»: иначе врёт.
             f"{'✅' if st.get('api_ok') else ('⚠️' if st['api_key'] else '❌')} "
-            "API по ключу и секрету"
+            "API по ключу и секрету — основной путь"
             + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
                if st.get("api_error") else ""),
         ]
@@ -850,6 +848,13 @@ async def _dispatch_command(chat_id: str, text: str):
             mark = "✅" if src["filled"] else "❌"
             tail = f" …{src['tail']}" if src.get("tail") else ""
             lines.append(f"   {mark} {src['name']}{tail} — {src['source']}")
+        # MCP — необязательное дополнение: он даёт весь каталог аккаунта, но
+        # держится на OAuth-сессии, которая протухает. Поэтому упоминаем его
+        # строкой состояния, а не требованием что-то настроить.
+        if st["mcp_configured"]:
+            lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
+                         + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>"
+                            if st.get("mcp_error") else ""))
         lines += [
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
@@ -860,9 +865,10 @@ async def _dispatch_command(chat_id: str, text: str):
                           "исправьте в дашборде или удалите там это поле."]
         if st.get("credits") is not None:
             lines.append(f"💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}")
-        if not st["mcp_configured"]:
-            lines += ["", "⚠️ MCP не настроен. Добавь в Render → Environment:",
-                      "<code>HIGGSFIELD_MCP_URL</code> и <code>HIGGSFIELD_MCP_TOKEN</code>"]
+        if not st.get("api_ok") and not st["api_key"]:
+            lines += ["", "Нужны <code>HIGGSFIELD_API_KEY</code> и "
+                          "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
+                          "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
         return
 
