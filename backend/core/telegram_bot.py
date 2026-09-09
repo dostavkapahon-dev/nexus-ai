@@ -1081,7 +1081,21 @@ async def _dispatch_command(chat_id: str, text: str):
             n = nr.scalar_one_or_none()
             niche = n.name if n else ""
         rec = await research(args, niche)
+
+        # Ни одной прочитанной ссылки — говорим об этом прямо. Заголовок
+        # «Рецепт вируса» над пустотой выглядит как выполненный разбор.
+        if rec.get("ok") is False:
+            lines = [f"❌ {rec.get('error', 'разобрать не удалось')}", ""]
+            lines += [f"• {d}" for d in (rec.get("details") or [])[:5]]
+            if rec.get("hint"):
+                lines += ["", rec["hint"]]
+            await send_message(chat_id, "\n".join(lines)[:4000])
+            return
+
         lines = ["🧬 <b>Рецепт вируса</b> (сохранён, учту в генерации)", ""]
+        if rec.get("skipped"):
+            lines += [f"⚠️ Не открылось ссылок: {rec['skipped']} — "
+                      "рецепт выведен по остальным.", ""]
         if rec.get("why_viral"):
             lines += ["<b>Почему заходят:</b>"] + [f"• {x}" for x in rec["why_viral"][:5]]
         if rec.get("hook_patterns"):
