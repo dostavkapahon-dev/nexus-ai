@@ -906,8 +906,11 @@ async def _dispatch_command(chat_id: str, text: str):
             lines.append(f"♾️ Безлимит: доступен"
                          + (f" (осталось {left})" if left is not None else "")
                          + f" · моделей: {len(unlim.get('models') or [])}")
-        elif unlim.get("reason"):
-            lines.append(f"♾️ Безлимит: нет — {unlim['reason']}")
+        else:
+            # Молчать здесь нельзя: без строки человек считает генерации
+            # бесплатными, пока они списывают кредиты.
+            lines.append("♾️ Безлимит: нет — "
+                         + (unlim.get("reason") or "генерации спишут кредиты"))
         if not st.get("api_ok") and not st["api_key"]:
             lines += ["", "Нужны <code>HIGGSFIELD_API_KEY</code> и "
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "

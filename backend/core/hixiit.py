@@ -335,10 +335,18 @@ async def unlim_status() -> dict:
         return {"available": False, "reason": f"{type(e).__name__}: {str(e)[:120]}"}
     block = (res or {}).get("unlim") or {}
     models = [m.get("id") for m in _as_model_list(res) if m.get("id")]
-    return {"available": bool(block.get("available")),
-            "remaining": block.get("remaining"),
-            "expires_at": block.get("expires_at"),
-            "models": models}
+    out = {"available": bool(block.get("available")),
+           "remaining": block.get("remaining"),
+           "expires_at": block.get("expires_at"),
+           "models": models}
+    if not out["available"]:
+        # Причина нужна всегда. Без неё «безлимита нет» выглядит одинаково с
+        # «мы не проверяли», и человек считает, что генерации бесплатные, пока
+        # они молча съедают кредиты. Модели могут заявлять supports_unlim, но
+        # решает право аккаунта, а оно выдаётся отдельно и часто только на сайте.
+        out["reason"] = ("платформа не выдала безлимит этому аккаунту — "
+                         "генерации спишут кредиты")
+    return out
 
 
 async def _import_media(image_url: str) -> str | None:
