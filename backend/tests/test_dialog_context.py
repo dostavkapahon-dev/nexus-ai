@@ -12,7 +12,7 @@ from core import command_center, dialog, telegram_bot as tg
 async def test_director_receives_the_conversation(client, monkeypatch):
     seen = {}
 
-    async def fake_director(goal, context="", max_steps=12):
+    async def fake_director(goal, context="", max_steps=12, on_step=None):
         seen["goal"] = goal
         seen["context"] = context
         return {"status": "done", "summary": "готово", "steps": []}
@@ -39,7 +39,8 @@ async def test_telegram_passes_history_and_records_the_reply(client, monkeypatch
 
     got = {}
 
-    async def fake_run_command(text, source="dashboard", mirror=True, context=""):
+    async def fake_run_command(text, source="dashboard", mirror=True, context="",
+                               on_step=None):
         got["context"] = context
         return {"ok": True, "reply": "переделал второй", "steps": []}
 
@@ -61,7 +62,8 @@ async def test_empty_history_does_not_break_anything(client, monkeypatch):
     await dialog.clear("77")
     got = {}
 
-    async def fake_run_command(text, source="dashboard", mirror=True, context=""):
+    async def fake_run_command(text, source="dashboard", mirror=True, context="",
+                               on_step=None):
         got["context"] = context
         return {"ok": True, "reply": "готово", "steps": []}
 
@@ -79,7 +81,8 @@ async def _swallow(chat_id, text, parse_mode="HTML", reply_markup=None, feed=Fal
 
 @pytest.mark.asyncio
 async def test_result_offers_feedback_buttons(client, monkeypatch):
-    async def fake_run_command(text, source="dashboard", mirror=True, context=""):
+    async def fake_run_command(text, source="dashboard", mirror=True, context="",
+                               on_step=None):
         return {"ok": True, "reply": "готово", "steps": []}
 
     sent = []
@@ -129,7 +132,8 @@ async def test_negative_feedback_asks_what_was_wrong(client, monkeypatch):
 async def test_another_variant_reuses_the_original_task(client, monkeypatch):
     calls = []
 
-    async def fake_run_command(text, source="dashboard", mirror=True, context=""):
+    async def fake_run_command(text, source="dashboard", mirror=True, context="",
+                               on_step=None):
         calls.append(text)
         return {"ok": True, "reply": "готово", "steps": []}
 

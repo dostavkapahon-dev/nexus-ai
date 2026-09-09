@@ -83,11 +83,12 @@ def _summarize(result: dict) -> str:
 
 
 async def run_command(text: str, source: str = "dashboard", mirror: bool = True,
-                     context: str = "") -> dict:
+                     context: str = "", on_step=None) -> dict:
     """Единая точка входа команды. Роутит в мозг (Claude-дирижёр), пишет в ленту,
     зеркалит результат в Telegram (если команда пришла из дашборда).
 
-    `context` — предыдущие реплики разговора. Без них «переделай второй вариант»
+    `on_step` — куда сообщать о ходе работы: без этого долгая задача выглядит
+    зависшей. `context` — предыдущие реплики разговора. Без них «переделай второй вариант»
     для дирижёра бессмысленно: он не знает, о каком варианте речь, и начинает
     задачу с нуля.
 
@@ -144,7 +145,8 @@ async def run_command(text: str, source: str = "dashboard", mirror: bool = True,
             from core.marketing_director import run_director
             from core.task_manager import create, run as run_task, add_step
             task_id = await create("director", text, source=source)
-            outcome = await run_task(task_id, lambda: run_director(text, context))
+            outcome = await run_task(
+                task_id, lambda: run_director(text, context, on_step=on_step))
             if outcome.get("ok"):
                 result = outcome["result"]
                 reply = _summarize(result)
