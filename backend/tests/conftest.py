@@ -18,6 +18,9 @@ TEST_PASSWORD = "test-password"
 os.environ["ADMIN_PASSWORD"] = TEST_PASSWORD
 _DB_FILE = pathlib.Path(tempfile.mkdtemp(prefix="nexus-test-")) / "test.db"
 os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_DB_FILE}"
+# Память навыков — тоже данные, а не код: тесты не должны править
+# отслеживаемый git-ом файл аккаунта.
+os.environ["NEXUS_SKILLS_FILE"] = str(_DB_FILE.parent / "skills.json")
 # Ключи площадок не должны подтягиваться из окружения разработчика.
 for _k in ("TELEGRAM_BOT_TOKEN", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
     os.environ.pop(_k, None)

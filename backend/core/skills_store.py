@@ -23,7 +23,13 @@ import json
 import uuid
 from datetime import datetime
 
-SKILLS_FILE = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "skills.json")
+# Путь задаётся переменной окружения, потому что этот файл — живая память
+# аккаунта, а не часть кода. Прогон тестов писал прямо в `backend/data/skills.json`
+# репозитория: выдуманные фикстурой «уроки» попадали в коммит и потом
+# подмешивались агенту в промпт как настоящий опыт публикаций. По умолчанию путь
+# прежний — на сервере ничего не меняется.
+SKILLS_FILE = os.getenv("NEXUS_SKILLS_FILE") or os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "skills.json")
 
 KINDS = ("hook", "format", "visual", "audience", "mistake", "rule")
 
