@@ -159,17 +159,23 @@ async def test_hixiit_uses_higgsfield_for_images(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_models_are_selectable_without_mcp(client, monkeypatch):
-    """Без MCP меню отвечало «нет ни одной модели», хотя ключ работал."""
+    """Без MCP меню отвечало «нет ни одной модели», хотя ключ работал.
+
+    Показываем проверенный каталог платформы: эти id существуют (сверено живым
+    вызовом models_explore), в отличие от прежних `soul` и `dop-*` из README
+    старого SDK.
+    """
     from core import hixiit
 
     monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
 
-    img = await hixiit.available_models("image")
-    vid = await hixiit.available_models("video")
+    img = [m["value"] for m in await hixiit.available_models("image")]
+    vid = [m["value"] for m in await hixiit.available_models("video")]
 
-    assert [m["value"] for m in img] == ["soul"]
-    assert "dop-turbo" in [m["value"] for m in vid]
-    assert all(m["connected"] for m in img + vid), "с ключом выбор должен работать"
+    assert "z_image" in img and "soul_2" in img
+    assert "minimax_hailuo" in vid and "flux_3_video" in vid
+    assert "dop-turbo" not in vid, "устаревший id не должен предлагаться"
+    assert all(m["connected"] for m in await hixiit.available_models("image"))
 
 
 @pytest.mark.asyncio

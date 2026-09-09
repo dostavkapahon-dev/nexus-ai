@@ -875,6 +875,16 @@ async def _dispatch_command(chat_id: str, text: str):
                           "исправьте в дашборде или удалите там это поле."]
         if st.get("credits") is not None:
             lines.append(f"💳 Кредитов: {st['credits']} · план {st.get('plan', '—')}")
+        # Безлимит выдаётся отдельно от подписки и покрывает не все модели —
+        # без этой строки непонятно, за чей счёт идёт генерация.
+        unlim = st.get("unlim") or {}
+        if unlim.get("available"):
+            left = unlim.get("remaining")
+            lines.append(f"♾️ Безлимит: доступен"
+                         + (f" (осталось {left})" if left is not None else "")
+                         + f" · моделей: {len(unlim.get('models') or [])}")
+        elif unlim.get("reason"):
+            lines.append(f"♾️ Безлимит: нет — {unlim['reason']}")
         if not st.get("api_ok") and not st["api_key"]:
             lines += ["", "Нужны <code>HIGGSFIELD_API_KEY</code> и "
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "

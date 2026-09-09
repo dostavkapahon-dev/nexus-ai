@@ -216,22 +216,215 @@ def _as_model_list(res, has_reference: bool = False) -> list:
     return out
 
 
+# ─────────────────────── экспертиза по моделям Higgsfield ───────────────────────
+#
+# Каталог сверен живым вызовом models_explore: у аккаунта существуют именно эти
+# id. Раньше здесь стояли `soul` и `dop-*` из README старого SDK — таких моделей
+# в каталоге нет, и выбор такой модели закончился бы отказом.
+#
+# Каждая строка — не «список ради списка», а правило «задача → модель»: дорогая
+# модель на черновик тратит кредиты впустую, а дешёвая на финал портит результат.
+
+IMAGE_MODELS = [
+    {"value": "z_image", "label": "Z Image — быстрый черновик (дёшево)",
+     "role": "draft"},
+    {"value": "soul_2", "label": "Soul 2.0 — портреты, UGC, персонажи",
+     "role": "person"},
+    {"value": "gpt_image_2", "label": "GPT Image 2 — текст в кадре, 4K",
+     "role": "text"},
+    {"value": "cinematic_studio_2_5", "label": "Cinema Studio 2.5 — киношный кадр",
+     "role": "cinematic"},
+    {"value": "marketing_studio_image", "label": "Marketing Studio — товар, реклама",
+     "role": "product"},
+    {"value": "image_auto", "label": "Auto — платформа выбирает сама",
+     "role": "auto"},
+]
+
+VIDEO_MODELS = [
+    {"value": "minimax_hailuo", "label": "Minimax Hailuo — живая мимика, физика",
+     "role": "person"},
+    {"value": "cinematic_studio_3_0", "label": "Cinema Studio 3.0 — лучшее качество",
+     "role": "cinematic"},
+    {"value": "flux_3_video", "label": "FLUX 3 — видео из текста, со звуком",
+     "role": "text2video"},
+    {"value": "marketing_studio_video", "label": "Marketing Studio — реклама товара",
+     "role": "product"},
+    {"value": "wan2_6", "label": "Wan 2.6 — стилизованное, экспериментальное",
+     "role": "stylized"},
+]
+
+# Слова задачи → нужная роль модели. Порядок важен: товар перевешивает «человека»,
+# потому что реклама с человеком — всё равно реклама.
+_ROLE_HINTS = (
+    ("product", ("товар", "продукт", "реклам", "распродаж", "акци", "доставк",
+                 "меню", "product", "ads")),
+    ("text", ("текст", "надпись", "заголов", "инфограф", "цитат", "обложк с текст")),
+    ("person", ("человек", "персонаж", "лицо", "портрет", "модель", "девушк",
+                "парен", "ugc", "блогер")),
+    ("cinematic", ("кино", "атмосфер", "драматич", "эпич", "cinematic")),
+)
+
+
+def pick_by_task(task: str, kind: str, has_reference: bool = False) -> str:
+    """Модель под задачу по правилам, когда каталог MCP недоступен.
+
+    Это не «любая модель из списка»: неверный выбор либо жжёт кредиты, либо даёт
+    негодный кадр. Правила взяты из рабочего пайплайна, а не придуманы.
+    """
+    low = (task or "").lower()
+    models = VIDEO_MODELS if kind == "video" else IMAGE_MODELS
+    by_role = {m["role"]: m["value"] for m in models}
+
+    for role, words in _ROLE_HINTS:
+        if any(w in low for w in words) and role in by_role:
+            return by_role[role]
+
+    if kind == "video":
+        # Без исходного кадра нужна модель, умеющая text-to-video.
+        return by_role["text2video"] if not has_reference else by_role["person"]
+    return by_role["person"] if has_reference else by_role["draft"]
+
+
+# Каждая модель понимает свой язык промпта. Один универсальный текст всем — это
+# худший результат у всех сразу.
+_PROMPT_STYLE = {
+    "soul_2": "Focus on scene, wardrobe, action, lighting and composition; "
+              "do not re-describe the face.",
+    "gpt_image_2": "Spell out any on-image text exactly, name the font style, "
+                   "state the layout.",
+    "z_image": "Keep it short and concrete: subject, setting, light.",
+    "cinematic_studio_2_5": "Describe it as a film still: lens, light direction, "
+                            "colour grade, mood.",
+    "cinematic_studio_3_0": "Write as a director: camera move, shot length, "
+                            "colour grade, pacing.",
+    "minimax_hailuo": "Describe motion and emotion — gestures, tempo; the "
+                      "background comes from the source frame.",
+    "flux_3_video": "Describe the scene, the camera move and the sound source.",
+    "marketing_studio_image": "Think in brand terms: hook, setting, product.",
+    "marketing_studio_video": "Think in brand terms: hook, setting, product, CTA.",
+}
+
+
+def prompt_for(model: str, prompt: str) -> str:
+    """Промпт, адаптированный под конкретную модель.
+
+    Модели лучше понимают английский, поэтому русский текст переводится слоем
+    обогащения (`media_generator.enrich_image_prompt`) до этого места; здесь
+    добавляется только то, что важно именно этой модели.
+    """
+    hint = _PROMPT_STYLE.get(model or "")
+    text = (prompt or "").strip()
+    return f"{text}\n\n{hint}" if hint else text
+
+
+async def unlim_status() -> dict:
+    """Есть ли безлимитные генерации и на какие модели.
+
+    Безлимит — не то же самое, что подписка: он выдаётся отдельно и покрывает
+    только часть моделей. Тратить его молча нельзя, но и не использовать, когда
+    он есть, — значит зря списывать кредиты.
+    """
+    if not mcp_configured():
+        return {"available": False, "reason": "MCP не настроен"}
+    try:
+        res = await _mcp_call("models_explore",
+                              {"action": "list", "unlim": True, "limit": 50},
+                              timeout=60)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return {"available": False, "reason": f"{type(e).__name__}: {str(e)[:120]}"}
+    block = (res or {}).get("unlim") or {}
+    models = [m.get("id") for m in _as_model_list(res) if m.get("id")]
+    return {"available": bool(block.get("available")),
+            "remaining": block.get("remaining"),
+            "expires_at": block.get("expires_at"),
+            "models": models}
+
+
+async def _import_media(image_url: str) -> str | None:
+    """Ссылка на картинку → media_id. MCP принимает только id, не URL."""
+    try:
+        res = await _mcp_call("media_import_url", {"url": image_url}, timeout=120)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return None
+    if isinstance(res, dict):
+        for key in ("media_id", "id"):
+            if res.get(key):
+                return res[key]
+        items = res.get("results") or res.get("medias") or []
+        if items and isinstance(items[0], dict):
+            return items[0].get("media_id") or items[0].get("id")
+    return None
+
+
+async def _wait_job(job_id: str, attempts: int = 40) -> str:
+    """Ждёт готовности задачи. Генерация асинхронная: ответ на запрос — это
+    заявка со статусом pending, а не готовое медиа."""
+    for _ in range(attempts):
+        res = await _mcp_call("jobs_wait",
+                              {"jobs": [{"index": 0, "job_id": job_id}],
+                               "timeout_seconds": 15}, timeout=60)
+        jobs = (res or {}).get("jobs") or []
+        job = jobs[0] if jobs else {}
+        status = (job.get("status") or "").lower()
+        if status == "completed":
+            url = job.get("result_url") or _find_media_url(job)
+            if url:
+                return url
+            raise RuntimeError("задача готова, но без ссылки на результат")
+        if status in ("failed", "canceled", "nsfw"):
+            raise RuntimeError(f"Higgsfield: задача завершилась статусом {status}")
+        if (res or {}).get("all_terminal"):
+            break
+    raise RuntimeError("Higgsfield не отдал результат вовремя")
+
+
 async def _generate_via_mcp(task: str, kind: str, ratio: str,
                             image_url: str = None) -> dict:
-    model = await pick_model(task, kind, has_reference=bool(image_url))
-    tool = "generate_video" if kind == "video" else "generate_image"
-    args = {"prompt": task[:1500], "aspect_ratio": ratio}
-    if model.get("id"):
-        args["model"] = model["id"]
-    if image_url:
-        args["image_url"] = image_url
+    """Генерация через MCP по фактическому протоколу платформы.
 
-    res = await _mcp_call(tool, args)
+    Три вещи, без которых путь не работал: аргументы идут вложенными в `params`,
+    результат приходит заявкой со статусом (её надо дождаться), а картинка-вход
+    передаётся как media_id, а не ссылкой.
+    """
+    model = await pick_model(task, kind, has_reference=bool(image_url))
+    model_id = model.get("id") or pick_by_task(task, kind, bool(image_url))
+    tool = "generate_video" if kind == "video" else "generate_image"
+
+    params = {"model": model_id, "prompt": prompt_for(model_id, task)[:1500],
+              "aspect_ratio": ratio, "count": 1}
+
+    # Безлимит тратим, только когда он есть и покрывает выбранную модель:
+    # иначе платформа вернёт отказ вместо генерации.
+    unlim = await unlim_status()
+    if unlim.get("available") and (not unlim.get("models")
+                                  or model_id in unlim["models"]):
+        params["use_unlim"] = True
+    else:
+        params["use_unlim"] = False
+
+    if image_url:
+        media_id = await _import_media(image_url)
+        if media_id:
+            role = "start_image" if kind == "video" else "image"
+            params["medias"] = [{"value": media_id, "role": role}]
+
+    res = await _mcp_call(tool, {"params": params})
+
+    # Готовая ссылка приходит редко (некоторые инструменты отвечают сразу) —
+    # но обычно это заявка, и её надо дождаться.
     url = _find_media_url(res)
     if not url:
-        raise RuntimeError(f"MCP вернул результат без ссылки на медиа: {str(res)[:300]}")
+        results = (res or {}).get("results") or []
+        job_id = results[0].get("id") if results and isinstance(results[0], dict) else None
+        if not job_id:
+            raise RuntimeError(f"MCP не вернул задачу: {str(res)[:300]}")
+        url = await _wait_job(job_id)
+
     return {"ok": True, "url": url, "provider": "higgsfield_mcp",
-            "kind": kind, "model": model.get("id") or "auto"}
+            "kind": kind, "model": model_id,
+            "unlim": bool(params.get("use_unlim"))}
 
 
 _URL_KEYS = ("video_url", "image_url", "url", "output_url", "result_url", "media_url", "download_url")
@@ -417,9 +610,15 @@ async def available_models(kind: str = "image") -> list[dict]:
         except BaseException as e:
             _reraise_control_flow(e)
 
-    from core.higgsfield import catalog as hf_catalog
-    seen = {m["value"] for m in out}
-    out += [m for m in hf_catalog(kind) if m["value"] not in seen]
+    # Без MCP выбирать всё равно есть из чего: показываем проверенный каталог
+    # платформы. Он честный — эти id существуют, — но пометка говорит, что путь
+    # исполнения будет REST, если MCP не подключён.
+    if not out:
+        known = VIDEO_MODELS if kind == "video" else IMAGE_MODELS
+        from core.higgsfield import credentials as _creds
+        reachable = bool(_creds())
+        out = [{"value": m["value"], "label": m["label"], "group": "Higgsfield",
+                "connected": reachable} for m in known]
     return out
 
 
@@ -490,6 +689,10 @@ async def status() -> dict:
         out["browser_agent"] = False
 
     if out["mcp_configured"]:
+        try:
+            out["unlim"] = await unlim_status()
+        except BaseException as e:
+            _reraise_control_flow(e)
         try:
             bal = await _mcp_call("balance", {}, timeout=30)
             out["mcp_ok"] = True
