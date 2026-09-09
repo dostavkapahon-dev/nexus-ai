@@ -126,13 +126,45 @@ async def get_recipe() -> dict | None:
     return None
 
 
+def _has_data(ref: dict) -> bool:
+    """Есть ли по референсу хоть что-то настоящее: метрики или увиденный кадр.
+
+    Ссылка, которую не удалось открыть, — это ноль данных. Строка «vision error»
+    данными тоже не является.
+    """
+    meta = ref.get("meta") or {}
+    if meta.get("ok"):
+        return True
+    vision = (ref.get("vision") or "")
+    return bool(vision) and not vision.lower().startswith(("vision error", "не удалось"))
+
+
 async def research(urls: list[str], niche: str = "") -> dict:
     """Разбирает несколько референсов и выжимает «рецепт вируса». Сохраняет его."""
     refs = []
     for u in urls[:5]:
         refs.append(await analyze_reference(u, with_vision=True))
 
-    context = json.dumps(refs, ensure_ascii=False)[:8000]
+    # Ни одной открытой ссылки — значит анализировать нечего. Отдать пустой
+    # разбор модели означает получить уверенный рассказ о том, почему зашли
+    # ролики, которых система не видела: выдуманный анализ хуже отказа.
+    usable = [r for r in refs if _has_data(r)]
+    if not usable:
+        reasons = []
+        for ref, url in zip(refs, urls[:5]):
+            err = (ref.get("meta") or {}).get("error") or "не удалось открыть"
+            reasons.append(f"{url[:60]}: {str(err)[:120]}")
+        return {"ok": False, "why_viral": [], "hook_patterns": [], "topics": [],
+                "recipe": "",
+                "error": "ни одну ссылку не удалось прочитать — разбирать нечего",
+                "details": reasons,
+                "hint": "Instagram и TikTok закрывают доступ без логина. Помогает "
+                        "серверный браузер (NEXUS_BROWSER_CDP) или ключ Bright Data.",
+                "_refs": [r.get("meta") for r in refs]}
+
+    # В модель уходят только те референсы, по которым есть настоящие данные.
+    skipped = len(refs) - len(usable)
+    context = json.dumps(usable, ensure_ascii=False)[:8000]
     system = ("Ты аналитик вирусного контента. По разбору чужих залетевших роликов "
               "(метрики + что в кадре) выведи, ПОЧЕМУ они зашли, и дай рецепт. JSON, кратко.")
     prompt = (
@@ -161,6 +193,11 @@ async def research(urls: list[str], niche: str = "") -> dict:
     except Exception:
         pass
 
+    recipe["ok"] = True
+    if skipped:
+        # Честно говорим, что часть ссылок не открылась: рецепт выведен не по
+        # всему, что человек прислал.
+        recipe["skipped"] = skipped
     recipe["_refs"] = [r["meta"] for r in refs]
     await _save_recipe(recipe)
 
