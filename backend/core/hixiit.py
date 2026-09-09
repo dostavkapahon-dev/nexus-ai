@@ -817,8 +817,15 @@ async def _key_sources() -> list[dict]:
             source = "дашборд"
         else:
             source = "переменная хостинга"
+        # Длина и форма — то, чего не хватало, чтобы человек сам увидел, что
+        # «вроде настроил» не равно «настроил». Платформа принимает только UUID
+        # из 36 символов; лишний пробел или ключ не из того раздела кабинета
+        # выглядят в панели хостинга ровно так же, как правильные.
+        from core.higgsfield import _looks_like_uuid
         out.append({"name": human, "env": env_name, "filled": bool(value),
-                    "source": source, "tail": value[-4:] if len(value) > 4 else ""})
+                    "source": source, "tail": value[-4:] if len(value) > 4 else "",
+                    "length": len(value),
+                    "shape_ok": _looks_like_uuid(value) if value else False})
     return out
 
 
