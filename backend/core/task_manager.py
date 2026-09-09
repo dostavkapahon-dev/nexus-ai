@@ -230,22 +230,46 @@ async def spawn(kind: str, goal: str, coro_factory, source: str = "api",
 
 
 async def recover_stuck() -> int:
-    """При старте помечает задачи, зависшие в RUNNING, как потерянные при рестарте."""
-    cutoff = datetime.utcnow() - timedelta(minutes=STUCK_AFTER_MIN)
-    n = 0
+    """При старте возвращает к жизни то, что не пережило перезапуск.
+
+    Работа живёт в `asyncio`-задаче внутри процесса, а сервер запускается одним
+    воркером (`uvicorn main:app` без `--workers`). Значит после старта ни одна
+    задача из прошлого процесса не продолжится: ни RUNNING, ни CREATED — второй
+    её никто не подхватит. Отсечка по времени здесь была неверной: свежая
+    RUNNING-задача оставалась висеть и врала о состоянии системы, пока через
+    полчаса до неё не доходил сторож, а CREATED не разбирал вообще никто —
+    задача, зарегистрированная за миг до рестарта, висела вечно.
+
+    Поэтому при старте закрываем и то и другое честной причиной и сообщаем
+    владельцу: перезапустить работу может только человек — фабрику восстановить
+    из БД нельзя, в задаче хранится журнал, а не сама корутина.
+    """
+    lost = []
     try:
         async with AsyncSessionLocal() as db:
-            r = await db.execute(select(Task).where(Task.status == RUNNING))
+            r = await db.execute(select(Task).where(Task.status.in_((RUNNING, CREATED))))
             for t in r.scalars():
-                if (t.started_at or t.created_at or cutoff) <= cutoff:
-                    t.status = FAILED
-                    t.error = "Задача потеряна при перезапуске сервера."
-                    t.finished_at = datetime.utcnow()
-                    n += 1
+                t.status = FAILED
+                t.error = "Задача потеряна при перезапуске сервера."
+                t.finished_at = datetime.utcnow()
+                lost.append({"id": t.id, "kind": t.kind, "goal": t.goal or ""})
             await db.commit()
     except Exception:
-        pass
-    return n
+        return 0
+
+    if lost:
+        # Одно сообщение на все потери: перезапуск с десятком задач в очереди не
+        # должен превращаться в десяток уведомлений.
+        try:
+            from core.notify import notify_owner
+            names = "\n".join(f"• {x['goal'] or x['kind']} ({x['id']})" for x in lost[:10])
+            more = f"\n…и ещё {len(lost) - 10}" if len(lost) > 10 else ""
+            await notify_owner(
+                f"♻️ Сервер перезапустился, незавершённые задачи потеряны "
+                f"({len(lost)}):\n{names}{more}\nЗапустить заново — /tasks")
+        except Exception:
+            pass
+    return len(lost)
 
 
 async def watchdog() -> dict:
@@ -281,6 +305,15 @@ async def watchdog() -> dict:
                 stuck.append({"id": t.id, "kind": t.kind, "goal": t.goal})
         await db.commit()
 
+    # Заодно возвращаем в очередь производственные ТЗ, которые исполнитель взял
+    # и бросил: иначе они не видны ни в очереди, ни среди зависших задач.
+    reclaimed = []
+    try:
+        from core.production_queue import reclaim_stale
+        reclaimed = await reclaim_stale()
+    except Exception:
+        pass
+
     for s in stuck:
         try:
             from core.notify import notify_owner
@@ -289,7 +322,7 @@ async def watchdog() -> dict:
                 f"{human('timeout')}\nМожно запустить заново — /tasks")
         except Exception:
             pass
-    return {"stuck": len(stuck), "tasks": stuck}
+    return {"stuck": len(stuck), "tasks": stuck, "reclaimed": len(reclaimed)}
 
 
 async def get(task_id: str) -> dict | None:
