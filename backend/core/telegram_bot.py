@@ -127,6 +127,7 @@ async def setup_bot_commands():
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
+        {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
         {"command": "model", "description": "Выбор моделей: AI, изображения, видео"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
@@ -557,7 +558,17 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
-    if cmd in ("menu", "start"):
+    if cmd in ("menu", "start", "setup"):
+        # Сетка кнопок бесполезна тому, у кого не задана ниша и нет ключа ИИ:
+        # он узнавал об этом, только напоровшись на отказ где-то посередине
+        # работы. Пока обязательное не настроено, /start показывает чек-лист и
+        # один следующий шаг. По /setup чек-лист доступен всегда.
+        from core import onboarding
+        st = await onboarding.state()
+        if cmd == "setup" or not st["ready"]:
+            await send_message(chat_id, onboarding.as_text(st),
+                               reply_markup=_main_menu_kb())
+            return
         await send_message(chat_id,
                            "🎛 <b>Пульт управления · NEXUS AI</b>\nВыбери действие:",
                            reply_markup=_main_menu_kb())
