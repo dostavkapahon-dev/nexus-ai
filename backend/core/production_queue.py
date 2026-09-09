@@ -15,7 +15,7 @@
 """
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
@@ -161,6 +161,36 @@ async def retry(job_id: str) -> dict:
         out = _as_dict(job)
         await db.commit()
     return {"ok": True, "job": out}
+
+
+# Исполнитель мог взять задание и не вернуться: закрылась сессия Claude Code,
+# перезапустился сервер, упала сеть. Задание при этом остаётся `taken` — в
+# очереди его больше не видно, и вернуть его мог только человек руками.
+STALE_TAKEN_MIN = 60
+
+
+async def reclaim_stale(minutes: int = STALE_TAKEN_MIN) -> list[dict]:
+    """Возвращает в очередь задания, взятые исполнителем и брошенные.
+
+    Задание идемпотентно: пока `submit` не пришёл, готового медиа нет, поэтому
+    повторная выдача ничего не портит и не дублирует результат.
+    """
+    cutoff = datetime.utcnow() - timedelta(minutes=max(1, minutes))
+    back = []
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(ProductionJob)
+                                 .where(ProductionJob.status == TAKEN))
+            for job in r.scalars():
+                taken = job.taken_at or job.created_at
+                if taken and taken <= cutoff:
+                    job.status = QUEUED
+                    job.taken_at = None
+                    back.append(_as_dict(job))
+            await db.commit()
+    except Exception:
+        return []
+    return back
 
 
 async def cancel(job_id: str) -> dict:
