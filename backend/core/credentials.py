@@ -154,10 +154,20 @@ async def delete(key_name: str) -> dict:
         if conn:
             await db.delete(conn)
             await db.commit()
-    from_env = os.environ.pop(key_name.upper(), None)
+    env_name = key_name.upper()
+    from_env = os.environ.pop(env_name, None)
+    # Удаляли запись дашборда — а вместе с ней исчезала и переменная хостинга,
+    # хотя её никто не трогал. Человек удаляет старое значение на сайте именно
+    # затем, чтобы заработал ключ из Render, и получал обратное: не работало
+    # ничего до перезапуска. Возвращаем то, что пришло от хостинга при старте.
+    hosting = _HOSTING_ENV.get(env_name)
+    if hosting is not None:
+        os.environ[env_name] = hosting
+    _EXPORTED.pop(env_name, None)
     if not conn and from_env is None:
         return {"ok": False, "error": "ключ не найден"}
-    return {"ok": True, "was_in_env": from_env is not None and not conn}
+    return {"ok": True, "was_in_env": from_env is not None and not conn,
+            "hosting_restored": hosting is not None}
 
 
 async def record_check(key_name: str, ok: bool, error: str = ""):
@@ -218,6 +228,12 @@ LAST_LOAD: dict = {"loaded": 0, "unreadable": 0, "encrypted_now": 0, "shadowed":
 # нашим же — то есть каждая правка ключа выглядела бы как конфликт с хостингом.
 _EXPORTED: dict = {}
 
+# Значения переменных хостинга, какими они были при старте процесса. Нужны,
+# чтобы отменить выгрузку удалённой записи: без этого удалённый в дашборде ключ
+# продолжал жить в памяти процесса до перезапуска — человек удалял старое
+# значение, чтобы заработала переменная Render, и не видел никакого эффекта.
+_HOSTING_ENV: dict = dict(os.environ)
+
 async def load_into_env() -> dict:
     """Выгружает сохранённые доступы в окружение процесса.
 
@@ -268,8 +284,27 @@ async def load_into_env() -> dict:
     if shadowed:
         print(f"[NEXUS] заданы и в дашборде, и в переменных хостинга — "
               f"используется дашборд: {', '.join(shadowed)}", flush=True)
+    # Записи, которые мы выгружали раньше, а теперь их в дашборде нет: значение
+    # надо отменить, иначе удаление на сайте не действует до перезапуска.
+    present = {c.key_name.upper() for c in rows if (c.key_value or "")}
+    dropped: list[str] = []
+    for env_name in list(_EXPORTED):
+        if env_name in present:
+            continue
+        hosting = _HOSTING_ENV.get(env_name)
+        if hosting is not None:
+            os.environ[env_name] = hosting      # снова действует значение Render
+        else:
+            os.environ.pop(env_name, None)      # значения не было вовсе
+        _EXPORTED.pop(env_name, None)
+        dropped.append(env_name)
+    if dropped:
+        print(f"[NEXUS] удалены из дашборда, вернулись значения хостинга: "
+              f"{', '.join(dropped)}", flush=True)
+
     result = {"loaded": loaded, "unreadable": unreadable,
-              "encrypted_now": re_encrypted, "shadowed": shadowed}
+              "encrypted_now": re_encrypted, "shadowed": shadowed,
+              "dropped": dropped}
     LAST_LOAD.update(result)
     return result
 
