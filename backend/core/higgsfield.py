@@ -316,12 +316,16 @@ MODELS = list(DOP_MODELS) + ["soul"]
 
 # Каталог для выбора в интерфейсе. Раньше модели можно было выбрать только через
 # MCP: без него меню отвечало «нет ни одной модели», хотя ключ работал.
+# Каталог для выбора в интерфейсе. Здесь только модели REST-пути (`/v1/...`):
+# это отдельная, более старая поверхность API, и её имена не совпадают с
+# каталогом аккаунта, который отдаёт MCP. Поэтому список помечен явно — чтобы
+# нельзя было спутать его с настоящим каталогом подписки.
 CATALOG = {
-    "image": [{"value": "soul", "label": "Soul — фотореализм (text2image)"}],
+    "image": [{"value": "soul", "label": "Soul (REST) — text2image"}],
     "video": [
-        {"value": "dop-turbo", "label": "DoP Turbo — быстро, хорошее качество"},
-        {"value": "dop-standard", "label": "DoP Standard — лучшее качество"},
-        {"value": "dop-lite", "label": "DoP Lite — самый дешёвый"},
+        {"value": "dop-turbo", "label": "DoP Turbo (REST) — быстро"},
+        {"value": "dop-standard", "label": "DoP Standard (REST) — качество"},
+        {"value": "dop-lite", "label": "DoP Lite (REST) — дёшево"},
     ],
 }
 
@@ -329,5 +333,5 @@ CATALOG = {
 def catalog(kind: str = "image") -> list[dict]:
     """Модели REST-пути. `connected` = есть ключ и секрет, то есть выбор сработает."""
     ok = bool(credentials())
-    return [{**m, "group": "Higgsfield API", "connected": ok}
+    return [{**m, "group": "Higgsfield REST", "connected": ok}
             for m in CATALOG.get(kind, [])]

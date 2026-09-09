@@ -157,6 +157,9 @@ async def test_video_prompt_in_russian_is_translated_too(client, monkeypatch):
         sent.update(args)
         return {"result": {"video_url": "https://cdn/x.mp4"}}
 
+    # Аргументы уходят вложенными в params — это форма, которую платформа
+    # действительно принимает.
+
     monkeypatch.setattr("core.skills.smart_text", fake_smart_text)
     monkeypatch.setattr(hixiit, "_mcp_call", fake_mcp)
     monkeypatch.setenv("HIGGSFIELD_MCP_URL", "https://mcp.example/x")
@@ -164,7 +167,8 @@ async def test_video_prompt_in_russian_is_translated_too(client, monkeypatch):
     res = await hixiit.generate("сделай вертикальный ролик про кофе")
 
     assert res["ok"] and res["kind"] == "video", "тип задачи виден по русскому тексту"
-    assert not hixiit_has_cyrillic(sent["prompt"]), "в модель должен уйти английский промпт"
+    assert not hixiit_has_cyrillic(sent["params"]["prompt"]), \
+        "в модель должен уйти английский промпт"
 
 
 def hixiit_has_cyrillic(text: str) -> bool:
