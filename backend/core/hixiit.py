@@ -72,6 +72,27 @@ def mcp_configured() -> bool:
     return bool(os.getenv("HIGGSFIELD_MCP_URL"))
 
 
+def _http_client_factory():
+    """Клиент streamable HTTP из пакета mcp, как бы он ни назывался.
+
+    Пакет переименовал функцию между версиями: `streamablehttp_client` →
+    `streamable_http_client`. Код импортировал только старое имя, поэтому на
+    сервере с более новым mcp путь падал с ImportError, и MCP молча выключался
+    — а вместе с ним каталог моделей и безлимит. Версию пакета мы не выбираем
+    (requirements допускает диапазон), поэтому принимаем оба имени.
+    """
+    import importlib
+    mod = importlib.import_module("mcp.client.streamable_http")
+    for name in ("streamablehttp_client", "streamable_http_client"):
+        fn = getattr(mod, name, None)
+        if fn is not None:
+            return fn
+    have = [n for n in dir(mod) if n.endswith("client")]
+    raise ImportError(
+        "в mcp.client.streamable_http нет ни streamablehttp_client, ни "
+        f"streamable_http_client; есть: {', '.join(have) or '—'}")
+
+
 async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     """Один вызов инструмента на MCP-сервере Higgsfield.
 
@@ -87,7 +108,7 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     # и проходит сквозь обычные except — задача падала бы целиком.
     try:
         from mcp import ClientSession
-        from mcp.client.streamable_http import streamablehttp_client
+        streamablehttp_client = _http_client_factory()
     except BaseException as e:
         raise RuntimeError(
             f"клиент mcp недоступен ({type(e).__name__}: {str(e)[:100]}); "
