@@ -134,6 +134,14 @@ def key_problem() -> str:
     if not key or not secret:
         return NO_KEY
 
+    if key == secret:
+        # Оба поля UUID и по форме безупречны, но это одно и то же значение —
+        # платформа ответит «Invalid credentials», и человек будет искать
+        # причину в самом ключе. Ключ и секрет выдаются парой и всегда разные.
+        return ("HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET содержат ОДНО И ТО ЖЕ "
+                "значение. Это разные половины пары: в кабинете Higgsfield при "
+                "создании ключа показываются два разных значения — key и secret.")
+
     key_ok, secret_ok = _looks_like_uuid(key), _looks_like_uuid(secret)
     if key_ok and secret_ok:
         return ""

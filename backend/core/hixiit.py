@@ -120,7 +120,26 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
         headers["Authorization"] = f"Bearer {token}"
 
     async def _run():
-        async with streamablehttp_client(url, headers=headers or None) as (read, write, _):
+        # У новой версии пакета сменилась не только фамилия функции, но и то, как
+        # ей передают заголовки: вместо `headers=` она принимает готовый
+        # http-клиент. И отдаёт пару потоков вместо тройки. Поддерживаем оба
+        # варианта, иначе MCP отваливается на каждом обновлении пакета.
+        import inspect
+        from contextlib import AsyncExitStack
+
+        takes_headers = "headers" in inspect.signature(streamablehttp_client).parameters
+        async with AsyncExitStack() as stack:
+            if takes_headers:
+                streams = await stack.enter_async_context(
+                    streamablehttp_client(url, headers=headers or None))
+            else:
+                from mcp.client.streamable_http import create_mcp_http_client
+                client = await stack.enter_async_context(
+                    create_mcp_http_client(headers=headers or None))
+                streams = await stack.enter_async_context(
+                    streamablehttp_client(url, http_client=client))
+            # Старая версия отдавала (read, write, get_session_id), новая — пару.
+            read, write = streams[0], streams[1]
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 res = await session.call_tool(tool, args)
