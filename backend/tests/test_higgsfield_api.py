@@ -16,8 +16,10 @@ def _creds(monkeypatch):
     for var in ("HF_KEY", "HF_API_KEY", "HF_API_SECRET", "HF_SECRET",
                 "HIGGSFIELD_API_BASE", "HIGGSFIELD_MODEL"):
         monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("HIGGSFIELD_API_KEY", "k")
-    monkeypatch.setenv("HIGGSFIELD_SECRET", "s")
+    # Ключи UUID-формы: платформа принимает только такие и отвечает 422 на
+    # любые другие. Заглушки «k»/«s» проверяли путь, которого в жизни нет.
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "3f8c1a2b-4d5e-6f70-8192-a3b4c5d6e7f8")
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "9e8d7c6b-5a49-3827-1605-f4e3d2c1b0a9")
 
 
 class _Fake:

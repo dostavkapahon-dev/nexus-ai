@@ -110,6 +110,47 @@ def _headers() -> dict:
 NO_KEY = ("Нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET "
           "(ключ и секрет из cloud.higgsfield.ai)")
 
+# Платформа принимает ключ и секрет только в виде UUID и отвечает на чужой
+# формат 422 с текстом про uuid_parsing. Сырой JSON этой ошибки человеку ничего
+# не говорит: он видит «отверг параметры» и идёт искать поломку в коде, хотя
+# дело в значении переменной. Проверяем форму до запроса и называем причину.
+_UUID_LEN = 36
+
+
+def _looks_like_uuid(value: str) -> bool:
+    v = (value or "").strip()
+    if len(v) != _UUID_LEN or v.count("-") != 4:
+        return False
+    return all(c in "0123456789abcdefABCDEF-" for c in v)
+
+
+def key_problem() -> str:
+    """Человеческое объяснение, почему пара ключей не подойдёт. Пусто — форма ок.
+
+    Это проверка ФОРМЫ, а не годности: правильный по виду ключ всё ещё может
+    быть просрочен или от другого аккаунта — это покажет живой запрос.
+    """
+    key, secret = _pair()
+    if not key or not secret:
+        return NO_KEY
+
+    key_ok, secret_ok = _looks_like_uuid(key), _looks_like_uuid(secret)
+    if key_ok and secret_ok:
+        return ""
+    if secret_ok and not key_ok:
+        return ("HIGGSFIELD_API_KEY не похож на ключ платформы, а "
+                "HIGGSFIELD_SECRET похож — возможно, значения перепутаны местами. "
+                "Ключ должен быть UUID из 36 символов вида "
+                "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, "
+                f"а сейчас в нём {len(key)}.")
+    if not key_ok:
+        return ("HIGGSFIELD_API_KEY неверного формата: платформа ждёт UUID из "
+                f"36 символов, а в переменной {len(key)}. Возьмите ключ в "
+                "личном кабинете Higgsfield, раздел API keys — там он показан "
+                "как xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
+    return ("HIGGSFIELD_SECRET неверного формата: ожидается UUID из 36 символов, "
+            f"а в переменной {len(secret)}.")
+
 
 def size_for(ratio: str) -> str:
     return SIZES.get((ratio or "").strip(), SIZES["9:16"])
@@ -122,6 +163,22 @@ def _error_text(status: int, data) -> str:
     человеку надо сказать именно их, иначе он идёт менять не то.
     """
     detail = data.get("detail") if isinstance(data, dict) else None
+
+    # Отдельный случай: платформа жалуется не на параметры генерации, а на сам
+    # ключ в заголовке. Человеку это приходило как «отверг параметры (422)» с
+    # куском JSON — и он шёл искать поломку в промпте, хотя дело в переменной.
+    if isinstance(detail, list):
+        for d in detail:
+            if not isinstance(d, dict):
+                continue
+            loc = [str(x) for x in (d.get("loc") or [])]
+            if "hf-api-key" in loc or "hf-secret" in loc:
+                which = "HIGGSFIELD_API_KEY" if "hf-api-key" in loc else "HIGGSFIELD_SECRET"
+                return (f"Higgsfield не принял {which}: платформа ждёт UUID из "
+                        "36 символов вида xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx. "
+                        "Возьмите значение в личном кабинете Higgsfield, "
+                        "раздел API keys.")
+
     if isinstance(detail, list) and detail:
         detail = "; ".join(str(d.get("msg") or d) for d in detail[:3])
     detail = str(detail or data)[:300]
@@ -143,8 +200,10 @@ async def _post(path: str, params: dict) -> dict:
     хостом — это то же самое «не генерируется», только без объяснения.
     """
     global _working_base
-    if not credentials():
-        return {"ok": False, "error": NO_KEY}
+    problem = key_problem()
+    if problem:
+        # Не тратим запрос и не показываем человеку сырой 422: причина известна.
+        return {"ok": False, "error": problem}
 
     last = {"ok": False, "error": "Higgsfield не ответил"}
     for base in _bases():
@@ -290,8 +349,9 @@ async def check() -> dict:
     верной парой ключ+секрет. Заодно определяем рабочий адрес API.
     """
     global _working_base
-    if not credentials():
-        return {"ok": False, "error": NO_KEY}
+    problem = key_problem()
+    if problem:
+        return {"ok": False, "error": problem}
     last = {"ok": False, "error": "Higgsfield не ответил"}
     for base in _bases():
         try:
