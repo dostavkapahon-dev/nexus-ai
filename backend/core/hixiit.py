@@ -265,6 +265,54 @@ _ROLE_HINTS = (
 )
 
 
+def role_for_task(task: str, kind: str, has_reference: bool = False) -> str:
+    """Какая роль модели нужна этой задаче: товар, текст, человек, кино, черновик."""
+    low = (task or "").lower()
+    for role, words in _ROLE_HINTS:
+        if any(w in low for w in words):
+            return role
+    if kind == "video":
+        return "person" if has_reference else "text2video"
+    return "person" if has_reference else "draft"
+
+
+# Замены под безлимит. Безлимит выдаётся не на все модели, а на конкретные —
+# и почти все наши штатные фото-модели (z_image, cinematic_studio_2_5,
+# marketing_studio_image) в него НЕ входят. Без этой карты система с активным
+# безлимитом всё равно списывала бы кредиты: роль подобрана верно, а модель
+# оплачиваемая.
+#
+# Кандидаты и их назначение взяты из живого каталога аккаунта, а не придуманы:
+#   nano_banana      — «realistic images, budget-friendly» → черновик
+#   nano_banana_pro  — «ultimate quality, text and diagrams» → товар, реклама
+#   soul_2           — «realistic UGC, character generation» → человек
+#   gpt_image_2      — «text-rendering, typography, 4k» → текст в кадре
+#   flux_2           — «precise prompt adherence» → сложный кинокадр
+#   seedream_v4_5    — «4K output, precise control» → запасной вариант
+_UNLIM_BY_ROLE = {
+    "draft": ("nano_banana", "nano_banana_2", "seedream_v5_lite"),
+    "person": ("soul_2", "soul_v2", "nano_banana_pro"),
+    "text": ("gpt_image_2", "nano_banana_pro"),
+    "cinematic": ("flux_2", "seedream_v4_5", "kling_omni_image"),
+    "product": ("nano_banana_pro", "seedream_v4_5", "nano_banana_2"),
+}
+
+
+def unlim_swap(model_id: str, role: str, covered: list) -> str:
+    """Модель, покрытая безлимитом, под ту же роль. Пусто — замены нет.
+
+    Роль важнее модели: человеку нужен кадр нужного типа, а не конкретный id.
+    Но подменять вслепую нельзя — берём только то, что безлимит реально
+    покрывает, иначе платформа откажет вместо генерации.
+    """
+    if not covered or model_id in covered:
+        return ""
+    for candidate in _UNLIM_BY_ROLE.get(role, ()):
+        if candidate in covered:
+            return candidate
+    return ""
+
+
 def pick_by_task(task: str, kind: str, has_reference: bool = False) -> str:
     """Модель под задачу по правилам, когда каталог MCP недоступен.
 
@@ -406,9 +454,17 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     # Безлимит тратим, только когда он есть и покрывает выбранную модель:
     # иначе платформа вернёт отказ вместо генерации.
     unlim = await unlim_status()
-    if unlim.get("available") and (not unlim.get("models")
-                                  or model_id in unlim["models"]):
-        params["use_unlim"] = True
+    swapped_from = ""
+    if unlim.get("available"):
+        covered = unlim.get("models") or []
+        # Если безлимит не покрывает выбранную модель, пробуем равноценную по
+        # роли из покрытых: иначе безлимит лежит без дела, а кредиты тратятся.
+        alt = unlim_swap(model_id, role_for_task(task, kind, bool(image_url)), covered)
+        if alt:
+            swapped_from, model_id = model_id, alt
+            params["model"] = model_id
+            params["prompt"] = prompt_for(model_id, task)[:1500]
+        params["use_unlim"] = bool(not covered or model_id in covered)
     else:
         params["use_unlim"] = False
 
@@ -430,9 +486,14 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
             raise RuntimeError(f"MCP не вернул задачу: {str(res)[:300]}")
         url = await _wait_job(job_id)
 
-    return {"ok": True, "url": url, "provider": "higgsfield_mcp",
-            "kind": kind, "model": model_id,
-            "unlim": bool(params.get("use_unlim"))}
+    out = {"ok": True, "url": url, "provider": "higgsfield_mcp",
+           "kind": kind, "model": model_id,
+           "unlim": bool(params.get("use_unlim"))}
+    if swapped_from:
+        # Подмену модели не прячем: человек должен видеть, что кадр сделан
+        # другой моделью — и почему.
+        out["swapped_from"] = swapped_from
+    return out
 
 
 _URL_KEYS = ("video_url", "image_url", "url", "output_url", "result_url", "media_url", "download_url")
