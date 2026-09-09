@@ -69,6 +69,18 @@ async def _full_system() -> str:
         base = await system_prompt() + "\n\n--- ИНСТРУМЕНТЫ ДИРЕКТОРА ---\n" + base
     except Exception:
         pass
+    # Что уже сработало и что провалилось у ЭТОГО аккаунта. Фабрика эту память
+    # получала, а дирижёр — нет: задача из Telegram планировалась без знания
+    # собственных результатов, то есть обучение на публикациях до него не
+    # доходило.
+    try:
+        from core.skills_store import context_for
+        memory = context_for()
+        if memory:
+            base = base + "\n\n--- ОПЫТ ЭТОГО АККАУНТА ---\n" + memory
+    except Exception:
+        pass
+
     try:
         from core.agent_profile import as_prompt
         profile = await as_prompt()
