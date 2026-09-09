@@ -247,14 +247,29 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})
 
-    # 3b. Раскадровка по кадрам — БЕСПЛАТНО (Pollinations, безлимит, 0 токенов)
-    from core.skills import free_image, higgsfield_reel
+    # 3b. Кадры раскадровки — через тот же генеративный слой, что и обложка.
+    #
+    # Раньше здесь стоял бесплатный Pollinations: решение принималось, когда
+    # Higgsfield не работал вовсе, и кадры были заведомо хуже обложки. Теперь
+    # путь один — HIXIIT (Higgsfield → запасные пути → бесплатная картинка),
+    # и бесплатный генератор остаётся последним звеном цепочки, а не первым.
+    #
+    # Кадры должны выглядеть одной серией, а не набором случайных картинок,
+    # поэтому к каждому промпту добавляется общий визуальный стиль ролика.
+    from core.skills import higgsfield_reel
+    style = (brief.get("visual_style") or brief.get("tone") or "").strip()
     frames = []
     for shot in brief.get("storyboard", [])[:4]:
-        prompt_img = shot.get("image_prompt", "")
-        if prompt_img:
-            frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
-                           "image": free_image(prompt_img)})
+        prompt_img = (shot.get("image_prompt") or "").strip()
+        if not prompt_img:
+            continue
+        prompt_full = f"{prompt_img}. Единый стиль серии: {style}" if style else prompt_img
+        try:
+            img = await generate_image(prompt_full, platform="instagram")
+        except Exception:
+            img = ""
+        frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
+                       "image": img})
     report["assets"]["frames"] = frames
     # Нет раскадровки → нет кадров: это не «успешный» шаг, а следствие сбоя брифа.
     report["steps"].append({"step": "storyboard_frames", "ok": bool(frames),
