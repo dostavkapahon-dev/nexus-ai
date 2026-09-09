@@ -87,6 +87,67 @@ async def build_brief(analysis: dict) -> dict:
                           f"Раскадровка собрана по шаблону."}
 
 
+_CAROUSEL_PROMPT = """\
+Ты — креативный директор. Сделай ПРОДАКШЕН-ТЗ на карусель для Instagram
+(вертикаль 4:5). Карусель — не набор картинок, а одна история: первый слайд
+удерживает (хук), середина даёт пользу по шагам, последний зовёт к действию.
+
+ТЕМА И АНАЛИЗ:
+{analysis}
+
+Слайдов: ровно {slides}.
+
+Верни СТРОГО JSON:
+{{
+  "title": "рабочее название",
+  "visual_style": "единый стиль всей серии: свет, палитра, типографика",
+  "caption": "подпись к посту",
+  "slides": [
+    {{"n": 1, "role": "hook", "text": "текст на слайде, коротко",
+      "image_prompt": "английский промпт для генерации кадра"}},
+    {{"n": 2, "role": "value", "text": "...", "image_prompt": "..."}},
+    {{"n": {slides}, "role": "cta", "text": "...", "image_prompt": "..."}}
+  ]
+}}
+Роли: первый слайд — hook, последний — cta, между ними value."""
+
+
+async def build_carousel(analysis: dict, slides: int = 7) -> dict:
+    """ТЗ на карусель: хук, польза по шагам, CTA — и единый визуальный стиль.
+
+    Отдельный бриф, а не раскадровка ролика: у карусели своя драматургия.
+    Раньше «сделай карусель» шло по конвейеру Reels и давало четыре кадра
+    раскадровки без хука, структуры и призыва — то есть не карусель.
+    """
+    from core.ai_router import ai_router
+
+    slides = max(2, min(int(slides or 7), 10))
+    try:
+        res = await ai_router.call(
+            "claude-sonnet-4-6", await system_prompt(),
+            _CAROUSEL_PROMPT.format(
+                analysis=json.dumps(analysis, ensure_ascii=False)[:4000],
+                slides=slides))
+        raw = res.get("text", "")
+        data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
+    except Exception as e:
+        # Без модели карусель не выдумываем: пустой каркас честнее набора
+        # случайных картинок, которые человек примет за готовый результат.
+        return {"ok": False, "error": str(e)[:200], "slides": []}
+
+    items = [s for s in (data.get("slides") or []) if s.get("image_prompt")][:slides]
+    if items:
+        # Роли расставляем сами: модель их путает, а от них зависит смысл.
+        items[0]["role"] = "hook"
+        items[-1]["role"] = "cta"
+        for i, item in enumerate(items, 1):
+            item["n"] = i
+            item.setdefault("role", "value")
+    return {"ok": bool(items), "title": data.get("title", ""),
+            "visual_style": data.get("visual_style", ""),
+            "caption": data.get("caption", ""), "slides": items}
+
+
 def choose_strategy(content_type: str = "auto") -> dict:
     """Выбор пути видео. ОСНОВНОЙ продакшен — HiggsField или HeyGen.
 

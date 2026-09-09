@@ -152,7 +152,7 @@ async def _flush_steps(report: dict) -> None:
 
 async def run_factory(topic: str | None = None, platforms: list | None = None,
                       dry_run: bool = True, want_video: bool = True,
-                      content_type: str = "auto") -> dict:
+                      content_type: str = "auto", slides: int = 0) -> dict:
     """Полный цикл «креативный директор». dry_run=True — генерируем, не публикуем."""
     from core.creative_director import build_brief, choose_strategy, wow_review
     platforms = platforms or DEFAULT_PLATFORMS
@@ -247,29 +247,51 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})
 
-    # 3b. Кадры раскадровки — через тот же генеративный слой, что и обложка.
+    # 3b. Кадры. У карусели своя драматургия — хук, польза, CTA, — поэтому для
+    # неё берётся отдельный бриф, а не раскадровка ролика.
     #
     # Раньше здесь стоял бесплатный Pollinations: решение принималось, когда
-    # Higgsfield не работал вовсе, и кадры были заведомо хуже обложки. Теперь
-    # путь один — HIXIIT (Higgsfield → запасные пути → бесплатная картинка),
-    # и бесплатный генератор остаётся последним звеном цепочки, а не первым.
+    # Higgsfield не работал вовсе. Теперь путь один — HIXIIT (Higgsfield →
+    # запасные пути → бесплатная картинка), и бесплатный генератор остаётся
+    # последним звеном цепочки, а не первым.
     #
-    # Кадры должны выглядеть одной серией, а не набором случайных картинок,
-    # поэтому к каждому промпту добавляется общий визуальный стиль ролика.
+    # Кадры должны выглядеть одной серией, поэтому к каждому промпту
+    # добавляется общий визуальный стиль.
     from core.skills import higgsfield_reel
-    style = (brief.get("visual_style") or brief.get("tone") or "").strip()
     frames = []
-    for shot in brief.get("storyboard", [])[:4]:
-        prompt_img = (shot.get("image_prompt") or "").strip()
-        if not prompt_img:
-            continue
-        prompt_full = f"{prompt_img}. Единый стиль серии: {style}" if style else prompt_img
-        try:
-            img = await generate_image(prompt_full, platform="instagram")
-        except Exception:
-            img = ""
-        frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
-                       "image": img})
+    if content_type == "carousel":
+        from core.creative_director import build_carousel
+        deck = await build_carousel({"topic": plan.get("theme"), "plan": plan,
+                                     "brief": brief}, slides=slides or 7)
+        report["assets"]["carousel"] = {"title": deck.get("title"),
+                                        "caption": deck.get("caption"),
+                                        "slides": len(deck.get("slides", []))}
+        style = (deck.get("visual_style") or "").strip()
+        for slide in deck.get("slides", []):
+            prompt_full = (f"{slide['image_prompt']}. Единый стиль серии: {style}"
+                           if style else slide["image_prompt"])
+            try:
+                img = await generate_image(prompt_full, platform="instagram")
+            except Exception:
+                img = ""
+            frames.append({"n": slide.get("n"), "role": slide.get("role"),
+                           "overlay": slide.get("text"), "image": img})
+        report["steps"].append({"step": "carousel", "ok": bool(frames),
+                                "slides": len(frames)})
+    else:
+        style = (brief.get("visual_style") or brief.get("tone") or "").strip()
+        for shot in brief.get("storyboard", [])[:4]:
+            prompt_img = (shot.get("image_prompt") or "").strip()
+            if not prompt_img:
+                continue
+            prompt_full = (f"{prompt_img}. Единый стиль серии: {style}"
+                           if style else prompt_img)
+            try:
+                img = await generate_image(prompt_full, platform="instagram")
+            except Exception:
+                img = ""
+            frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
+                           "image": img})
     report["assets"]["frames"] = frames
     # Нет раскадровки → нет кадров: это не «успешный» шаг, а следствие сбоя брифа.
     report["steps"].append({"step": "storyboard_frames", "ok": bool(frames),
