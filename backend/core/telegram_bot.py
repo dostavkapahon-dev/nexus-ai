@@ -126,6 +126,7 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
+        {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
         {"command": "model", "description": "Выбор моделей: AI, изображения, видео"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
@@ -901,6 +902,20 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("system_test", "systemtest", "selftest"):
+        # Диагностика говорит, ЧТО настроено. Самопроверка — что реально
+        # работает: каждая проверка делает настоящий вызов и показывает
+        # доказательство. Генерация по умолчанию не запускается, чтобы
+        # проверка не жгла кредиты: для неё есть «deep».
+        from core import system_test
+        deep = "deep" in text.lower() or "полн" in text.lower()
+        await send_message(chat_id, "🧪 Проверяю по-настоящему"
+                                    + (" (с генерацией картинки)" if deep else "")
+                                    + ", это займёт до минуты…")
+        report = await system_test.run(deep=deep)
+        await send_message(chat_id, system_test.as_text(report))
         return
 
     if cmd == "diag":
