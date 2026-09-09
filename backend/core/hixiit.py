@@ -461,13 +461,110 @@ def _looks_like_media(url: str) -> bool:
 
 # ── Главная точка входа ───────────────────────────────────────────────────────
 
+# ─────────────────────── проверка до и после генерации ───────────────────────
+#
+# Генерация — самый дорогой шаг конвейера, и до сих пор он шёл вслепую: промпт
+# уходил в модель как есть, а результат никто не смотрел. Обе проверки дешёвые
+# (короткая модель + разбор картинки) и обе «не мешают»: при отсутствии ключей
+# или сбое проверки генерация идёт как раньше, а не встаёт.
+
+_PROMPT_CHECK = (
+    "Ты режиссёр-постановщик. Оцени промпт для генеративной модели и почини его, "
+    "если нужно. Верни JSON: {\"ok\": true|false, \"reason\": \"что не так\", "
+    "\"prompt\": \"исправленный промпт\"}. Промпт должен: отвечать задаче, "
+    "описывать композицию и свет конкретно, не противоречить сам себе. "
+    "Если промпт годится — ok:true и верни его без изменений."
+)
+
+
+async def check_prompt(prompt: str, task: str, model: str, kind: str) -> dict:
+    """Промпт перед отправкой в модель. Возвращает {ok, prompt, reason, checked}."""
+    from core.ai_router import ai_available, ai_router, ECONOMY_MODELS
+    if not ai_available():
+        return {"ok": True, "prompt": prompt, "checked": False,
+                "reason": "нет модели для проверки"}
+    try:
+        from core import ai_escrow
+        with ai_escrow.suppressed():
+            res = await ai_router.call(
+                ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash"), _PROMPT_CHECK,
+                f"ЗАДАЧА: {task[:600]}\nМОДЕЛЬ: {model} ({kind})\n"
+                f"ПРОМПТ:\n{prompt[:1500]}")
+        text = res.get("text", "")
+        data = json.loads(text[text.find("{"):text.rfind("}") + 1])
+        fixed = (data.get("prompt") or "").strip() or prompt
+        return {"ok": bool(data.get("ok", True)), "prompt": fixed,
+                "reason": str(data.get("reason") or "")[:200], "checked": True}
+    except BaseException as e:
+        _reraise_control_flow(e)
+        # Проверка — служебный шаг: её отказ не должен отменять генерацию.
+        return {"ok": True, "prompt": prompt, "checked": False,
+                "reason": f"{type(e).__name__}"}
+
+
+async def check_result(url: str, task: str, kind: str) -> dict:
+    """Готовый результат глазами модели. {ok, reason, checked}."""
+    try:
+        from core.vision import analyze_image, analyze_video
+        fn = analyze_video if kind == "video" else analyze_image
+        res = await fn(url, "Опиши кадр и ответь строкой ГОДНО или БРАК с причиной. "
+                            f"Задача была: {task[:300]}")
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return {"ok": True, "checked": False, "reason": f"{type(e).__name__}"}
+    if not res.get("ok"):
+        return {"ok": True, "checked": False, "reason": str(res.get("error"))[:160]}
+    text = (res.get("analysis") or "")
+    bad = "БРАК" in text.upper()
+    return {"ok": not bad, "checked": True, "reason": text[:300]}
+
+
 async def generate(task: str, kind: str = "auto", ratio: str = None,
-                   image_url: str = None, allow_free: bool = True) -> dict:
-    """Сгенерировать медиа по задаче. Никогда не бросает — возвращает отчёт.
+                   image_url: str = None, allow_free: bool = True,
+                   qc: bool = True) -> dict:
+    """Сгенерировать медиа с проверкой промпта до и результата после.
+
+    Одна повторная попытка при браке: генерация — самый дорогой шаг, и цикл
+    «не понравилось — ещё раз» без предела просто сжёг бы кредиты.
 
     {'ok': True, 'url', 'provider', 'kind', 'model'}
     {'ok': False, 'error': <человеческая причина>, 'tried': [...]}
     """
+    kind_resolved = detect_kind(task, kind)
+    if not qc:
+        return await _generate_once(task, kind, ratio, image_url, allow_free)
+
+    checked = await check_prompt(task, task, "auto", kind_resolved)
+    prompt = checked.get("prompt") or task
+
+    res = await _generate_once(prompt, kind, ratio, image_url, allow_free)
+    if checked.get("checked"):
+        res["prompt_check"] = checked.get("reason") or "промпт годится"
+    if not res.get("ok") or not res.get("url"):
+        return res
+
+    verdict = await check_result(res["url"], task, res.get("kind", kind_resolved))
+    res["qc"] = verdict
+    if verdict.get("ok") or not verdict.get("checked"):
+        return res
+
+    # Брак: правим промпт по причине и пробуем ровно один раз ещё.
+    again = await check_prompt(f"{prompt}\n\nИсправь: {verdict['reason'][:300]}",
+                               task, res.get("model", "auto"), res.get("kind", kind_resolved))
+    retry = await _generate_once(again.get("prompt") or prompt, kind, ratio,
+                                 image_url, allow_free)
+    if retry.get("ok"):
+        retry["qc"] = {"ok": True, "checked": True,
+                       "reason": f"перегенерация после брака: {verdict['reason'][:160]}"}
+        retry["regenerated"] = True
+        return retry
+    res["qc_note"] = "результат не прошёл проверку, перегенерация не удалась"
+    return res
+
+
+async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
+                         image_url: str = None, allow_free: bool = True) -> dict:
+    """Одна попытка генерации по цепочке путей. Никогда не бросает."""
     kind = detect_kind(task, kind)
     ratio = ratio or detect_ratio(task)
     tried = []
