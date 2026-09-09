@@ -58,9 +58,10 @@ async def test_topic_starts_the_right_kind_of_work(client, bot, monkeypatch):
     seen = {}
 
     async def fake_factory(topic=None, platforms=None, dry_run=True,
-                           want_video=True, content_type="auto"):
+                           want_video=True, content_type="auto", slides=0):
         seen.update({"topic": topic, "platforms": platforms, "dry_run": dry_run,
-                     "want_video": want_video, "content_type": content_type})
+                     "want_video": want_video, "content_type": content_type,
+                     "slides": slides})
         return {"ok": True}
 
     monkeypatch.setattr("core.content_factory.run_factory", fake_factory)

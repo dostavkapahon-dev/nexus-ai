@@ -1652,6 +1652,19 @@ async def _handle_media(chat_id: str, msg: dict):
         await send_message(chat_id, f"💾 Сохранил как референс. Разбор не удался: {str(e)[:120]}")
 
 
+def slides_wanted(text: str, default: int = 7) -> int:
+    """Сколько слайдов просил человек: «карусель на 7 слайдов».
+
+    Без этого «на 7 слайдов» просто игнорировалось, и приходило столько, сколько
+    решит система, — то есть не то, что просили.
+    """
+    import re
+    m = re.search(r"(\d{1,2})\s*(?:слайд|sl|кадр)", (text or "").lower())
+    if not m:
+        return default
+    return max(2, min(int(m.group(1)), 10))
+
+
 async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
     """Запускает создание выбранного вида контента и показывает живой статус.
 
@@ -1690,7 +1703,8 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
     task_id = await spawn(kind if kind != "video" else "factory", goal,
                           lambda: run_factory(topic=real_topic, platforms=platforms,
                                               dry_run=False, want_video=want_video,
-                                              content_type=content_type),
+                                              content_type=content_type,
+                                              slides=slides_wanted(topic)),
                           source="telegram")
     await task_feed.start(task_id, chat_id, goal, kind=kind)
 
