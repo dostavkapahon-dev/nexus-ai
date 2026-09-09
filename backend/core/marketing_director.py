@@ -213,6 +213,37 @@ TOOLS = [
 ]
 
 
+# Что показывать человеку вместо тишины на несколько минут. Внутренняя кухня
+# (какой агент, какая модель, какой JSON) человеку не нужна — нужен ответ на
+# вопрос «система вообще жива и чем занята».
+STEP_LABELS = {
+    "web_search": "🔎 Ищу в интернете",
+    "open_url": "🔎 Читаю страницу",
+    "research": "🔎 Изучаю тему",
+    "analyze": "📊 Анализирую аккаунт",
+    "run_browser": "🖥 Работаю в браузере",
+    "delegate": "🧠 Думаю над задачей",
+    "make_image": "🎨 Генерирую изображение",
+    "make_video": "🎬 Генерирую видео",
+    "publish": "📤 Публикую",
+}
+
+
+async def _notify(on_step, name: str) -> None:
+    """Сообщает о шаге. Сбой уведомления не должен ронять саму задачу."""
+    if not on_step:
+        return
+    label = STEP_LABELS.get(name)
+    if not label:
+        return
+    try:
+        res = on_step(label)
+        if hasattr(res, "__await__"):
+            await res
+    except Exception:
+        pass
+
+
 async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "delegate":
         executor = (inp.get("executor") or "").strip().lower()
@@ -291,7 +322,8 @@ async def _exec_tool(name: str, inp: dict) -> dict:
     return {"ok": False, "error": f"unknown tool {name}"}
 
 
-async def _run_director_anthropic(goal: str, context: str = "", max_steps: int = 12) -> dict:
+async def _run_director_anthropic(goal: str, context: str = "", max_steps: int = 12,
+                                  on_step=None) -> dict:
     """Главный цикл дирижёра. Возвращает {'status', 'summary', 'steps'}."""
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     messages = [{
@@ -316,6 +348,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
             steps.append({"action": "done", "thought": thought})
             return {"status": "done", "summary": inp.get("summary", ""), "steps": steps}
 
+        await _notify(on_step, name)
         result = await _exec_tool(name, inp)
         step = {"action": name, "input": inp, "thought": thought,
                 "result_ok": result.get("ok", result.get("status") == "done")}
@@ -358,7 +391,8 @@ _GEMINI_DIRECTOR_DOC = """\
 """
 
 
-async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12) -> dict:
+async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12,
+                               on_step=None) -> dict:
     import google.generativeai as genai
     genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
     model = genai.GenerativeModel(
@@ -386,6 +420,7 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
             steps.append({"action": "done", "thought": thought})
             return {"status": "done", "summary": args.get("summary", thought), "steps": steps}
 
+        await _notify(on_step, tool)
         result = await _exec_tool(tool, args)
         ok = result.get("ok", result.get("status") == "done")
         step = {"action": tool, "input": args, "thought": thought, "result_ok": ok}
@@ -400,12 +435,18 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
 
 
-async def run_director(goal: str, context: str = "", max_steps: int = 12) -> dict:
-    """Запуск дирижёра на доступном AI: Anthropic если есть ключ, иначе Gemini."""
+async def run_director(goal: str, context: str = "", max_steps: int = 12,
+                       on_step=None) -> dict:
+    """Запуск дирижёра на доступном AI: Anthropic если есть ключ, иначе Gemini.
+
+    `on_step` вызывается перед каждым инструментом. Долгая задача без единого
+    признака жизни неотличима от зависшей — человек ждёт минуты и не знает,
+    работает система или нет.
+    """
     if os.getenv("ANTHROPIC_API_KEY"):
-        return await _run_director_anthropic(goal, context, max_steps)
+        return await _run_director_anthropic(goal, context, max_steps, on_step)
     if os.getenv("GEMINI_API_KEY"):
-        return await _run_director_gemini(goal, context, max_steps)
+        return await _run_director_gemini(goal, context, max_steps, on_step)
     return {"status": "error",
             "summary": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
                        "или ANTHROPIC_API_KEY в Подключениях."}

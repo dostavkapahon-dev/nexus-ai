@@ -736,8 +736,19 @@ async def _dispatch_command(chat_id: str, text: str):
             # картинку», «переделай второй вариант» связаны между собой.
             # Без истории дирижёр каждый раз начинает с чистого листа.
             history = await dialog.history(chat_id)
+
+            # Один и тот же шаг подряд не повторяем: «🔎 Ищу» пять раз — это
+            # шум, а не прогресс.
+            seen = {"last": ""}
+
+            async def progress(label: str):
+                if label == seen["last"]:
+                    return
+                seen["last"] = label
+                await send_message(chat_id, label)
+
             res = await run_command(task, source="telegram", mirror=False,
-                                    context=history)
+                                    context=history, on_step=progress)
         except Exception as e:
             await send_message(chat_id, f"⚠️ Ошибка дирижёра: {str(e)[:200]}")
             return
