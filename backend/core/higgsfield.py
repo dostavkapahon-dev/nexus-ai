@@ -134,6 +134,7 @@ def _what_is_it(value: str) -> str:
     """
     v = (value or "").strip()
     if len(v) == 64 and all(c in "0123456789abcdefABCDEF" for c in v):
+<<<<<<< HEAD
         # Подтверждено по кабинету: на странице api-keys выдаются две строки —
         # key (UUID) и secret (длинная hex-строка). Значит 64 hex в поле ключа
         # почти всегда означает, что половины переставлены, а не что вставлен
@@ -141,6 +142,10 @@ def _what_is_it(value: str) -> str:
         return ("Похоже, это СЕКРЕТ: в кабинете Higgsfield секрет выглядит "
                 "длинной строкой без дефисов, а ключ — как UUID. Проверьте, не "
                 "переставлены ли значения местами.")
+=======
+        return ("Похоже, это токен доступа (64 hex-символа) — у Higgsfield так "
+                "выглядит MCP-токен, его место в HIGGSFIELD_MCP_TOKEN.")
+>>>>>>> origin/master
     if v.startswith(("sk-", "hf_", "Bearer ")):
         return "Похоже, это ключ другого сервиса."
     return ""
