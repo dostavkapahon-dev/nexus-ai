@@ -89,3 +89,28 @@ async def test_status_reports_shape_for_every_half(client, monkeypatch):
     assert by_name["ключ"]["shape_ok"] is False
     assert by_name["ключ"]["length"] == 5
     assert by_name["секрет"]["shape_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_long_secret_is_not_flagged(client, monkeypatch):
+    """Секрет из кабинета — длинная строка без дефисов, и это норма."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "8f" * 32)
+
+    by_name = {s["name"]: s for s in await hixiit._key_sources()}
+
+    assert by_name["секрет"]["shape_ok"] is True, \
+        "требовать UUID от секрета — выдуманное правило"
+    assert by_name["ключ"]["shape_ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_empty_secret_is_still_flagged(client, monkeypatch):
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID)
+    monkeypatch.delenv("HIGGSFIELD_SECRET", raising=False)
+    monkeypatch.delenv("HF_SECRET", raising=False)
+    monkeypatch.delenv("HF_API_SECRET", raising=False)
+
+    by_name = {s["name"]: s for s in await hixiit._key_sources()}
+
+    assert by_name["секрет"]["shape_ok"] is False

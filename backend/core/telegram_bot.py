@@ -886,7 +886,8 @@ async def _dispatch_command(chat_id: str, text: str):
             if src.get("filled") and not src.get("shape_ok"):
                 mark = "⚠️"
                 shape = (f" — <b>{src['length']} символов вместо 36</b>, "
-                         "нужен UUID вида xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
+                         "ключ должен быть UUID вида "
+                         "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx")
             lines.append(f"   {mark} {src['name']}{tail} — {src['source']}{shape}")
         # MCP — необязательное дополнение: он даёт весь каталог аккаунта, но
         # держится на OAuth-сессии, которая протухает. Поэтому упоминаем его

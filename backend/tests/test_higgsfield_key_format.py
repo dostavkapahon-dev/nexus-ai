@@ -150,3 +150,62 @@ def test_hint_does_not_fire_on_a_correct_pair(monkeypatch):
     monkeypatch.setenv("HIGGSFIELD_SECRET", UUID_B)
 
     assert hf.key_problem() == ""
+
+
+# ── UUID требуется только от ключа ────────────────────────────────────────────
+#
+# Проверка требовала UUID от ОБЕИХ половин. Требование было выдумано: платформа
+# в 422 говорила только про `hf-api-key`, а в кабинете секрет выдаётся длинной
+# строкой без дефисов. Из-за этого система отвергала ПРАВИЛЬНО настроенную пару,
+# и значения переставляли впустую несколько раз.
+
+SECRET_HEX = "8f" * 32          # так секрет выглядит в кабинете Higgsfield
+
+
+def test_uuid_key_with_long_secret_is_accepted(monkeypatch):
+    """Ровно та пара, что настроена на сервере."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID_A)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", SECRET_HEX)
+
+    assert hf.key_problem() == "", "это верная пара, отвергать её нельзя"
+
+
+@pytest.mark.asyncio
+async def test_such_a_pair_reaches_the_network(monkeypatch):
+    """Верная пара должна доходить до платформы, а не отсекаться своей проверкой."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID_A)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", SECRET_HEX)
+    sent = []
+
+    class _R:
+        status_code = 200
+        def json(self):
+            return {"job_set_id": "js-1", "jobs": [{"id": "j1"}]}
+        text = "{}"
+
+    async def fake_post(self, url, headers=None, json=None, **kw):
+        sent.append(headers)
+        return _R()
+
+    monkeypatch.setattr("httpx.AsyncClient.post", fake_post)
+    await hf._post(hf.PATH_IMAGE, {"prompt": "тест"})
+
+    assert sent, "запрос не ушёл — проверка отсекла верную пару"
+    assert sent[0]["hf-api-key"] == UUID_A
+    assert sent[0]["hf-secret"] == SECRET_HEX
+
+
+def test_key_still_must_be_a_uuid(monkeypatch):
+    """Послабление не должно снять единственное подтверждённое требование."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", SECRET_HEX)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", UUID_A)
+
+    assert "перепутаны местами" in hf.key_problem()
+
+
+def test_secret_of_any_shape_is_fine_as_long_as_it_exists(monkeypatch):
+    """Годность секрета решает платформа, а не наши догадки о его виде."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID_A)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "hf_whatever_shape_1234")
+
+    assert hf.key_problem() == ""

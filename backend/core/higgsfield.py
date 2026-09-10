@@ -134,10 +134,9 @@ def _what_is_it(value: str) -> str:
     """
     v = (value or "").strip()
     if len(v) == 64 and all(c in "0123456789abcdefABCDEF" for c in v):
-        # Подтверждено по кабинету: на странице api-keys выдаются две строки —
-        # key (UUID) и secret (длинная hex-строка). Значит 64 hex в поле ключа
-        # почти всегда означает, что половины переставлены, а не что вставлен
-        # посторонний токен.
+        # В кабинете на странице api-keys выдаются две строки: key (UUID) и
+        # secret (длинная строка без дефисов). Значит 64 hex в поле КЛЮЧА —
+        # это почти наверняка секрет, попавший не в своё поле.
         return ("Похоже, это СЕКРЕТ: в кабинете Higgsfield секрет выглядит "
                 "длинной строкой без дефисов, а ключ — как UUID. Проверьте, не "
                 "переставлены ли значения местами.")
@@ -164,23 +163,25 @@ def key_problem() -> str:
                 "значение. Это разные половины пары: в кабинете Higgsfield при "
                 "создании ключа показываются два разных значения — key и secret.")
 
-    key_ok, secret_ok = _looks_like_uuid(key), _looks_like_uuid(secret)
-    if key_ok and secret_ok:
+    # UUID обязателен ТОЛЬКО для ключа. Это единственное, что подтверждено
+    # ответом платформы (422 uuid_parsing на loc ["header","hf-api-key"]).
+    # Про форму секрета платформа не говорила ничего, а в кабинете он выдаётся
+    # длинной строкой без дефисов. Прежняя проверка требовала UUID от обеих
+    # половин — требование выдуманное, и оно отвергало ВЕРНУЮ пару.
+    key_ok = _looks_like_uuid(key)
+    if key_ok:
         return ""
-    if secret_ok and not key_ok:
+    if _looks_like_uuid(secret):
         return ("HIGGSFIELD_API_KEY не похож на ключ платформы, а "
                 "HIGGSFIELD_SECRET похож — возможно, значения перепутаны местами. "
                 "Ключ должен быть UUID из 36 символов вида "
                 "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, "
                 f"а сейчас в нём {len(key)}.")
-    if not key_ok:
-        return ("HIGGSFIELD_API_KEY неверного формата: платформа ждёт UUID из "
-                f"36 символов, а в переменной {len(key)}. " + _what_is_it(key)
-                + " Ключ платформы берётся в личном кабинете Higgsfield, "
-                "раздел API keys — там он показан как "
-                "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
-    return ("HIGGSFIELD_SECRET неверного формата: ожидается UUID из 36 символов, "
-            f"а в переменной {len(secret)}.")
+    return ("HIGGSFIELD_API_KEY неверного формата: платформа ждёт UUID из "
+            f"36 символов, а в переменной {len(key)}. " + _what_is_it(key)
+            + " Ключ платформы берётся в личном кабинете Higgsfield, "
+            "раздел API keys — там он показан как "
+            "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
 
 
 def size_for(ratio: str) -> str:

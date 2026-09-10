@@ -858,14 +858,19 @@ async def _key_sources() -> list[dict]:
         else:
             source = "переменная хостинга"
         # Длина и форма — то, чего не хватало, чтобы человек сам увидел, что
-        # «вроде настроил» не равно «настроил». Платформа принимает только UUID
-        # из 36 символов; лишний пробел или ключ не из того раздела кабинета
-        # выглядят в панели хостинга ровно так же, как правильные.
+        # «вроде настроил» не равно «настроил»: в панели хостинга значение
+        # скрыто точками, и неверное выглядит как верное.
+        #
+        # Форма UUID требуется ТОЛЬКО от ключа — это единственное, что
+        # подтверждено ответом платформы. Секрет в кабинете выдаётся длинной
+        # строкой без дефисов, и требовать от него UUID значит помечать
+        # правильное значение как ошибку.
         from core.higgsfield import _looks_like_uuid
+        shape_ok = (_looks_like_uuid(value) if env_name == "HIGGSFIELD_API_KEY"
+                    else bool(value))
         out.append({"name": human, "env": env_name, "filled": bool(value),
                     "source": source, "tail": value[-4:] if len(value) > 4 else "",
-                    "length": len(value),
-                    "shape_ok": _looks_like_uuid(value) if value else False})
+                    "length": len(value), "shape_ok": bool(value) and shape_ok})
     return out
 
 
