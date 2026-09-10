@@ -72,6 +72,10 @@ IGNORE_EXACT = {"PATH", "HOME", "PORT", "PWD", "SHELL", "USER", "LANG", "TERM",
                 "HOSTNAME", "TZ", "TMPDIR", "SHLVL", "_"}
 
 
+# Метка «имя недописано, вариантов несколько» — угадывать за человека нельзя.
+AMBIGUOUS = "\x00ambiguous:"
+
+
 def canonical() -> set:
     """Имена, которые код действительно читает."""
     names = set(BASE_CANONICAL)
@@ -104,8 +108,25 @@ def _match(given: str, known: set) -> str | None:
             return name
 
     # «instagram» → INSTAGRAM_ACCESS_TOKEN: имя переменной = бренд целиком.
+    # Проверяется РАНЬШЕ поиска по префиксу: у бренда переменных несколько, и
+    # без этого правила «instagram» выдавалось бы за неоднозначное имя, хотя
+    # человек почти наверняка имел в виду токен.
     if low in PREFERRED_BY_BRAND:
         return PREFERRED_BY_BRAND[low]
+
+    # HIGGSFIELD_MCP → HIGGSFIELD_MCP_URL: имя, наоборот, недописано. Раньше
+    # такие проходили мимо проверки: ловились только имена длиннее правильного.
+    # Требуем, чтобы обрыв пришёлся на границу слова — иначе «TELEG» ловило бы
+    # половину таблицы по случайному совпадению букв.
+    upper = given.strip().upper()
+    prefixed = sorted(n for n in known
+                      if n.startswith(upper) and n[len(upper):].startswith("_"))
+    if len(prefixed) == 1:
+        return prefixed[0]
+    if len(prefixed) > 1:
+        # Несколько подходящих — угадывать нельзя, но и молчать нельзя:
+        # называем все варианты, выбор за человеком.
+        return AMBIGUOUS + ", ".join(prefixed)
     # На бренд может приходиться несколько переменных (ID, секрет, токен).
     # Берём первую по алфавиту, иначе подсказка меняется от запуска к запуску.
     same_brand = sorted(n for n in known if _brand(n) == low)
@@ -125,7 +146,11 @@ def misnamed(environ: dict = None) -> list:
         target = _match(given, known)
         if target is None:
             continue                      # чужая переменная — не наше дело
-        if target == "":
+        if target.startswith(AMBIGUOUS):
+            out.append({"given": given, "expected": "",
+                        "note": "имя недописано, подходит: "
+                                + target[len(AMBIGUOUS):]})
+        elif target == "":
             out.append({"given": given, "expected": "",
                         "note": "система больше не использует — можно удалить"})
         else:

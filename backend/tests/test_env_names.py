@@ -101,3 +101,48 @@ async def test_diag_shows_the_warning(client, monkeypatch):
     text = "\n".join(sent)
     assert "не читаются" in text
     assert "qroc" in text and "GROQ_API_KEY" in text
+
+
+# ── недописанные имена ────────────────────────────────────────────────────────
+#
+# Второй заход по настройке дал `HIGGSFIELD_MCP` вместо `HIGGSFIELD_MCP_URL`, и
+# проверка промолчала: она ловила имена ДЛИННЕЕ правильного (GEMINI_API_KEY1),
+# а укороченные проходили мимо. Для человека это тот же тупик — переменная в
+# списке есть, а система её не видит.
+
+
+def test_truncated_name_with_one_match_is_named():
+    found = {x["given"]: x["expected"]
+             for x in env_audit.misnamed({"TELEGRAM_POST_CHAT": "v"})}
+
+    assert found["TELEGRAM_POST_CHAT"] == "TELEGRAM_POST_CHAT_ID"
+
+
+def test_truncated_name_with_several_matches_lists_them():
+    """HIGGSFIELD_MCP подходит и к URL, и к токену — угадывать нельзя."""
+    item = env_audit.misnamed({"HIGGSFIELD_MCP": "v"})[0]
+
+    assert "HIGGSFIELD_MCP_URL" in item["note"]
+    assert "HIGGSFIELD_MCP_TOKEN" in item["note"]
+    assert item["expected"] == "", "выбор за человеком, а не за системой"
+
+
+def test_match_only_on_a_word_boundary():
+    """Совпадение по обрывку слова — ложная тревога, а не помощь."""
+    assert env_audit.misnamed({"DATA": "v", "TELEG": "v"}) == []
+
+
+def test_full_correct_names_stay_silent():
+    env = {"HIGGSFIELD_MCP_URL": "v", "HIGGSFIELD_MCP_TOKEN": "v",
+           "TELEGRAM_POST_CHAT_ID": "v"}
+
+    assert env_audit.misnamed(env) == []
+
+
+def test_internal_marker_never_reaches_the_report():
+    """Служебная метка неоднозначности — не для глаз человека."""
+    lines = "\n".join(env_audit.as_lines(
+        env_audit.misnamed({"HIGGSFIELD_MCP": "v"})))
+
+    assert env_audit.AMBIGUOUS not in lines
+    assert "\x00" not in lines
