@@ -105,3 +105,48 @@ def test_real_parameter_errors_are_still_shown():
 
     assert "field required" in text
     assert "API keys" not in text
+
+
+# ── чем похоже вставленное значение ───────────────────────────────────────────
+#
+# «Не тот формат» человеку мало что даёт: он уже вставил то, что нашёл в
+# кабинете, и не понимает, что нашёл не то. С сервера пришёл ключ из 64
+# hex-символов — это токен доступа, а не ключ платформы.
+
+HEX64 = "8f" * 32
+
+
+def test_hex_token_is_recognised_as_a_token(monkeypatch):
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", HEX64)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "not-a-uuid-either")
+
+    problem = hf.key_problem()
+
+    assert "токен" in problem, "надо сказать, ЧЕМ похоже вставленное"
+    assert "HIGGSFIELD_MCP_TOKEN" in problem, "и где его настоящее место"
+    assert HEX64 not in problem, "значение показывать нельзя"
+
+
+def test_key_of_another_service_is_named_as_such(monkeypatch):
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "sk-proj-abcdef")
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "also-wrong")
+
+    assert "другого сервиса" in hf.key_problem()
+
+
+def test_unrecognisable_value_gets_no_invented_guess(monkeypatch):
+    """Не знаем — молчим, а не сочиняем."""
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", "qwerty12345")
+    monkeypatch.setenv("HIGGSFIELD_SECRET", "asdfgh67890")
+
+    problem = hf.key_problem()
+
+    assert "36" in problem
+    assert "токен" not in problem and "другого сервиса" not in problem
+
+
+def test_hint_does_not_fire_on_a_correct_pair(monkeypatch):
+    monkeypatch.setenv("HIGGSFIELD_API_KEY", UUID_A)
+    monkeypatch.setenv("HIGGSFIELD_SECRET", UUID_B)
+
+    assert hf.key_problem() == ""

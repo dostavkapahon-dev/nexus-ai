@@ -124,6 +124,23 @@ def _looks_like_uuid(value: str) -> bool:
     return all(c in "0123456789abcdefABCDEF-" for c in v)
 
 
+def _what_is_it(value: str) -> str:
+    """Подсказка, чем похоже вставленное значение. Пусто — узнать нечем.
+
+    «Не тот формат» мало что даёт: человек уже вставил то, что нашёл в кабинете,
+    и не понимает, что именно нашёл не то. Длинная hex-строка — это токен
+    (у Higgsfield такой вид у MCP-токена), а не ключ платформы, и сказать об
+    этом полезнее, чем повторить требование к формату.
+    """
+    v = (value or "").strip()
+    if len(v) == 64 and all(c in "0123456789abcdefABCDEF" for c in v):
+        return ("Похоже, это токен доступа (64 hex-символа) — у Higgsfield так "
+                "выглядит MCP-токен, его место в HIGGSFIELD_MCP_TOKEN.")
+    if v.startswith(("sk-", "hf_", "Bearer ")):
+        return "Похоже, это ключ другого сервиса."
+    return ""
+
+
 def key_problem() -> str:
     """Человеческое объяснение, почему пара ключей не подойдёт. Пусто — форма ок.
 
@@ -153,9 +170,10 @@ def key_problem() -> str:
                 f"а сейчас в нём {len(key)}.")
     if not key_ok:
         return ("HIGGSFIELD_API_KEY неверного формата: платформа ждёт UUID из "
-                f"36 символов, а в переменной {len(key)}. Возьмите ключ в "
-                "личном кабинете Higgsfield, раздел API keys — там он показан "
-                "как xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
+                f"36 символов, а в переменной {len(key)}. " + _what_is_it(key)
+                + " Ключ платформы берётся в личном кабинете Higgsfield, "
+                "раздел API keys — там он показан как "
+                "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
     return ("HIGGSFIELD_SECRET неверного формата: ожидается UUID из 36 символов, "
             f"а в переменной {len(secret)}.")
 
