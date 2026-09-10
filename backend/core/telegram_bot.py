@@ -131,6 +131,7 @@ async def setup_bot_commands():
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
         {"command": "model", "description": "Выбор моделей: AI, изображения, видео"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
+        {"command": "agents", "description": "Агенты: кто есть, кто чем занят"},
         {"command": "cost", "description": "Расходы на AI и бюджет"},
         {"command": "queue", "description": "Очередь публикаций и повторы"},
         {"command": "channels", "description": "Каналы для публикации"},
@@ -843,6 +844,47 @@ async def _dispatch_command(chat_id: str, text: str):
         await spawn("content", f"план: {plan.topic[:60]}",
                     lambda pid=plan_id: nexus_core.generate_content_for_plan(pid),
                     source="telegram")
+        return
+
+    if cmd in ("agents", "агенты"):
+        # Кто есть, что умеет и что реально делал. Раньше состав агентов был
+        # виден только на сайте, а в задаче — лишь строкой «Агенты: …». Из
+        # Telegram нельзя было понять ни кто чем занят сейчас, ни кто молчит
+        # вторые сутки, хотя именно это и есть симптом сломанного джоба.
+        from agents.registry import describe
+        from core.health import agents as agent_stats
+        from core import task_manager as tm
+
+        stats = {a["agent"]: a for a in await agent_stats(24)}
+        lines = ["🤖 <b>Агенты</b>", ""]
+        for spec in describe():
+            live = stats.get(spec["key"]) or {}
+            if not spec["ready"]:
+                mark, note = "🔒", "нет доступов: " + ", ".join(spec["missing"][:3])
+            elif live.get("status") == "degraded":
+                mark, note = "⚠️", f"сбоит: успех {live.get('success_rate', 0)}%"
+            elif live.get("calls"):
+                mark, note = "✅", (f"за сутки: {live['calls']}, "
+                                   f"успех {live.get('success_rate', 0)}%")
+            else:
+                # «Не вызывался» — это не поломка: у агента может не быть задач.
+                mark, note = "⏸", "за сутки не вызывался"
+            lines.append(f"{mark} <b>{spec['title']}</b> — {spec['role']}")
+            lines.append(f"   {note}")
+
+        # Что делается прямо сейчас: без этого список ролей — просто справочник.
+        running = await tm.list_tasks(status=tm.RUNNING, limit=5)
+        lines.append("")
+        if running:
+            lines.append("<b>Сейчас в работе</b>")
+            for t in running:
+                who = ", ".join(t.get("agents") or []) or "—"
+                lines.append(f"⚙️ {t['goal'][:60] or t['kind']}\n   агенты: {who}")
+        else:
+            lines.append("Сейчас задач в работе нет.")
+
+        lines.append("\nПодробности задачи — /tasks · расходы — /cost")
+        await send_message(chat_id, "\n".join(lines)[:4000])
         return
 
     if cmd in ("model", "models", "модель"):
