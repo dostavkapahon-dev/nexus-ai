@@ -122,8 +122,8 @@ def test_hex_token_is_recognised_as_a_token(monkeypatch):
 
     problem = hf.key_problem()
 
-    assert "токен" in problem, "надо сказать, ЧЕМ похоже вставленное"
-    assert "HIGGSFIELD_MCP_TOKEN" in problem, "и где его настоящее место"
+    assert "СЕКРЕТ" in problem, "надо сказать, ЧЕМ похоже вставленное"
+    assert "местами" in problem, "и что с этим делать"
     assert HEX64 not in problem, "значение показывать нельзя"
 
 
@@ -142,7 +142,7 @@ def test_unrecognisable_value_gets_no_invented_guess(monkeypatch):
     problem = hf.key_problem()
 
     assert "36" in problem
-    assert "токен" not in problem and "другого сервиса" not in problem
+    assert "СЕКРЕТ" not in problem and "другого сервиса" not in problem
 
 
 def test_hint_does_not_fire_on_a_correct_pair(monkeypatch):
