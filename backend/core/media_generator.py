@@ -113,7 +113,11 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
         except Exception as e:
             res = {"ok": False, "error": str(e)[:200]}
         if res.get("ok") and res.get("url"):
-            await _track_media("hixiit", "image", True, time.time() - t0)
+            # Записываем НАСТОЯЩЕГО исполнителя, а не «hixiit» всегда: внутри
+            # цепочки кадр мог нарисовать запасной бесплатный генератор, и
+            # человек по журналу должен видеть, кто именно сделал работу.
+            await _track_media(res.get("provider") or "hixiit", "image", True,
+                               time.time() - t0)
             return res["url"]
         await _track_media("hixiit", "image", False, time.time() - t0,
                            str(res.get("error"))[:200])

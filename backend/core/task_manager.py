@@ -27,6 +27,66 @@ COMPLETED, FAILED, CANCELLED = "COMPLETED", "FAILED", "CANCELLED"
 STUCK_AFTER_MIN = 30
 
 
+# ── переживание перезапуска ───────────────────────────────────────────────────
+#
+# Работа живёт в asyncio-задаче внутри процесса, поэтому рестарт (деплой, сон
+# бесплатного тарифа, падение) её убивает. Раньше такие задачи просто
+# закрывались как потерянные — человек видел «сервер перезапустился, задачи
+# потеряны» и начинал всё заново.
+#
+# Саму корутину сохранить нельзя: это замыкание. Но можно сохранить РЕЦЕПТ —
+# имя обработчика и его аргументы — и при старте собрать работу заново.
+# Рецепт лежит в KV (таблица Connection), поэтому схему БД менять не нужно.
+
+RESUME_PREFIX = "task_resume:"
+_RESUMERS: dict = {}
+
+
+def register_resumer(name: str, fn) -> None:
+    """Регистрирует обработчик, умеющий продолжить задачу по её рецепту."""
+    _RESUMERS[name] = fn
+
+
+async def _save_recipe(task_id: str, recipe: dict) -> None:
+    import json
+    from database.models import Connection
+    try:
+        async with AsyncSessionLocal() as db:
+            db.add(Connection(key_name=RESUME_PREFIX + task_id,
+                              key_value=json.dumps(recipe, ensure_ascii=False)[:4000]))
+            await db.commit()
+    except Exception:
+        pass                      # без рецепта задача просто не возобновится
+
+
+async def _recipe(task_id: str) -> dict | None:
+    import json
+    from database.models import Connection
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(
+                Connection.key_name == RESUME_PREFIX + task_id))
+            row = r.scalar_one_or_none()
+        return json.loads(row.key_value) if row and row.key_value else None
+    except Exception:
+        return None
+
+
+async def _forget_recipe(task_id: str) -> None:
+    """Рецепт нужен только пока задача не закончена: иначе он копится вечно."""
+    from database.models import Connection
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(
+                Connection.key_name == RESUME_PREFIX + task_id))
+            row = r.scalar_one_or_none()
+            if row:
+                await db.delete(row)
+                await db.commit()
+    except Exception:
+        pass
+
+
 async def new_id() -> str:
     """Человекочитаемый id вида TASK-2026-000001 (сквозная нумерация в пределах года)."""
     year = datetime.utcnow().year
@@ -152,6 +212,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                          duration_sec=round((finished - started).total_seconds(), 2),
                          result=_safe_result(result), error=None)
             current_task_id.reset(token)
+            await _forget_recipe(task_id)
             await _finish_feed(task_id, ok=True)
             await _report(task_id)
             return {"ok": True, "task_id": task_id, "result": result}
@@ -167,6 +228,7 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
                  duration_sec=round((finished - started).total_seconds(), 2),
                  error=last_error[:2000])
     current_task_id.reset(token)
+    await _forget_recipe(task_id)
     # Человеку — понятная фраза, но с типом ошибки: без него «не получилось»
     # не даёт никакой зацепки ни владельцу, ни тому, кто чинит.
     from core.errors import human
@@ -219,12 +281,19 @@ def _safe_result(result) -> dict | None:
 
 
 async def spawn(kind: str, goal: str, coro_factory, source: str = "api",
-                ref_id: str = "", max_attempts: int = 1) -> str:
+                ref_id: str = "", max_attempts: int = 1,
+                recipe: dict = None) -> str:
     """Создаёт задачу и запускает её в фоне. Возвращает task_id сразу.
 
     Замена «голому» asyncio.create_task: работа остаётся видимой и после падения.
+
+    `recipe` — {"handler": имя, "args": {...}} — позволяет собрать эту же работу
+    заново после перезапуска. Без него задача при рестарте закроется как
+    потерянная: это честнее, чем делать вид, что она продолжается.
     """
     task_id = await create(kind, goal, source, ref_id)
+    if recipe and recipe.get("handler"):
+        await _save_recipe(task_id, recipe)
     asyncio.create_task(run(task_id, coro_factory, max_attempts))
     return task_id
 
@@ -244,18 +313,53 @@ async def recover_stuck() -> int:
     владельцу: перезапустить работу может только человек — фабрику восстановить
     из БД нельзя, в задаче хранится журнал, а не сама корутина.
     """
-    lost = []
+    lost, resumable = [], []
     try:
         async with AsyncSessionLocal() as db:
             r = await db.execute(select(Task).where(Task.status.in_((RUNNING, CREATED))))
-            for t in r.scalars():
-                t.status = FAILED
-                t.error = "Задача потеряна при перезапуске сервера."
-                t.finished_at = datetime.utcnow()
-                lost.append({"id": t.id, "kind": t.kind, "goal": t.goal or ""})
-            await db.commit()
+            unfinished = [{"id": t.id, "kind": t.kind, "goal": t.goal or "",
+                           "attempts": t.attempts or 0} for t in r.scalars()]
     except Exception:
         return 0
+
+    for item in unfinished:
+        recipe = await _recipe(item["id"])
+        handler = _RESUMERS.get((recipe or {}).get("handler", ""))
+        # Повторяем только один раз: задача, падающая вместе с сервером снова и
+        # снова, иначе крутила бы бесконечный цикл рестартов.
+        if handler and item["attempts"] < 2:
+            resumable.append((item, recipe, handler))
+        else:
+            lost.append(item)
+
+    try:
+        async with AsyncSessionLocal() as db:
+            for item in lost:
+                t = await db.get(Task, item["id"])
+                if t:
+                    t.status = FAILED
+                    t.error = "Задача потеряна при перезапуске сервера."
+                    t.finished_at = datetime.utcnow()
+            await db.commit()
+    except Exception:
+        pass
+
+    for item, recipe, handler in resumable:
+        args = (recipe or {}).get("args") or {}
+        await _patch(item["id"], status=CREATED, error=None,
+                     attempts=item["attempts"] + 1)
+        await add_step(item["id"], "продолжена после перезапуска сервера", ok=True)
+        asyncio.create_task(run(item["id"], lambda h=handler, a=args: h(**a)))
+
+    if resumable:
+        try:
+            from core.notify import notify_owner
+            names = "\n".join(f"• {i['goal'] or i['kind']}" for i, _, _ in resumable[:5])
+            await notify_owner(
+                f"♻️ Сервер перезапустился. Продолжаю задачи ({len(resumable)}):"
+                f"\n{names}")
+        except Exception:
+            pass
 
     if lost:
         # Одно сообщение на все потери: перезапуск с десятком задач в очереди не
