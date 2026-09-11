@@ -256,6 +256,27 @@ async def _notify(on_step, name: str) -> None:
         pass
 
 
+async def _notify_warning(on_step, result) -> None:
+    """Сообщает в чат, если результату нельзя доверять.
+
+    По ТЗ §20 человек должен видеть не только «готово», но и причину, когда
+    кадр сделан запасным генератором или его не удалось проверить. Раньше это
+    оседало в поле `warning` и до чата не доходило — получался молчаливый
+    «успех» с чужой картинкой.
+    """
+    if not on_step or not isinstance(result, dict):
+        return
+    warning = result.get("warning")
+    if not warning:
+        return
+    try:
+        res = on_step("⚠️ " + str(warning)[:300])
+        if hasattr(res, "__await__"):
+            await res
+    except Exception:
+        pass
+
+
 async def _exec_tool(name: str, inp: dict) -> dict:
     if name == "delegate":
         executor = (inp.get("executor") or "").strip().lower()
@@ -362,6 +383,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
 
         await _notify(on_step, name)
         result = await _exec_tool(name, inp)
+        await _notify_warning(on_step, result)
         step = {"action": name, "input": inp, "thought": thought,
                 "result_ok": result.get("ok", result.get("status") == "done")}
         if name == "delegate":
@@ -434,6 +456,7 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
 
         await _notify(on_step, tool)
         result = await _exec_tool(tool, args)
+        await _notify_warning(on_step, result)
         ok = result.get("ok", result.get("status") == "done")
         step = {"action": tool, "input": args, "thought": thought, "result_ok": ok}
         if tool == "delegate":

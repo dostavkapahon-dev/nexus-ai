@@ -56,7 +56,10 @@ async def test_bad_result_triggers_exactly_one_retry(generated, monkeypatch):
 
     assert len(generated) == 2, "ровно одна повторная попытка"
     assert res["regenerated"] is True
-    assert "лицо поплыло" in res["qc"]["reason"]
+    # Вердикт повтора — настоящий, а не переписанная причина прошлого брака:
+    # иначе непроверенный кадр объявлялся бы проверенным.
+    assert res["qc"]["checked"] is True
+    assert "лицо поплыло" in res["fixed_after"], "видно, из-за чего переделывали"
 
 
 @pytest.mark.asyncio
