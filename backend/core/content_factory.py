@@ -544,3 +544,13 @@ async def _send_report(report: dict, platforms: list) -> None:
         # Молчащий отчёт — это скрытая поломка: причину пишем хотя бы в лог.
         print(f"[NEXUS] отчёт фабрики не отправлен: {type(e).__name__}: {str(e)[:160]}",
               flush=True)
+
+
+# Рецепт для продолжения после перезапуска: фабрика — самая долгая задача в
+# системе, и именно она чаще всего попадает под деплой. Аргументы простые
+# (строки, списки, флаги), поэтому задача собирается заново один в один.
+try:
+    from core.task_manager import register_resumer
+    register_resumer("factory", run_factory)
+except Exception:
+    pass

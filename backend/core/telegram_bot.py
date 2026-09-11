@@ -548,6 +548,11 @@ async def _dispatch_command(chat_id: str, text: str):
                  f"Расход: ${t['cost_usd']:.4f} · токенов: {t['tokens']}"]
         if t.get("agents"):
             lines.append("Агенты: " + ", ".join(t["agents"][:8]))
+        # Кто реально выполнял работу. Без этой строки нельзя отличить кадр от
+        # Higgsfield от кадра запасного бесплатного генератора, а по задаче
+        # видно только «готово».
+        if t.get("models"):
+            lines.append("Исполнители: " + ", ".join(str(m) for m in t["models"][:8]))
         if t.get("error"):
             lines.append(f"\n⚠️ <b>Ошибка:</b> <code>{t['error'][:400]}</code>")
         steps = t.get("steps") or []
@@ -1502,9 +1507,10 @@ async def _dispatch_command(chat_id: str, text: str):
         from core.task_manager import spawn
         from core import task_feed
         goal = f"Фабрика: {topic or 'тема по трендам'}"
+        args = {"topic": topic, "dry_run": preview}
         task_id = await spawn("factory", goal,
-                              lambda: run_factory(topic=topic, dry_run=preview),
-                              source="telegram")
+                              lambda: run_factory(**args), source="telegram",
+                              recipe={"handler": "factory", "args": args})
         # Одно живое сообщение вместо тишины на минуты: шаги дописываются в него.
         await task_feed.start(task_id, chat_id, goal)
 
@@ -1810,12 +1816,12 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
                        f"{real_topic or 'тема по трендам'}\n"
                        f"Запускаю. Готовое пришлю на согласование.")
 
+    factory_args = {"topic": real_topic, "platforms": platforms, "dry_run": False,
+                    "want_video": want_video, "content_type": content_type,
+                    "slides": slides_wanted(topic)}
     task_id = await spawn(kind if kind != "video" else "factory", goal,
-                          lambda: run_factory(topic=real_topic, platforms=platforms,
-                                              dry_run=False, want_video=want_video,
-                                              content_type=content_type,
-                                              slides=slides_wanted(topic)),
-                          source="telegram")
+                          lambda: run_factory(**factory_args), source="telegram",
+                          recipe={"handler": "factory", "args": factory_args})
     await task_feed.start(task_id, chat_id, goal, kind=kind)
 
 
