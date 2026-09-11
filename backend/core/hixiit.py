@@ -628,6 +628,30 @@ async def check_result(url: str, task: str, kind: str) -> dict:
     return {"ok": not bad, "checked": True, "reason": text[:300]}
 
 
+def _warn(res: dict, verdict: dict) -> dict:
+    """Ставит человекочитаемое предупреждение, если результату нельзя доверять.
+
+    Два случая, которые раньше доходили молча и выглядели как успех:
+      * кадр нарисовал запасной бесплатный генератор — по короткому запросу он
+        выдаёт что угодно, и человек получает «не то, что просил»;
+      * проверку выполнить не удалось (нет зрения, недоступна модель) — это не
+        «годно», это «неизвестно».
+    """
+    notes = []
+    if res.get("provider") == "pollinations_free":
+        notes.append("Higgsfield не сработал, кадр нарисовал бесплатный "
+                     "генератор — соответствие запросу не гарантировано")
+    if not verdict.get("checked"):
+        notes.append("результат не проверен: " + (verdict.get("reason")
+                                                  or "проверка недоступна"))
+    elif not verdict.get("ok"):
+        notes.append("результат не прошёл проверку: "
+                     + str(verdict.get("reason", ""))[:160])
+    if notes:
+        res["warning"] = "; ".join(notes)
+    return res
+
+
 async def generate(task: str, kind: str = "auto", ratio: str = None,
                    image_url: str = None, allow_free: bool = True,
                    qc: bool = True) -> dict:
@@ -654,21 +678,32 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
 
     verdict = await check_result(res["url"], task, res.get("kind", kind_resolved))
     res["qc"] = verdict
-    if verdict.get("ok") or not verdict.get("checked"):
-        return res
+    if verdict.get("ok"):
+        return _warn(res, verdict)
+
+    if not verdict.get("checked"):
+        # Проверить не смогли — это НЕ «годно». Молча выдавать непроверенное за
+        # проверенное нельзя: именно так «получил не то, что просил» и остаётся
+        # незамеченным. Перегенерация тут бессмысленна — причина брака неизвестна.
+        return _warn(res, verdict)
 
     # Брак: правим промпт по причине и пробуем ровно один раз ещё.
     again = await check_prompt(f"{prompt}\n\nИсправь: {verdict['reason'][:300]}",
                                task, res.get("model", "auto"), res.get("kind", kind_resolved))
     retry = await _generate_once(again.get("prompt") or prompt, kind, ratio,
                                  image_url, allow_free)
-    if retry.get("ok"):
-        retry["qc"] = {"ok": True, "checked": True,
-                       "reason": f"перегенерация после брака: {verdict['reason'][:160]}"}
+    if retry.get("ok") and retry.get("url"):
+        # Результат перегенерации ПРОВЕРЯЕТСЯ. Раньше здесь безусловно ставилось
+        # `checked: True` — то есть непроверенный кадр объявлялся проверенным.
+        retry["qc"] = await check_result(retry["url"], task,
+                                         retry.get("kind", kind_resolved))
         retry["regenerated"] = True
-        return retry
+        # Из-за чего переделывали — отдельным полем. Раньше эта причина
+        # подставлялась ВМЕСТО вердикта, и повтор выглядел проверенным.
+        retry["fixed_after"] = str(verdict.get("reason", ""))[:200]
+        return _warn(retry, retry["qc"])
     res["qc_note"] = "результат не прошёл проверку, перегенерация не удалась"
-    return res
+    return _warn(res, verdict)
 
 
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
