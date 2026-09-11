@@ -874,6 +874,37 @@ async def _key_sources() -> list[dict]:
     return out
 
 
+async def recent_failures(limit: int = 3, hours: int = 24) -> list[dict]:
+    """Последние неудачные генерации с причинами.
+
+    Причины падений записывались в журнал (`agent="media"`), но человеку не
+    показывались нигде. А для изображений цепочка на последнем шаге подменяет
+    результат бесплатной картинкой и возвращает ok — значит снаружи всё
+    «получилось», просто картинка не та. Человек видит «Higgsfield не работает»
+    и не может сказать почему. Причина должна быть там, куда он идёт: в /hixiit.
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import select, desc
+    from database.db import AsyncSessionLocal
+    from database.models import AgentLog
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(
+                select(AgentLog)
+                .where(AgentLog.agent_name == "media",
+                       AgentLog.status == "error",
+                       AgentLog.created_at >= since)
+                .order_by(desc(AgentLog.created_at)).limit(max(1, limit)))
+            rows = list(r.scalars())
+    except Exception:
+        return []
+    return [{"when": x.created_at.strftime("%d.%m %H:%M") if x.created_at else "—",
+             "what": (x.model_used or "").split(":")[-1] or "медиа",
+             "error": (x.error or "причина не записана")[:200]} for x in rows]
+
+
 async def status() -> dict:
     """Диагностика генеративного слоя — для команды /hixiit в Telegram."""
     from core.higgsfield import credentials as _hf_creds
