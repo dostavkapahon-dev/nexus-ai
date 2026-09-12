@@ -941,12 +941,21 @@ async def _dispatch_command(chat_id: str, text: str):
         # строкой состояния, а не требованием что-то настроить.
         if st["mcp_configured"]:
             lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
-                         + (f"\n   <i>{st.get('mcp_error','')[:150]}</i>"
+                         + (f"\n   <i>{st.get('mcp_error','')[:300]}</i>"
                             if st.get("mcp_error") else ""))
         lines += [
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
         ]
+        # Какая сборка реально отвечает. Без этой строки «текст ошибки не
+        # изменился» невозможно отличить от «фикс не доехал до Render», и
+        # каждая такая догадка стоит круга переписки.
+        try:
+            from core.version import build_info
+            b = build_info()
+            lines.append(f"🏷 Сборка: {b['commit']} · запуск {b['started_at']} UTC")
+        except Exception:
+            pass
         if any("перекрывает" in (s0.get("source") or "") for s0 in st.get("key_sources") or []):
             lines += ["", "⚠️ Значение из дашборда перекрывает переменную Render. "
                           "Новый ключ в Render не подействует, пока в дашборде лежит старый — "
