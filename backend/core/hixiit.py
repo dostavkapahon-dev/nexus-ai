@@ -54,6 +54,32 @@ def detect_ratio(task: str, default: str = "9:16") -> str:
     return default
 
 
+def _why(e: BaseException, limit: int = 200) -> str:
+    """Настоящая причина вместо обёртки.
+
+    asyncio.TaskGroup заворачивает ошибку в ExceptionGroup, и наружу уходило
+    «ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)» — текст,
+    по которому починить нельзя ничего. Разворачиваем вложенные группы до
+    настоящих исключений.
+    """
+    seen, out = set(), []
+
+    def walk(err, depth=0):
+        if err is None or depth > 4 or id(err) in seen:
+            return
+        seen.add(id(err))
+        subs = getattr(err, "exceptions", None)
+        if subs:
+            for sub in subs[:3]:
+                walk(sub, depth + 1)
+            return
+        out.append(f"{type(err).__name__}: {err}")
+        walk(err.__cause__ or err.__context__, depth + 1)
+
+    walk(e)
+    return "; ".join(out)[:limit] or f"{type(e).__name__}"
+
+
 def _reraise_control_flow(e: BaseException) -> None:
     """Пропускает наружу отмену и остановку процесса, глушит всё остальное.
 
@@ -111,7 +137,7 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
         streamablehttp_client = _http_client_factory()
     except BaseException as e:
         raise RuntimeError(
-            f"клиент mcp недоступен ({type(e).__name__}: {str(e)[:100]}); "
+            f"клиент mcp недоступен ({_why(e, 120)}); "
             "проверь установку пакета mcp") from None
 
     headers = {}
@@ -420,7 +446,7 @@ async def unlim_status() -> dict:
                               timeout=60)
     except BaseException as e:
         _reraise_control_flow(e)
-        return {"available": False, "reason": f"{type(e).__name__}: {str(e)[:120]}"}
+        return {"available": False, "reason": _why(e, 160)}
     block = (res or {}).get("unlim") or {}
     models = [m.get("id") for m in _as_model_list(res) if m.get("id")]
     out = {"available": bool(block.get("available")),
@@ -729,7 +755,7 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
             return await _generate_via_mcp(task, kind, ratio, image_url)
         except BaseException as e:
             _reraise_control_flow(e)
-            tried.append(f"MCP: {type(e).__name__}: {str(e)[:180]}")
+            tried.append("MCP: " + _why(e))
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
@@ -767,7 +793,7 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
             tried.append(f"REST: {done.get('error', 'нет ссылки на результат')}")
         except BaseException as e:
             _reraise_control_flow(e)
-            tried.append(f"REST: {type(e).__name__}: {str(e)[:200]}")
+            tried.append("REST: " + _why(e))
     else:
         tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
@@ -982,7 +1008,7 @@ async def status() -> dict:
         except BaseException as e:
             _reraise_control_flow(e)
             out["api_ok"] = False
-            out["api_error"] = f"{type(e).__name__}: {str(e)[:150]}"
+            out["api_error"] = _why(e, 180)
     try:
         from api.routes_desktop import desktop_connected
         out["browser_agent"] = desktop_connected()
@@ -1003,5 +1029,5 @@ async def status() -> dict:
         except BaseException as e:
             _reraise_control_flow(e)
             out["mcp_ok"] = False
-            out["mcp_error"] = f"{type(e).__name__}: {str(e)[:180]}"
+            out["mcp_error"] = _why(e, 200)
     return out
