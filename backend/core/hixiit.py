@@ -20,6 +20,7 @@ HIXIIT сам:
 """
 import os
 import json
+from contextlib import asynccontextmanager
 import asyncio
 import time
 
@@ -152,11 +153,13 @@ def _http_client_factory():
         f"streamable_http_client; есть: {', '.join(have) or '—'}")
 
 
-async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
-    """Один вызов инструмента на MCP-сервере Higgsfield.
+@asynccontextmanager
+async def _mcp_session():
+    """Открытая и инициализированная сессия MCP.
 
-    Возвращает распарсенный результат (dict/list/str) либо бросает исключение.
-    Сессия создаётся на вызов — так проще и безопаснее в долгоживущем процессе.
+    Вынесено из `_mcp_call`, чтобы диагностика ходила ровно тем же путём, что и
+    рабочий вызов: вторая копия логики подключения рано или поздно разойдётся с
+    первой, и тогда «проверка зелёная, а генерация падает».
     """
     url = os.getenv("HIGGSFIELD_MCP_URL", "")
     if not url:
@@ -178,33 +181,95 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     if token:
         headers["Authorization"] = f"Bearer {token}"
 
-    async def _run():
-        # У новой версии пакета сменилась не только фамилия функции, но и то, как
-        # ей передают заголовки: вместо `headers=` она принимает готовый
-        # http-клиент. И отдаёт пару потоков вместо тройки. Поддерживаем оба
-        # варианта, иначе MCP отваливается на каждом обновлении пакета.
-        import inspect
-        from contextlib import AsyncExitStack
+    # У новой версии пакета сменилась не только фамилия функции, но и то, как
+    # ей передают заголовки: вместо `headers=` она принимает готовый
+    # http-клиент. И отдаёт пару потоков вместо тройки. Поддерживаем оба
+    # варианта, иначе MCP отваливается на каждом обновлении пакета.
+    import inspect
+    from contextlib import AsyncExitStack
 
-        takes_headers = "headers" in inspect.signature(streamablehttp_client).parameters
-        async with AsyncExitStack() as stack:
-            if takes_headers:
-                streams = await stack.enter_async_context(
-                    streamablehttp_client(url, headers=headers or None))
-            else:
-                from mcp.client.streamable_http import create_mcp_http_client
-                client = await stack.enter_async_context(
-                    create_mcp_http_client(headers=headers or None))
-                streams = await stack.enter_async_context(
-                    streamablehttp_client(url, http_client=client))
-            # Старая версия отдавала (read, write, get_session_id), новая — пару.
-            read, write = streams[0], streams[1]
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                res = await session.call_tool(tool, args)
-                return _unwrap(res)
+    takes_headers = "headers" in inspect.signature(streamablehttp_client).parameters
+    async with AsyncExitStack() as stack:
+        if takes_headers:
+            streams = await stack.enter_async_context(
+                streamablehttp_client(url, headers=headers or None))
+        else:
+            from mcp.client.streamable_http import create_mcp_http_client
+            client = await stack.enter_async_context(
+                create_mcp_http_client(headers=headers or None))
+            streams = await stack.enter_async_context(
+                streamablehttp_client(url, http_client=client))
+        # Старая версия отдавала (read, write, get_session_id), новая — пару.
+        read, write = streams[0], streams[1]
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            yield session
+
+
+async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
+    """Один вызов инструмента на MCP-сервере Higgsfield.
+
+    Возвращает распарсенный результат (dict/list/str) либо бросает исключение.
+    Сессия создаётся на вызов — так проще и безопаснее в долгоживущем процессе.
+    """
+    async def _run():
+        async with _mcp_session() as session:
+            return _unwrap(await session.call_tool(tool, args))
 
     return await asyncio.wait_for(_run(), timeout=timeout)
+
+
+async def mcp_probe(timeout: float = 30.0) -> dict:
+    """На каком шаге ломается MCP.
+
+    «Server returned an error response (code=-32603)» не говорит, что именно
+    отказало: подключение, рукопожатие или сам инструмент. А шаги эти чинятся
+    по-разному — токеном, адресом и названием инструмента соответственно.
+    Поэтому проходим их по очереди и называем первый упавший.
+    """
+    out = {"stage": "connect", "ok": False, "error": "", "tools": []}
+    if not mcp_configured():
+        out["error"] = "HIGGSFIELD_MCP_URL не задан"
+        return out
+
+    async def _run():
+        async with _mcp_session() as session:
+            # Рукопожатие прошло — значит адрес и авторизация верные.
+            out["stage"] = "tools"
+            listed = await session.list_tools()
+            out["tools"] = sorted(t.name for t in getattr(listed, "tools", []) or [])
+            out["stage"] = "balance"
+            _unwrap(await session.call_tool("balance", {}))
+            out["stage"] = "ok"
+            out["ok"] = True
+
+    try:
+        await asyncio.wait_for(_run(), timeout=timeout)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        out["error"] = _why(e, 300)
+    return out
+
+
+def probe_verdict(probe: dict) -> str:
+    """Что делать человеку — словами, а не кодом ошибки."""
+    if probe.get("ok"):
+        return "MCP работает"
+    stage, err = probe.get("stage"), probe.get("error", "")
+    if stage == "connect":
+        if "401" in err or "403" in err or "unauthorized" in err.lower():
+            return ("сервер не принял авторизацию — нужен HIGGSFIELD_MCP_TOKEN "
+                    "или в HIGGSFIELD_MCP_URL истёк встроенный секрет")
+        return "не удалось подключиться — проверьте HIGGSFIELD_MCP_URL"
+    if stage == "tools":
+        return "подключение есть, но сервер не отдал список инструментов"
+    if stage == "balance":
+        tools = probe.get("tools") or []
+        if tools and "balance" not in tools:
+            return ("подключение есть, но инструмента balance на сервере нет; "
+                    f"доступны: {', '.join(tools[:12])}")
+        return "подключение и рукопожатие прошли, отказал сам вызов balance"
+    return "MCP не отвечает"
 
 
 def _unwrap(res):

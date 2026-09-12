@@ -943,6 +943,12 @@ async def _dispatch_command(chat_id: str, text: str):
             lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
                          + (f"\n   <i>{st.get('mcp_error','')[:300]}</i>"
                             if st.get("mcp_error") else ""))
+            # Код ошибки не говорит, что чинить: подключение, рукопожатие и сам
+            # инструмент отказывают одинаково, а лечатся по-разному.
+            if not st.get("mcp_ok"):
+                from core.hixiit import mcp_probe, probe_verdict
+                probe = await mcp_probe()
+                lines.append(f"   ↳ {probe_verdict(probe)}")
         lines += [
             f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
