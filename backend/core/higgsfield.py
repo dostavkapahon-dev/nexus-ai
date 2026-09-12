@@ -315,15 +315,56 @@ async def poll_job(job_id: str, attempts: int = 60, delay: float = 5) -> dict:
 poll_video = poll_job
 
 
-async def create_image(prompt: str, ratio: str = "9:16", quality: str = "1080p") -> dict:
-    """Запускает генерацию картинки моделью Soul."""
-    return await _post(PATH_IMAGE, {
-        "prompt": (prompt or "")[:1000],
-        "width_and_height": size_for(ratio),
-        "quality": quality if quality in ("720p", "1080p") else "1080p",
-        "batch_size": 1,
-        "enhance_prompt": True,
-    })
+# Варианты параметров Soul. Платформа отвечала `400: Unavailable model`, потому
+# что модель не передавалась вовсе и бралось умолчание, которого у аккаунта нет:
+# в живом каталоге есть soul_2 / soul_v2 / soul_cinematic, но НЕ «soul».
+# Значения quality тоже свои — у Soul это 1.5k/2k, а не 720p/1080p.
+#
+# Перебор идёт только по 400: угадывать вслепую нельзя, но и падать на первом
+# отказе, имея проверенные значения из каталога, — значит не сгенерировать
+# ничего. Сработавший набор запоминается, чтобы не перебирать каждый раз.
+IMAGE_MODELS_REST = ("soul_2", "soul_v2")
+IMAGE_QUALITIES = ("2k", "1080p")
+_working_image_params: dict = {}
+
+
+def _image_param_sets() -> list[dict]:
+    """Наборы параметров в порядке проверки. Рабочий — первым."""
+    forced = os.getenv("HIGGSFIELD_IMAGE_MODEL", "").strip()
+    models = (forced,) if forced else IMAGE_MODELS_REST
+    sets = [{"model": m, "quality": q} for m in models for q in IMAGE_QUALITIES]
+    if _working_image_params:
+        sets = [_working_image_params] + [x for x in sets
+                                          if x != _working_image_params]
+    return sets
+
+
+async def create_image(prompt: str, ratio: str = "9:16", quality: str = "") -> dict:
+    """Запускает генерацию картинки моделью Soul.
+
+    Модель и качество подбираются из проверенных значений каталога: платформа
+    отклоняет запрос без модели, а названия версий у неё свои.
+    """
+    global _working_image_params
+    last = {"ok": False, "error": "Higgsfield не ответил"}
+    for params in _image_param_sets():
+        body = {
+            "prompt": (prompt or "")[:1000],
+            "width_and_height": size_for(ratio),
+            "model": params["model"],
+            "quality": quality or params["quality"],
+            "batch_size": 1,
+            "enhance_prompt": True,
+        }
+        res = await _post(PATH_IMAGE, body)
+        if res.get("ok"):
+            _working_image_params = params
+            return res
+        # Не 400 — перебирать бессмысленно: дело не в наборе параметров.
+        if "400" not in str(res.get("error", "")):
+            return res
+        last = res
+    return last
 
 
 async def create_video(prompt: str, image_url: str = None, motion: str = "general",
