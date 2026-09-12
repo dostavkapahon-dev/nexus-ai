@@ -161,22 +161,24 @@ async def test_hixiit_uses_higgsfield_for_images(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_models_are_selectable_without_mcp(client, monkeypatch):
-    """Без MCP меню отвечало «нет ни одной модели», хотя ключ работал.
+    """Без MCP меню предлагает ровно то, что REST-путь умеет запустить.
 
-    Показываем проверенный каталог платформы: эти id существуют (сверено живым
-    вызовом models_explore), в отличие от прежних `soul` и `dop-*` из README
-    старого SDK.
+    Прежде здесь ожидался весь каталог аккаунта (`z_image`, `minimax_hailuo` и
+    прочие). Но эти id живут в MCP, а REST ходит на единственный адрес
+    /v1/text2image/soul — любой другой выбор молча превращался в Soul. Меню
+    предлагало выбор, которого нет, и человек не понимал, почему смена модели
+    ничего не меняет.
     """
     from core import hixiit
+    from core.higgsfield import DOP_MODELS
 
     monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
 
     img = [m["value"] for m in await hixiit.available_models("image")]
     vid = [m["value"] for m in await hixiit.available_models("video")]
 
-    assert "z_image" in img and "soul_2" in img
-    assert "minimax_hailuo" in vid and "flux_3_video" in vid
-    assert "dop-turbo" not in vid, "устаревший id не должен предлагаться"
+    assert img == [hixiit.REST_IMAGE_MODEL], "REST умеет только Soul"
+    assert vid == list(DOP_MODELS), "видео REST делает моделями dop-*"
     assert all(m["connected"] for m in await hixiit.available_models("image"))
 
 

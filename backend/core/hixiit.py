@@ -750,10 +750,17 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
                                                ratio=ratio, model=model)
             else:
                 done = await hf.generate_image(task, ratio=ratio)
-                model = "soul"
+                model = REST_IMAGE_MODEL
             if done.get("ok") and done.get("url"):
                 out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
                        "kind": kind, "model": model}
+                # Человек выбрал одну модель, а сделала другая — молчать нельзя.
+                if chosen and chosen != model:
+                    out["warning"] = (
+                        f"выбрана модель «{chosen}», но кадр сделала «{model}»: "
+                        "по ключу и секрету доступен только этот путь. Полный "
+                        "каталог моделей открывается при подключённом MCP "
+                        "(HIGGSFIELD_MCP_URL).")
                 if done.get("preview_image"):
                     out["preview_image"] = done["preview_image"]
                 return out
@@ -834,6 +841,11 @@ async def set_preferred_model(kind: str, value: str) -> bool:
     return True
 
 
+# Единственная картиночная модель, которую умеет REST-путь: адрес
+# /v1/text2image/soul зашит в API, другого эндпоинта у нас нет.
+REST_IMAGE_MODEL = "soul"
+
+
 async def available_models(kind: str = "image") -> list[dict]:
     """Модели, из которых можно выбирать для этого вида генерации.
 
@@ -851,14 +863,19 @@ async def available_models(kind: str = "image") -> list[dict]:
         except BaseException as e:
             _reraise_control_flow(e)
 
-    # Без MCP выбирать всё равно есть из чего: показываем проверенный каталог
-    # платформы. Он честный — эти id существуют, — но пометка говорит, что путь
-    # исполнения будет REST, если MCP не подключён.
+    # Без MCP выбирать можно ТОЛЬКО из того, что умеет REST-путь. Раньше здесь
+    # показывался весь каталог платформы, но REST ходит на единственный адрес
+    # /v1/text2image/soul — то есть любой другой выбор молча превращался в Soul.
+    # Меню предлагало выбор, которого нет: ровно то, что запрещено ТЗ.
     if not out:
-        known = VIDEO_MODELS if kind == "video" else IMAGE_MODELS
-        from core.higgsfield import credentials as _creds
+        from core.higgsfield import credentials as _creds, DOP_MODELS
         reachable = bool(_creds())
-        out = [{"value": m["value"], "label": m["label"], "group": "Higgsfield",
+        if kind == "video":
+            known = [{"value": m, "label": m} for m in DOP_MODELS]
+        else:
+            known = [{"value": REST_IMAGE_MODEL,
+                      "label": "Soul — единственная модель REST-пути"}]
+        out = [{"value": m["value"], "label": m["label"], "group": "Higgsfield REST",
                 "connected": reachable} for m in known]
     return out
 
