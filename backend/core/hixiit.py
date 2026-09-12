@@ -54,6 +54,39 @@ def detect_ratio(task: str, default: str = "9:16") -> str:
     return default
 
 
+def _detail(err: BaseException) -> str:
+    """Подробности, которые исключение прячет в атрибутах, а не в тексте.
+
+    McpError печатается как «Server returned an error response» — код и data
+    остаются внутри объекта, и починить по такому тексту нельзя ничего.
+    То же с httpx: статус и тело ответа не попадают в str(e).
+    """
+    bits = []
+    err_data = getattr(err, "error", None)          # McpError.error: ErrorData
+    if err_data is not None and not isinstance(err_data, (str, bytes)):
+        code = getattr(err_data, "code", None)
+        msg = getattr(err_data, "message", None)
+        data = getattr(err_data, "data", None)
+        if code is not None:
+            bits.append(f"code={code}")
+        if msg and str(msg) != str(err):
+            bits.append(str(msg))
+        if data:
+            bits.append(f"data={data}")
+    resp = getattr(err, "response", None)           # httpx.HTTPStatusError
+    if resp is not None:
+        status = getattr(resp, "status_code", None)
+        if status is not None:
+            bits.append(f"HTTP {status}")
+        try:
+            body = (resp.text or "").strip()
+        except Exception:
+            body = ""
+        if body:
+            bits.append(body[:200])
+    return f" ({'; '.join(str(b) for b in bits)})" if bits else ""
+
+
 def _why(e: BaseException, limit: int = 200) -> str:
     """Настоящая причина вместо обёртки.
 
@@ -73,7 +106,7 @@ def _why(e: BaseException, limit: int = 200) -> str:
             for sub in subs[:3]:
                 walk(sub, depth + 1)
             return
-        out.append(f"{type(err).__name__}: {err}")
+        out.append(f"{type(err).__name__}: {err}{_detail(err)}")
         walk(err.__cause__ or err.__context__, depth + 1)
 
     walk(e)
@@ -446,7 +479,7 @@ async def unlim_status() -> dict:
                               timeout=60)
     except BaseException as e:
         _reraise_control_flow(e)
-        return {"available": False, "reason": _why(e, 160)}
+        return {"available": False, "reason": _why(e, 300)}
     block = (res or {}).get("unlim") or {}
     models = [m.get("id") for m in _as_model_list(res) if m.get("id")]
     out = {"available": bool(block.get("available")),
@@ -755,7 +788,7 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
             return await _generate_via_mcp(task, kind, ratio, image_url)
         except BaseException as e:
             _reraise_control_flow(e)
-            tried.append("MCP: " + _why(e))
+            tried.append("MCP: " + _why(e, 300))
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
 
@@ -1029,5 +1062,5 @@ async def status() -> dict:
         except BaseException as e:
             _reraise_control_flow(e)
             out["mcp_ok"] = False
-            out["mcp_error"] = _why(e, 200)
+            out["mcp_error"] = _why(e, 300)
     return out
