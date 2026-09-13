@@ -92,10 +92,24 @@ async def enrich_image_prompt(prompt: str) -> str:
 
 
 async def generate_image(prompt: str, provider: str = "auto", platform: str = "telegram") -> str:
-    """Returns image URL. Provider: auto/imagen/dalle3/stability/pollinations.
+    """Ссылка на картинку. Совместимость: вызывающих много, они ждут строку."""
+    return (await generate_image_ex(prompt, provider, platform))["url"]
 
-    По ТЗ Pakhon Studio primary — Gemini Imagen, fallback — остальные.
+
+async def generate_image_ex(prompt: str, provider: str = "auto",
+                            platform: str = "telegram") -> dict:
+    """Картинка вместе с именем исполнителя и промптом, который реально ушёл.
+
+    Раньше наружу отдавалась одна ссылка: кто нарисовал кадр, оставалось в
+    журнале. А цепочка при отказе Higgsfield молча съезжает вплоть до
+    бесплатного Pollinations — человек получал заметно худший результат и не
+    знал почему. Промпт возвращается по той же причине: его переписывает
+    `enrich_image_prompt`, и «получилось не по моим словам» иначе не проверить.
+
+    Возвращает {'url', 'provider', 'prompt', 'fallback', 'why'}.
     """
+    asked = prompt
+    why = ""          # причина, по которой пришлось уйти от основного пути
     size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
     prompt = await enrich_image_prompt(prompt)
 
@@ -118,9 +132,11 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
             # человек по журналу должен видеть, кто именно сделал работу.
             await _track_media(res.get("provider") or "hixiit", "image", True,
                                time.time() - t0)
-            return res["url"]
-        await _track_media("hixiit", "image", False, time.time() - t0,
-                           str(res.get("error"))[:200])
+            return {"url": res["url"], "provider": res.get("provider") or "hixiit",
+                    "model": res.get("model", ""), "prompt": prompt,
+                    "asked": asked, "fallback": False, "why": ""}
+        why = str(res.get("error") or "")[:300]
+        await _track_media("hixiit", "image", False, time.time() - t0, why[:200])
         if provider in ("hixiit", "higgsfield"):
             # Провайдер выбран явно — молча подменять его другим нельзя.
             raise RuntimeError(f"HIXIIT недоступен: {res.get('error')}")
@@ -143,14 +159,16 @@ async def generate_image(prompt: str, provider: str = "auto", platform: str = "t
             continue
         if url:
             await _track_media(name, "image", True, time.time() - t0)
-            return url
+            return {"url": url, "provider": name, "model": "", "prompt": prompt,
+                    "asked": asked, "fallback": True, "why": why}
         # Провайдер вернул пусто — платить не за что, но знать об этом полезно.
         await _track_media(name, "image", False, time.time() - t0, "пустой ответ провайдера")
 
     # Бесплатный путь работает всегда — картинка будет в любом случае.
     url = _pollinations(prompt, size)
     await _track_media("pollinations", "image", True)
-    return url
+    return {"url": url, "provider": "pollinations", "model": "free",
+            "prompt": prompt, "asked": asked, "fallback": True, "why": why}
 
 async def _gemini_imagen(prompt: str, size: str) -> str | None:
     """Gemini Imagen 3 через REST. Возвращает data-URI PNG или None."""
