@@ -971,10 +971,19 @@ async def browser_available() -> dict:
         out["why"] = _why(e, 120)
     try:
         from core import server_browser
-        if server_browser.enabled():
+        if not server_browser.enabled():
+            out["why"] = "серверный браузер выключен флагом NEXUS_SERVER_BROWSER"
+            return out
+        # `enabled()` — это флаг конфигурации, а не наличие браузера: он True по
+        # умолчанию. Раньше статус по нему и считался, поэтому показывал зелёное
+        # там, где Chromium не установлен, а падало уже в работе.
+        if server_browser._cdp_endpoint():
             return {"available": True, "where": "облако", "why": ""}
-        out["why"] = ("серверный браузер выключен — задайте NEXUS_BROWSER_CDP "
-                      "(облачный браузер) или включите локальный режим")
+        from core.version import browser_ready
+        if browser_ready():
+            return {"available": True, "where": "на сервере", "why": ""}
+        out["why"] = ("Chromium на сервере не установлен — задайте "
+                      "NEXUS_BROWSER_CDP (адрес облачного браузера)")
     except Exception as e:
         out["why"] = _why(e, 120)
     return out
