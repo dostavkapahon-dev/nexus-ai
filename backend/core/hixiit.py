@@ -268,6 +268,13 @@ def probe_verdict(probe: dict) -> str:
         if tools and "balance" not in tools:
             return ("подключение есть, но инструмента balance на сервере нет; "
                     f"доступны: {', '.join(tools[:12])}")
+        if "-32603" in err:
+            # Официальный сервер Higgsfield авторизует по OAuth, а не по ключу:
+            # неавторизованный вызов он заваливает внутренней ошибкой, а не 401.
+            return ("сервер принял соединение, но вызов отклонил (-32603) — "
+                    "чаще всего это отсутствие OAuth-сессии: официальный "
+                    "mcp.higgsfield.ai авторизует пользователя, а не API-ключ. "
+                    "Генерация от MCP не зависит и идёт по ключу")
         return "подключение и рукопожатие прошли, отказал сам вызов balance"
     return "MCP не отвечает"
 
@@ -836,6 +843,7 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
     kind = detect_kind(task, kind)
     ratio = ratio or detect_ratio(task)
     tried = []
+    mode = await execution_mode()
 
     # Тип генерации и формат определяем по ИСХОДНОМУ тексту — по-русски в нём и
     # написано «ролик» или «вертикально». А в саму модель уходит английское
@@ -847,8 +855,11 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
     except Exception:
         pass
 
-    # 1. MCP — основной рабочий путь
-    if mcp_configured():
+    # 1. MCP — основной рабочий путь. В режиме «browser» его пропускаем: человек
+    # выбрал браузер осознанно, обычно чтобы не списывать кредиты.
+    if mode == "browser":
+        tried.append("MCP: пропущен (режим «через браузер»)")
+    elif mcp_configured():
         try:
             return await _generate_via_mcp(task, kind, ratio, image_url)
         except BaseException as e:
@@ -861,7 +872,11 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
     # Картинки идут сюда же: Soul умеет text2image, и раньше этот путь просто
     # отказывался их делать, из-за чего визуал уезжал на бесплатный Pollinations.
     from core.higgsfield import credentials as _hf_credentials
-    if _hf_credentials():
+    if mode == "mcp":
+        tried.append("REST: пропущен (режим «только MCP»)")
+    elif mode == "browser":
+        tried.append("REST: пропущен (режим «через браузер»)")
+    elif _hf_credentials():
         try:
             from core import higgsfield as hf
             # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
@@ -895,21 +910,28 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
     else:
         tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
-    # 3. Браузер-агент в залогиненном аккаунте (только видео)
-    if kind == "video":
-        try:
-            from api.routes_desktop import desktop_connected
-            if desktop_connected():
+    # 3. Браузер в залогиненном аккаунте — для картинок тоже, а не только для
+    # видео: на сайте действует безлимит, и это единственный путь, где кадр не
+    # стоит кредитов. Раньше картинки сюда не доходили и уезжали на бесплатный
+    # Pollinations — отсюда и «очень страшные» результаты.
+    if mode != "mcp":
+        seen = await browser_available()
+        if seen["available"]:
+            try:
                 from core.skills import higgsfield_via_browser
-                res = await higgsfield_via_browser(task, image_url)
+                res = await higgsfield_via_browser(task, image_url, kind=kind)
                 if res.get("ok") and res.get("url"):
                     return {"ok": True, "url": res["url"], "provider": "higgsfield_browser",
-                            "kind": "video", "model": "account"}
-                tried.append(f"Браузер: {str(res.get('detail') or res.get('error'))[:200]}")
-            else:
-                tried.append("Браузер: агент на ПК не подключён")
-        except Exception as e:
-            tried.append(f"Браузер: {str(e)[:200]}")
+                            "kind": kind, "model": "account", "where": seen["where"]}
+                tried.append(f"Браузер ({seen['where']}): "
+                             f"{str(res.get('detail') or res.get('error'))[:200]}")
+            except BaseException as e:
+                _reraise_control_flow(e)
+                tried.append("Браузер: " + _why(e, 200))
+        else:
+            tried.append(f"Браузер: {seen['why'] or 'недоступен'}")
+    else:
+        tried.append("Браузер: пропущен (режим «только MCP»)")
 
     # 4. Бесплатная картинка — чтобы визуал был хоть какой-то
     if kind == "image" and allow_free:
@@ -927,6 +949,70 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
 # состояние системы (KV в таблице Connection), поэтому переживают перезапуск
 # и не требуют миграции схемы.
 PREF_KEYS = {"image": "hixiit_image_model", "video": "hixiit_video_model"}
+MODE_KEY = "hixiit_execution_mode"
+MODES = ("auto", "mcp", "browser")
+
+
+async def browser_available() -> dict:
+    """Есть ли браузерные «руки» и чьи именно.
+
+    Раньше путь через браузер отпирался только `desktop_connected()` — то есть
+    требовал включённого ПК пользователя. При этом `send_to_desktop` давно умеет
+    исполнять те же команды серверным браузером, и этот фолбэк просто не
+    доходил: проверка отказывала раньше. Отсюда «работает только когда включён
+    мой компьютер» при живом облачном браузере.
+    """
+    out = {"available": False, "where": "", "why": ""}
+    try:
+        from api.routes_desktop import desktop_connected
+        if desktop_connected():
+            return {"available": True, "where": "ПК", "why": ""}
+    except Exception as e:
+        out["why"] = _why(e, 120)
+    try:
+        from core import server_browser
+        if server_browser.enabled():
+            return {"available": True, "where": "облако", "why": ""}
+        out["why"] = ("серверный браузер выключен — задайте NEXUS_BROWSER_CDP "
+                      "(облачный браузер) или включите локальный режим")
+    except Exception as e:
+        out["why"] = _why(e, 120)
+    return out
+
+
+async def execution_mode() -> str:
+    """auto | mcp | browser — как выполнять генерацию Higgsfield."""
+    try:
+        from sqlalchemy import select
+        from database.db import AsyncSessionLocal
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(Connection.key_name == MODE_KEY))
+            row = r.scalar_one_or_none()
+        value = (row.key_value or "").strip().lower() if row else ""
+    except Exception:
+        value = ""
+    if not value:
+        value = os.getenv("HIGGSFIELD_EXECUTION_MODE", "").strip().lower()
+    return value if value in MODES else "auto"
+
+
+async def set_execution_mode(value: str) -> bool:
+    value = (value or "auto").strip().lower()
+    if value not in MODES:
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == MODE_KEY))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=MODE_KEY, key_value=value))
+        await db.commit()
+    return True
 
 
 async def preferred_model(kind: str) -> str:
@@ -1107,11 +1193,11 @@ async def status() -> dict:
             _reraise_control_flow(e)
             out["api_ok"] = False
             out["api_error"] = _why(e, 180)
-    try:
-        from api.routes_desktop import desktop_connected
-        out["browser_agent"] = desktop_connected()
-    except Exception:
-        out["browser_agent"] = False
+    # Браузер бывает не только на ПК: серверный работает без компьютера
+    # пользователя, и раньше статус этого не показывал.
+    out["browser"] = await browser_available()
+    out["browser_agent"] = out["browser"]["available"]
+    out["mode"] = await execution_mode()
 
     if out["mcp_configured"]:
         try:

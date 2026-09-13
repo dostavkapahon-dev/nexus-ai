@@ -282,6 +282,12 @@ async def _provider_lines() -> list:
     return lines
 
 
+# Человеческие имена режимов Higgsfield — в одном месте, чтобы подпись в статусе
+# и подтверждение при переключении не разъезжались.
+MODE_NAMES = {"auto": "автоматически", "mcp": "только MCP",
+              "browser": "через браузер в аккаунте"}
+
+
 async def _dispatch_command(chat_id: str, text: str):
     from core.orchestrator import nexus_core
     from agents.reporter import reporter
@@ -901,6 +907,19 @@ async def _dispatch_command(chat_id: str, text: str):
         await _save_ai_model(chat_id, "" if value == "auto" else value)
         return
 
+    # Как выполнять генерацию Higgsfield: сам решает, только MCP, или через
+    # браузер в аккаунте (там действует безлимит и кадр не стоит кредитов).
+    if cmd.startswith("hfmode_"):
+        from core.hixiit import set_execution_mode
+        value = cmd[len("hfmode_"):]
+        human = MODE_NAMES.get(value, value)
+        if await set_execution_mode(value):
+            await send_message(chat_id, f"💾 Higgsfield: <b>{human}</b>\nСохранено — "
+                                        "действует и после перезапуска.")
+        else:
+            await send_message(chat_id, "Не знаю такой режим. Доступны: auto, mcp, browser.")
+        return
+
     if cmd.startswith(("setimg_", "setvid_")):
         kind = "image" if cmd.startswith("setimg_") else "video"
         value = cmd.split("_", 1)[1]
@@ -949,9 +968,16 @@ async def _dispatch_command(chat_id: str, text: str):
                 from core.hixiit import mcp_probe, probe_verdict
                 probe = await mcp_probe()
                 lines.append(f"   ↳ {probe_verdict(probe)}")
+        # Не «агент на ПК»: браузер может быть и серверным, и тогда путь работает
+        # без компьютера пользователя. Старая строка это скрывала.
+        browser = st.get("browser") or {}
+        if browser.get("available"):
+            lines.append(f"✅ браузер — {browser.get('where', '')}")
+        else:
+            lines.append("❌ браузер — " + (browser.get("why") or "не настроен"))
         lines += [
-            f"{'✅' if st['browser_agent'] else '❌'} браузер-агент на ПК",
             "", f"🤖 Модель: {st['default_model']} (подбирается под задачу)",
+            "⚙️ Режим: " + MODE_NAMES.get(st.get("mode", "auto"), "автоматически"),
         ]
         # Какая сборка реально отвечает. Без этой строки «текст ошибки не
         # изменился» невозможно отличить от «фикс не доехал до Render», и

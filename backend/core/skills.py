@@ -87,32 +87,53 @@ async def higgsfield_reel(motion_prompt: str, seed_image: str = None,
 
 
 async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
-                                 max_steps: int = 32) -> dict:
-    """Генерация видео ЧЕРЕЗ ВАШ аккаунт higgsfield.ai руками браузер-агента.
+                                 max_steps: int = 32, kind: str = "video") -> dict:
+    """Генерация ЧЕРЕЗ ВАШ аккаунт higgsfield.ai руками браузер-агента.
 
-    Не нужен API-ключ: агент работает в вашем залогиненном браузере (start_agent.bat).
-    Подходит, когда HiggsField даёт доступ только через аккаунт/MCP, без ключа.
+    Не нужен API-ключ: агент работает в залогиненном браузере. Браузер может
+    быть и на ПК (desktop_agent), и серверный — `send_to_desktop` сам выбирает
+    доступный. Раньше здесь стоял отказ по `desktop_connected()`, и до этого
+    фолбэка дело не доходило: путь считался «не работает без ПК», хотя
+    облачный браузер был готов.
+
+    Картинки сюда тоже приходят: на сайте действует безлимит, и это
+    единственный путь, где кадр не стоит кредитов.
     """
-    from api.routes_desktop import desktop_connected
-    if not desktop_connected():
+    from core.hixiit import browser_available
+    seen = await browser_available()
+    if not seen["available"]:
         return {"ok": False, "provider": "higgsfield_browser",
-                "error": "Браузер-агент не подключён. Запусти start_agent.bat и войди в higgsfield.ai."}
+                "error": "Браузер недоступен: " + (seen["why"] or "не настроен")}
 
     from core.browser_agent import run_agent
-    motion = (motion_prompt or "slow cinematic push-in, dynamic light, parallax")[:400]
-    task = (
-        "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй короткое вертикальное видео 9:16:\n"
-        "1. Открой создание видео (image-to-video или text-to-video).\n"
-        f"2. Вставь промт движения: {motion}\n"
-        + (f"3. Если можно задать первый кадр по ссылке — используй: {seed_image}\n" if seed_image else "")
-        + "4. Выбери формат 9:16 (вертикальный) и запусти генерацию.\n"
-        "5. Дождись готовности: делай wait по 10-15 сек и периодически скриншоть, пока видео не появится.\n"
-        "6. Когда готово — открой/скопируй ссылку на видео (кнопка Download/Share) и вызови done "
-        "с этой ссылкой в summary. Если требуется оплата/кредиты или вход — вызови ask."
-    )
+    if kind == "image":
+        prompt = (motion_prompt or "cinematic photo, natural light")[:400]
+        task = (
+            "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй ИЗОБРАЖЕНИЕ 9:16:\n"
+            "1. Открой создание изображения (text-to-image / Image).\n"
+            f"2. Вставь промт: {prompt}\n"
+            "3. Если доступна модель с безлимитом (Unlimited) — выбери её: "
+            "кадр не должен списывать кредиты.\n"
+            "4. Выбери формат 9:16 и запусти генерацию.\n"
+            "5. Дождись готовности: wait по 10-15 сек со скриншотами.\n"
+            "6. Когда готово — открой ссылку на изображение (Download/Share) и вызови "
+            "done с этой ссылкой в summary. Если требуются кредиты или вход — вызови ask."
+        )
+    else:
+        motion = (motion_prompt or "slow cinematic push-in, dynamic light, parallax")[:400]
+        task = (
+            "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй короткое вертикальное видео 9:16:\n"
+            "1. Открой создание видео (image-to-video или text-to-video).\n"
+            f"2. Вставь промт движения: {motion}\n"
+            + (f"3. Если можно задать первый кадр по ссылке — используй: {seed_image}\n" if seed_image else "")
+            + "4. Выбери формат 9:16 (вертикальный) и запусти генерацию.\n"
+            "5. Дождись готовности: делай wait по 10-15 сек и периодически скриншоть, пока видео не появится.\n"
+            "6. Когда готово — открой/скопируй ссылку на видео (кнопка Download/Share) и вызови done "
+            "с этой ссылкой в summary. Если требуется оплата/кредиты или вход — вызови ask."
+        )
     res = await run_agent(task=task, start_url="https://higgsfield.ai/create", max_steps=max_steps)
     ok = res.get("status") == "done"
-    return {"ok": ok, "provider": "higgsfield_browser",
+    return {"ok": ok, "provider": "higgsfield_browser", "kind": kind,
             "url": res.get("summary") if ok else None,
             "status": res.get("status"), "detail": res.get("summary") or res.get("question"),
             "steps": res.get("steps")}
