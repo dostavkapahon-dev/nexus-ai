@@ -18,7 +18,9 @@ def _browser(monkeypatch, desktop=False, server=False):
     # Подменять надо атрибут пакета: `from core import server_browser` берёт
     # именно его, а не запись в sys.modules, — иначе подмена работает только
     # пока модуль не импортирован соседним тестом.
-    monkeypatch.setattr("core.server_browser.enabled", lambda: server)
+    monkeypatch.setattr("core.server_browser.enabled", lambda: True)
+    monkeypatch.setattr("core.server_browser._cdp_endpoint", lambda: "wss://cdp" if server else "")
+    monkeypatch.setattr("core.version.browser_ready", lambda: False)
 
 
 @pytest.mark.asyncio
@@ -142,3 +144,34 @@ def _const(value):
         return value
 
     return _f
+
+
+@pytest.mark.asyncio
+async def test_flag_alone_is_not_availability(monkeypatch):
+    """NEXUS_SERVER_BROWSER=1 стоит по умолчанию и ничего не доказывает:
+    без Chromium и без адреса облака браузера нет."""
+    monkeypatch.setattr("api.routes_desktop.desktop_connected", lambda: False)
+    monkeypatch.setattr("core.server_browser.enabled", lambda: True)
+    monkeypatch.setattr("core.server_browser._cdp_endpoint", lambda: "")
+    monkeypatch.setattr("core.version.browser_ready", lambda: False)
+    seen = await hixiit.browser_available()
+    assert not seen["available"]
+    assert "Chromium" in seen["why"]
+
+
+@pytest.mark.asyncio
+async def test_installed_chromium_counts_as_server_browser(monkeypatch):
+    monkeypatch.setattr("api.routes_desktop.desktop_connected", lambda: False)
+    monkeypatch.setattr("core.server_browser.enabled", lambda: True)
+    monkeypatch.setattr("core.server_browser._cdp_endpoint", lambda: "")
+    monkeypatch.setattr("core.version.browser_ready", lambda: True)
+    seen = await hixiit.browser_available()
+    assert seen["available"] and seen["where"] == "на сервере"
+
+
+@pytest.mark.asyncio
+async def test_disabled_by_flag_says_so(monkeypatch):
+    monkeypatch.setattr("api.routes_desktop.desktop_connected", lambda: False)
+    monkeypatch.setattr("core.server_browser.enabled", lambda: False)
+    seen = await hixiit.browser_available()
+    assert not seen["available"] and "NEXUS_SERVER_BROWSER" in seen["why"]
