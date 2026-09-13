@@ -1061,13 +1061,26 @@ async def _dispatch_command(chat_id: str, text: str):
                 else "⚙️ Режим: только управление — ИИ не подключён.\n"
                      "Работают: /queue /tasks /errors /cost /rivals, публикация и отчёты.\n"
                      "Генерация текста и видео недоступна.")
+        # Канал для постов: публикация берёт подключённый через /channels и
+        # только потом переменную окружения (connectors/telegram.py::_target).
+        # Смотреть здесь одну переменную значило врать ❌ при живом канале.
+        try:
+            from core.telegram_channels import default_channel
+            post_target = await default_channel()
+        except Exception:
+            post_target = ""
+        post_where = "канал подключён" if post_target else ""
+        if not post_target and os.getenv("TELEGRAM_POST_CHAT_ID"):
+            post_target, post_where = os.getenv("TELEGRAM_POST_CHAT_ID"), "переменная Render"
         lines = [
             "🩺 <b>Диагностика</b>",
             mode,
             "",
             f"{yn(os.getenv('TELEGRAM_BOT_TOKEN'))} Telegram-бот токен",
             f"{yn(os.getenv('TELEGRAM_CHAT_ID'))} Админ-чат",
-            f"{yn(os.getenv('TELEGRAM_POST_CHAT_ID'))} Группа постов",
+            f"{yn(post_target)} Группа постов"
+            + (f" — {post_where}" if post_target else
+               " — подключите: /channels @имя_канала"),
             f"{yn(os.getenv('INSTAGRAM_ACCESS_TOKEN'))} Instagram API",
             f"{yn(os.getenv('TIKTOK_ACCESS_TOKEN'))} TikTok API",
             f"{yn(os.getenv('IG_HANDLE') or os.getenv('TIKTOK_HANDLE') or os.getenv('YOUTUBE_HANDLE'))} Ники для анализа",
