@@ -324,8 +324,25 @@ poll_video = poll_job
 # отказе, имея проверенные значения из каталога, — значит не сгенерировать
 # ничего. Сработавший набор запоминается, чтобы не перебирать каждый раз.
 IMAGE_MODELS_REST = ("soul_2", "soul_v2")
-IMAGE_QUALITIES = ("2k", "1080p")
+# Значения REST-эндпоинта, а НЕ каталога MCP: на «2k» платформа отвечает
+# 422 «Input should be '720p' or '1080p'» — она сама называет допустимые.
+IMAGE_QUALITIES = ("1080p", "720p")
 _working_image_params: dict = {}
+
+
+def _params_rejected(error: str) -> bool:
+    """Отклонён именно набор параметров — есть смысл пробовать следующий.
+
+    Раньше перебор шёл только по 400, и 422 обрывал его сразу. А платформа
+    отвечает на негодное качество именно 422 («Input should be \'720p\' or
+    \'1080p\'»), поэтому после первого же отказа второй вариант не пробовался
+    никогда. При этом 422 про заголовок — это отказ по ключу, и перебирать
+    модели там бессмысленно: причина не в них.
+    """
+    text = str(error or "")
+    if '"header"' in text or "hf-api-key" in text or "hf-secret" in text:
+        return False
+    return "400" in text or "422" in text
 
 
 def _image_param_sets() -> list[dict]:
@@ -360,8 +377,9 @@ async def create_image(prompt: str, ratio: str = "9:16", quality: str = "") -> d
         if res.get("ok"):
             _working_image_params = params
             return res
-        # Не 400 — перебирать бессмысленно: дело не в наборе параметров.
-        if "400" not in str(res.get("error", "")):
+        if not _params_rejected(res.get("error", "")):
+            # Дело не в наборе параметров (например, не приняли ключ) —
+            # перебор только сожжёт запросы и спрячет настоящую причину.
             return res
         last = res
     return last
