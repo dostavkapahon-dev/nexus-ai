@@ -128,6 +128,7 @@ async def setup_bot_commands():
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
+        {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
         {"command": "model", "description": "Выбор моделей: AI, изображения, видео"},
         {"command": "tasks", "description": "Последние задачи и их статусы"},
@@ -928,6 +929,49 @@ async def _dispatch_command(chat_id: str, text: str):
         human = "изображений" if kind == "image" else "видео"
         await send_message(chat_id, f"💾 Модель {human}: <b>{value}</b>\nСохранено — "
                                     "используется и после перезапуска.")
+        return
+
+    # Автоматика: расписание видно, а выключатель — управляемый. Раньше он был
+    # только в вебе и в переменной окружения, то есть из Telegram (главного
+    # интерфейса) автоматику нельзя было ни посмотреть, ни остановить.
+    if cmd in ("autopost", "avtopost", "автопостинг"):
+        from core.autopublish import get_settings, MODE_NAMES as _PM
+        st = await get_settings()
+        on = st["enabled"]
+        lines = [
+            "🤖 <b>Автоматика</b>", "",
+            ("🟢 Автопубликация включена — посты уходят сами"
+             if on else "🟡 Автопубликация выключена — жду подтверждения"), "",
+            "<b>Расписание</b> (время Алматы)",
+            "• 09:00 — тренды",
+            "• 09:30 — фабрика контента",
+            "• 10:00 — генерация материалов",
+            "• 19:00 — публикация",
+            "• 22:00 — отчёт за день",
+            "• 10:15, 14:15, 18:15, 22:15 — комментарии", "",
+            "<b>По площадкам</b>",
+        ]
+        for platform, mode in sorted(st["platforms"].items()):
+            lines.append(f"• {platform}: {_PM.get(mode, mode)}")
+        kb = {"inline_keyboard": [
+            [{"text": ("⏸ Выключить автопубликацию" if on
+                       else "▶️ Включить автопубликацию"),
+              "callback_data": "autopub_off" if on else "autopub_on"}],
+            [{"text": "📋 Очередь", "callback_data": "queue"},
+             {"text": "✅ Подтвердить", "callback_data": "approve"}],
+        ]}
+        await send_message(chat_id, "\n".join(lines), reply_markup=kb)
+        return
+
+    if cmd in ("autopub_on", "autopub_off"):
+        from core.autopublish import set_settings
+        want = cmd == "autopub_on"
+        await set_settings(enabled=want)
+        await send_message(chat_id, (
+            "🟢 Автопубликация включена — посты будут уходить по расписанию, "
+            "без подтверждения." if want else
+            "🟡 Автопубликация выключена — материалы готовятся, но ждут "
+            "вашего /approve."))
         return
 
     if cmd in ("hixiit", "hixit", "higgsfield"):
