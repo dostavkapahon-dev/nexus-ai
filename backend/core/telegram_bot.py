@@ -1717,6 +1717,37 @@ async def _handle_feedback(chat_id: str, action: str):
         await send_message(chat_id, "✏️ Напиши, что поменять — переделаю с учётом этого.")
 
 
+PROVIDER_NAMES = {
+    "higgsfield_api": "Higgsfield (по ключу)",
+    "higgsfield_mcp": "Higgsfield (MCP)",
+    "higgsfield_browser": "Higgsfield (браузер, безлимит)",
+    "pollinations_free": "бесплатный запасной генератор",
+    "pollinations": "бесплатный запасной генератор",
+    "imagen": "Google Imagen",
+    "dalle3": "OpenAI DALL·E 3",
+    "stability": "Stability",
+}
+
+FREE_PROVIDERS = ("pollinations", "pollinations_free")
+
+
+def _media_caption(step: dict) -> str:
+    """Подпись под медиа: исполнитель, модель и текст, который реально ушёл."""
+    provider = step.get("media_provider") or ""
+    human = PROVIDER_NAMES.get(provider, provider or "неизвестно")
+    model = step.get("media_model") or ""
+    head = f"🎨 {human}" + (f" · {model}" if model and model != "free" else "")
+    if provider in FREE_PROVIDERS:
+        head = ("⚠️ " + head + "\nHiggsfield не сработал, поэтому качество ниже. "
+                "Причина — в /hixiit.")
+    lines = [head]
+    if prompt := step.get("media_prompt"):
+        lines.append(f"<i>Промпт: {prompt}</i>")
+    if note := step.get("media_note"):
+        lines.append(f"⚠️ {note}")
+    return "\n".join(lines)[:1000]
+
+
 async def _send_director_media(chat_id: str, res: dict):
     """Медиа, созданные дирижёром через HIXIIT, отправляем в чат.
 
@@ -1730,11 +1761,15 @@ async def _send_director_media(chat_id: str, res: dict):
         url = step.get("media_url")
         if not url:
             continue
+        # Подпись обязательна: «кто сделал» и «по какому тексту». Иначе кадр
+        # от запасного бесплатного генератора неотличим от кадра Higgsfield,
+        # и жалоба «получилось не по моим словам» неразрешима.
+        caption = _media_caption(step)
         try:
             if step["action"] == "make_video":
-                await send_video(chat_id, url, "")
+                await send_video(chat_id, url, caption)
             else:
-                await send_photo(chat_id, url, "")
+                await send_photo(chat_id, url, caption)
         except Exception as e:
             await send_message(chat_id, f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>")
 

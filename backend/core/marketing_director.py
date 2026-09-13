@@ -394,6 +394,13 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
         # остаются только внутри дирижёра и до человека не доходят.
         if name in ("make_image", "make_video") and result.get("url"):
             step["media_url"] = result["url"]
+            # Кто именно нарисовал кадр и по какому тексту. Без этого человек
+            # видит картинку «не по своим словам» и не может понять, почему:
+            # цепочка могла уйти на запасной бесплатный генератор.
+            step["media_provider"] = result.get("provider", "")
+            step["media_model"] = result.get("model", "")
+            step["media_note"] = result.get("note") or result.get("warning") or ""
+            step["media_prompt"] = (inp.get("prompt") or "")[:300]
         steps.append(step)
         messages.append({
             "role": "user",
@@ -465,6 +472,13 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
                          "cost": result.get("cost")})
         if tool in ("make_image", "make_video") and result.get("url"):
             step["media_url"] = result["url"]
+            # Кто именно нарисовал кадр и по какому тексту. Без этого человек
+            # видит картинку «не по своим словам» и не может понять, почему:
+            # цепочка могла уйти на запасной бесплатный генератор.
+            step["media_provider"] = result.get("provider", "")
+            step["media_model"] = result.get("model", "")
+            step["media_note"] = result.get("note") or result.get("warning") or ""
+            step["media_prompt"] = (args.get("prompt") or "")[:300]
         steps.append(step)
         history += f"\n- {tool}: {'ok' if ok else 'ошибка'} :: {json.dumps(result, ensure_ascii=False)[:400]}"
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
