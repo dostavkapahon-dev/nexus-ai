@@ -183,10 +183,19 @@ async def run_daily_report():
 
 async def run_daily_factory():
     """09:30 Алматы — автоцикл «Фабрика»: анализ→ТЗ→видео→(публикация)→отчёт.
-    Публикует, если AUTO_PUBLISH=1, иначе шлёт превью в Telegram.
+
+    Публикует, если включена автопубликация, иначе шлёт превью в Telegram.
+    Раньше здесь читалась переменная AUTO_PUBLISH, а очередь и ежедневная
+    публикация спрашивали настройку из базы — выключатель в настройках фабрику
+    не останавливал. Теперь источник один, переменная осталась умолчанием для
+    первого запуска, пока настройка не сохранена.
     """
     from core.content_factory import run_factory
-    auto = os.getenv("AUTO_PUBLISH", "0") == "1"
+    from core.autopublish import get_settings
+    try:
+        auto = bool((await get_settings())["enabled"])
+    except Exception:
+        auto = os.getenv("AUTO_PUBLISH", "0") == "1"
     try:
         # Отчёт возвращаем наверх: по нему задача узнаёт, что упёрлась в согласование.
         return await run_factory(topic=None, dry_run=not auto)
