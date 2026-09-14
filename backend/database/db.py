@@ -77,6 +77,22 @@ elif DATABASE_URL.startswith("sqlite"):
     _engine_opts["connect_args"] = {"timeout": 30}
 
 engine = create_async_engine(DATABASE_URL, **_engine_opts)
+
+if DATABASE_URL.startswith("sqlite"):
+    # Журнал WAL: читатели перестают блокировать писателя, а писатель —
+    # читателей. Без него соседнее соединение, пережившее свой цикл событий,
+    # держит запись, и параллельный доступ падает с «database is locked» —
+    # ждать тут нечего, поэтому таймаут не спасает.
+    from sqlalchemy import event
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_wal(dbapi_connection, _record):
+        cur = dbapi_connection.cursor()
+        try:
+            cur.execute("PRAGMA journal_mode=WAL")
+            cur.execute("PRAGMA busy_timeout=30000")
+        finally:
+            cur.close()
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 async def init_db():

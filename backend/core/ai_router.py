@@ -52,13 +52,35 @@ PROVIDER_KEY_ENV = {
 _GEMINI_RESOLVED = None
 
 
-def resolve_gemini_model() -> str | None:
+def _replacement_from_error(err) -> str:
+    """Модель-замена, названная самим провайдером в тексте ошибки.
+
+    Google при снятии модели отвечает 404 с прямой подсказкой:
+    «This model models/A is no longer available... use models/B».
+    Следовать ей надёжнее, чем любому нашему списку: списки устаревают, а
+    подсказка приходит от того, кто и снял модель.
+    """
+    import re
+    text = str(err or "")
+    if "no longer available" not in text and "not found" not in text.lower():
+        return ""
+    # Берём последнее упоминание: первое — это снятая модель, второе — замена.
+    names = re.findall(r"models/([A-Za-z0-9._-]+)", text)
+    return names[-1] if len(names) > 1 else ""
+
+
+def resolve_gemini_model(avoid: str = "") -> str | None:
     """Спрашивает у Google, какие модели реально доступны этому ключу,
     и возвращает лучшую flash-модель. Результат кэшируется.
 
-    Избавляет от ошибок «модель не найдена», когда Google меняет линейку.
+    `avoid` — модель, которая только что отказала. Без неё запасной путь был
+    мёртвым: кэш возвращал ту же снятую модель, вызывающий видел `alt == model`
+    и бросал исключение. Название в `avoid` исключается из выбора, а кэш
+    сбрасывается — иначе следующий вызов снова уткнётся в неё.
     """
     global _GEMINI_RESOLVED
+    if avoid and _GEMINI_RESOLVED == avoid:
+        _GEMINI_RESOLVED = None
     if _GEMINI_RESOLVED:
         return _GEMINI_RESOLVED
     key = os.getenv("GEMINI_API_KEY", "")
@@ -77,12 +99,18 @@ def resolve_gemini_model() -> str | None:
         return None
     # Приоритет: свежие flash (дёшево и быстро) → любые flash → что есть.
     # Приоритет по РАЗМЕРУ бесплатной квоты: lite-модели щедрее «старших».
+    if avoid:
+        names = [n for n in names if n != avoid]
     for pref in ("flash-lite", "gemini-2.0-flash", "gemini-2.5-flash", "flash"):
         hits = [n for n in names if pref in n and "vision" not in n
                 and "thinking" not in n and "exp" not in n]
         if hits:
             _GEMINI_RESOLVED = sorted(hits, key=len)[0]
             return _GEMINI_RESOLVED
+    if not names:
+        # Исключили отказавшую — и не осталось ничего. Честный отказ лучше,
+        # чем вернуть ту же модель и получить тот же 404.
+        return None
     _GEMINI_RESOLVED = names[0]
     return _GEMINI_RESOLVED
 
@@ -439,8 +467,15 @@ class AIRouter:
             m = genai.GenerativeModel(model, system_instruction=system)
             resp = await asyncio.to_thread(m.generate_content, prompt)
         except Exception as e:
-            # Модель недоступна для этого ключа → берём реально доступную.
-            alt = await asyncio.to_thread(resolve_gemini_model)
+            # Запасной путь раньше был мёртвым: `resolve_gemini_model()`
+            # закэширован и возвращал ТУ ЖЕ снятую модель, `alt == model`, и
+            # вызов падал. Отсюда «пустой ответ провайдера» на всех агентах.
+            #
+            # Сначала слушаем сам Google: при снятии модели он прямо называет
+            # замену («Please update your code to use models/X»). Это надёжнее
+            # любого нашего списка и переживает будущие снятия.
+            alt = _replacement_from_error(e) or await asyncio.to_thread(
+                resolve_gemini_model, model)
             if not alt or alt == model:
                 raise
             m = genai.GenerativeModel(alt, system_instruction=system)
