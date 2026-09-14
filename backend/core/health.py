@@ -67,14 +67,32 @@ async def _probe_memory() -> dict:
 
 
 async def _probe_hixiit() -> dict:
-    from core.hixiit import status as hixiit_status
+    """Зелёным считается только подтверждённая генерация.
+
+    «Ключ принят» и «картинка получилась» — разные вещи. Статус показывал
+    зелёное по первому, человек читал «Higgsfield подключён» и не получал
+    изображение. Доступ без удачной генерации — это жёлтый, а недавний провал
+    генерации — красный, каким бы исправным ни был доступ.
+    """
+    from core.hixiit import status as hixiit_status, last_generation
     st = await hixiit_status()
+    access = ""
     if st.get("mcp_ok"):
-        return {"ok": True, "detail": f"MCP, кредитов: {st.get('credits', '—')}"}
-    if st.get("api_ok"):
-        return {"ok": True, "detail": "API отвечает по ключу и секрету"}
-    if st.get("browser_agent"):
-        return {"ok": True, "detail": "через браузер-агент на ПК"}
+        access = f"MCP, кредитов: {st.get('credits', '—')}"
+    elif st.get("api_ok"):
+        access = "API отвечает по ключу и секрету"
+    elif st.get("browser_agent"):
+        access = "через браузер"
+
+    if access:
+        last = await last_generation()
+        if last["state"] == "failed":
+            return {"ok": False, "detail": f"доступ есть ({access}), но генерация "
+                                           f"{last['when']} не удалась: {last['error']}"[:200]}
+        if last["state"] == "never":
+            return {"ok": True, "warn": True,
+                    "detail": f"{access}; генерация ещё не проверялась"}
+        return {"ok": True, "detail": f"{access}; генерация {last['when']} прошла"}
     # «Ключ есть» зелёным не считаем: запрос с ним не прошёл, значит генерации
     # не будет, и человек должен увидеть причину, а не галочку.
     return {"ok": False, "detail": (st.get("api_error") or st.get("mcp_error")
