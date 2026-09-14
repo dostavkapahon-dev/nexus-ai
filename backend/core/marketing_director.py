@@ -15,7 +15,18 @@ import asyncio
 
 import anthropic
 
-DIRECTOR_MODEL = "claude-sonnet-4-6"
+# Дирижёр планирует и раздаёт задачи — это самая сложная работа в системе, и
+# экономить на ней нельзя: дешёвая модель здесь портит весь конвейер, а не
+# только один ответ. Порядок — от самой мощной к запасной; берётся первая, у
+# которой есть ключ.
+ORCHESTRATORS = (
+    {"provider": "anthropic", "model": "claude-opus-5",
+     "env": "ANTHROPIC_API_KEY", "human": "Claude Opus 5"},
+    {"provider": "google", "model": "gemini-2.5-flash",
+     "env": "GEMINI_API_KEY", "human": "Gemini 2.5 Flash"},
+)
+
+DIRECTOR_MODEL = ORCHESTRATORS[0]["model"]
 
 SYSTEM = """\
 Ты — директор по маркетингу NEXUS AI. Тебе ставят бизнес-цель, ты декомпозируешь
@@ -414,7 +425,10 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
 
 
 # ── Gemini-путь (бесплатный Google-ключ), JSON-протокол инструментов ───────────
-GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.0-flash")
+# Один источник правды: раньше здесь стоял gemini-2.0-flash, а статус называл
+# gemini-2.5-flash — панель показывала модель, которая не запускалась.
+GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL",
+                                  ORCHESTRATORS[1]["model"])
 
 _GEMINI_DIRECTOR_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown) одного из видов:
@@ -491,13 +505,16 @@ def current_orchestrator() -> dict:
     система молча переходила на Gemini, и человек считал, что работает Claude.
     §22 требует называть оркестратор, а назвать его можно только зная заранее.
     """
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return {"ok": True, "provider": "anthropic", "model": DIRECTOR_MODEL,
-                "human": f"Claude {DIRECTOR_MODEL}"}
-    if os.getenv("GEMINI_API_KEY"):
-        model = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.5-flash")
-        return {"ok": True, "provider": "google", "model": model,
-                "human": f"Gemini {model}"}
+    for row in ORCHESTRATORS:
+        if not os.getenv(row["env"]):
+            continue
+        # Модель можно переопределить переменной, но тогда и называться должна
+        # она же: иначе панель обещает одно, а работает другое.
+        model = (os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "").strip()
+                 if row["provider"] == "google" else "") or row["model"]
+        human = row["human"] if model == row["model"] else model
+        return {"ok": True, "provider": row["provider"], "model": model,
+                "human": human}
     return {"ok": False, "provider": "", "model": "",
             "human": "нет ключа — дирижёр недоступен"}
 
