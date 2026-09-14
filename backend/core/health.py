@@ -82,11 +82,19 @@ async def _probe_hixiit() -> dict:
 
 
 async def _probe_web() -> dict:
+    """Живая проверка поиска.
+
+    Два дефекта разом: проверялся ключ `results`, которого в ответе нет
+    (`search` возвращает `items`), поэтому зелёной эта строка не могла стать
+    никогда — даже при рабочей выдаче. И браузерному источнику давалось
+    неограниченное время, из-за чего он съедал весь срок проверки, а наружу
+    уходило «не ответил за 45 секунд» без имени зависшего источника.
+    """
     from core.websearch import search
-    res = await search("test", 1)
-    if res.get("ok") and res.get("results"):
-        return {"ok": True, "detail": "поиск отвечает"}
-    return {"ok": False, "detail": str(res.get("error") or "пустая выдача")[:120]}
+    res = await search("test", 1, budget=15.0)
+    if res.get("ok") and res.get("items"):
+        return {"ok": True, "detail": f"отвечает ({res.get('provider', '—')})"}
+    return {"ok": False, "detail": str(res.get("error") or "пустая выдача")[:160]}
 
 
 async def _probe_instagram() -> dict:
