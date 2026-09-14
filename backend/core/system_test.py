@@ -74,13 +74,18 @@ async def check_search() -> dict:
     name = "Интернет-поиск"
     from core.websearch import search
     try:
-        res = await search("новости маркетинга", 2)
+        # Срок ограничен: у поиска есть медленный источник (браузер), и
+        # самопроверка не должна висеть на нём минутами.
+        res = await search("новости маркетинга", 2, budget=30.0)
     except Exception as e:
         return _fail(name, f"{type(e).__name__}: {str(e)[:140]}", "", t)
-    items = res.get("results") or []
+    # Ключ именно `items`: `results` в ответе нет, и проверка, читавшая его,
+    # не могла стать зелёной никогда — даже при рабочей выдаче.
+    items = res.get("items") or []
     if res.get("ok") and items:
         first = (items[0].get("title") or items[0].get("url") or "")[:80]
-        return _ok(name, f"найдено: {len(items)}", first, t)
+        return _ok(name, f"найдено: {len(items)} ({res.get('provider', '—')})",
+                   first, t)
     return _fail(name, str(res.get("error") or "пустая выдача")[:140], "", t)
 
 

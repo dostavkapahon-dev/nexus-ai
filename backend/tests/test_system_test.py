@@ -39,8 +39,11 @@ async def test_ai_correct_answer_passes(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_empty_search_is_a_failure(monkeypatch):
-    async def nothing(query, n=5):
-        return {"ok": False, "error": "поиск не дал результатов", "results": []}
+    # Подмена обязана повторять настоящую сигнатуру, иначе тест проверяет не
+    # поведение, а совпадение фикстуры. И ключ здесь `items`: `results` в
+    # ответе поиска нет — на нём и держался дефект, который тест не ловил.
+    async def nothing(query, n=5, budget=60.0):
+        return {"ok": False, "error": "поиск не дал результатов", "items": []}
 
     monkeypatch.setattr("core.websearch.search", nothing)
     res = await st.check_search()
