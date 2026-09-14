@@ -155,8 +155,22 @@ async def _search_browser(query: str, max_results: int) -> list[dict]:
     return out
 
 
-async def search(query: str, max_results: int = 8) -> dict:
-    """Поиск по интернету. Каскад источников: отказ одного — не отказ поиска."""
+_LAST_SOURCE = "браузер"
+
+
+def _is_last(name: str) -> bool:
+    """Последнему источнику отдаём весь остаток: делить уже не с кем."""
+    return name == _LAST_SOURCE
+
+
+async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict:
+    """Поиск по интернету. Каскад источников: отказ одного — не отказ поиска.
+
+    `budget` — сколько секунд не жалко отдать самому медленному источнику
+    (браузеру). Проверка состояния ставит его низким: ей нужен быстрый ответ,
+    а не результат любой ценой.
+    """
+    import asyncio
     query = (query or "").strip()
     if not query:
         return {"ok": False, "error": "пустой запрос", "items": []}
@@ -166,11 +180,30 @@ async def search(query: str, max_results: int = 8) -> dict:
     tried = []
     # Порядок: платный и точный → дешёвый http → браузер. Браузер последним не
     # потому что хуже, а потому что медленнее и занимает вкладку.
-    for name, fn in (("perplexity", _search_perplexity),
-                     ("duckduckgo", _search_ddg),
-                     ("браузер", _search_browser)):
+    #
+    # У каждого источника свой срок. Без него медленный источник съедал всё
+    # время вызывающего, и наружу уходило «не ответил за 45 секунд» — по такому
+    # тексту неизвестно даже, какой из источников завис.
+    deadline = asyncio.get_event_loop().time() + float(budget)
+    for name, fn, want in (("perplexity", _search_perplexity, 20.0),
+                           ("duckduckgo", _search_ddg, 10.0),
+                           ("браузер", _search_browser, float(budget))):
+        # Срок общий: источник получает своё привычное время, но не больше, чем
+        # осталось от бюджета. Иначе «бюджет 15 с» превращался в 40 с, потому
+        # что каждый источник отсчитывал его заново.
+        left = deadline - asyncio.get_event_loop().time()
+        if left <= 0.05:
+            tried.append(f"{name}: не пробовали — время вышло")
+            continue
+        # Не больше половины остатка: иначе первый же зависший источник
+        # съедает весь бюджет, и до рабочего очередь не доходит — ровно та
+        # болезнь, от которой мы и уходим.
+        limit = min(want, max(left / 2, 0.05)) if not _is_last(name) else min(want, left)
         try:
-            items = await fn(query, max_results)
+            items = await asyncio.wait_for(fn(query, max_results), timeout=limit)
+        except asyncio.TimeoutError:
+            tried.append(f"{name}: не ответил за {limit:.0f} с")
+            continue
         except NoKey as e:
             tried.append(f"{name}: {e}")
             continue
