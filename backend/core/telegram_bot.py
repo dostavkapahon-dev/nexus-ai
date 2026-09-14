@@ -1256,7 +1256,10 @@ async def _dispatch_command(chat_id: str, text: str):
         from core.health import probe_all
         probes = await probe_all()
         await send_message(chat_id, "🩺 <b>Живая проверка</b>\n" + "\n".join(
-            f"{'🟢' if p['ok'] else '🔴'} {p['name']} — {p['detail']}" for p in probes))
+            # Три состояния, а не два: «доступ есть, но генерация не проверена»
+            # — это не то же самое, что «работает», и зелёным быть не должно.
+            f"{'🟡' if p.get('warn') else ('🟢' if p['ok'] else '🔴')} "
+            f"{p['name']} — {p['detail']}" for p in probes))
 
         # Реальная проверка: ключ может быть задан, но невалиден/без квоты.
         checks = []

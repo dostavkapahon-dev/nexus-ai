@@ -1151,6 +1151,42 @@ async def _key_sources() -> list[dict]:
     return out
 
 
+async def last_generation(hours: int = 24) -> dict:
+    """Чем закончилась последняя настоящая попытка генерации.
+
+    «Ключ принят» и «картинка получилась» — разные вещи, а статус показывал
+    зелёное по первому. Человек видел «Higgsfield подключён» и не получал
+    изображение. Зелёным теперь считается только подтверждённая генерация.
+
+    Возвращает {'state': 'ok'|'failed'|'never', 'when', 'what', 'error'}.
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import select, desc
+    from database.db import AsyncSessionLocal
+    from database.models import AgentLog
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    try:
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(
+                select(AgentLog)
+                .where(AgentLog.agent_name == "media",
+                       AgentLog.created_at >= since)
+                .order_by(desc(AgentLog.created_at)).limit(1))
+            row = r.scalar_one_or_none()
+    except Exception:
+        return {"state": "never", "when": "", "what": "", "error": ""}
+    if row is None:
+        return {"state": "never", "when": "", "what": "", "error": ""}
+    failed = (row.status or "") == "error"
+    return {
+        "state": "failed" if failed else "ok",
+        "when": row.created_at.strftime("%d.%m %H:%M") if row.created_at else "—",
+        "what": (row.model_used or "").split(":")[-1] or "медиа",
+        "error": (row.error or "")[:200] if failed else "",
+    }
+
+
 async def recent_failures(limit: int = 3, hours: int = 24) -> list[dict]:
     """Последние неудачные генерации с причинами.
 
