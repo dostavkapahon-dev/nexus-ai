@@ -982,8 +982,14 @@ async def browser_available() -> dict:
         from core.version import browser_ready
         if browser_ready():
             return {"available": True, "where": "на сервере", "why": ""}
+        from core.version import browser_install_error
+        detail = browser_install_error()
         out["why"] = ("Chromium на сервере не установлен — задайте "
                       "NEXUS_BROWSER_CDP (адрес облачного браузера)")
+        if detail:
+            # Причина от самой установки: без неё не отличить «нет места» от
+            # «нет сети» и «нет системных библиотек», а чинятся они по-разному.
+            out["why"] += f"\nПричина при сборке: {detail[:200]}"
     except Exception as e:
         out["why"] = _why(e, 120)
     return out

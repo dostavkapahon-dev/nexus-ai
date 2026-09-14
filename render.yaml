@@ -13,7 +13,8 @@ services:
     # путь честно скажет об этом при первом обращении.
     buildCommand: |
       pip install -r requirements.txt
-      python -m playwright install chromium || echo "ВНИМАНИЕ: Chromium не установлен — браузерный путь публикации работать не будет, остальное работает"
+      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+      python -m playwright install chromium > /tmp/pw_install.log 2>&1 || (echo "ВНИМАНИЕ: Chromium не установлен"; tail -20 /tmp/pw_install.log; tail -20 /tmp/pw_install.log > "$PLAYWRIGHT_BROWSERS_PATH/.install_error")
     #
     # Миграции тоже не должны быть единой точкой отказа: при `&&` любая неудача
     # означала, что сервис не поднимется вовсе и причину видно только в логах
@@ -23,6 +24,13 @@ services:
       (alembic upgrade head && echo ok > /tmp/nexus_migration || echo "FAILED" > /tmp/nexus_migration)
       uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      # Куда Playwright кладёт Chromium. Задано ЯВНО и одинаково для сборки и
+      # запуска: по умолчанию путь берётся из домашней папки, а она у этих двух
+      # этапов на Render разная — браузер скачивался в одно место, а искался в
+      # другом, и статус честно показывал «не установлен». Каталог лежит внутри
+      # проекта, поэтому переживает переход от сборки к запуску.
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /opt/render/project/src/.playwright
       # ПОСТОЯННАЯ БД (Supabase Postgres) — без неё данные теряются при рестарте.
       # Строка вида postgresql://user:pass@host:5432/postgres — код сам переведёт на asyncpg.
       - key: DATABASE_URL

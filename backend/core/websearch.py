@@ -113,6 +113,48 @@ async def _search_ddg(query: str, max_results: int) -> list[dict]:
             if i.get("url", "").startswith("http")]
 
 
+_BROWSER_SYS = ("Ты извлекаешь результаты поиска из текста страницы. Верни СТРОГО JSON "
+                '{"items":[{"title":"","snippet":"","url":"https://..."}]} '
+                "без пояснений. Только реальные ссылки со страницы.")
+
+
+async def _search_browser(query: str, max_results: int) -> list[dict]:
+    """Поиск руками браузера — без ключей и без платных API.
+
+    Третий источник появился не от хорошей жизни: Perplexity требует платный
+    ключ, а DuckDuckGo по http блокирует серверные адреса. Браузер открывает ту
+    же выдачу как обычный посетитель, поэтому работает там, где http-запрос
+    отбивают. Ничего нового не строим — переиспользуем серверный браузер и
+    дешёвый извлекатель, которые уже есть.
+    """
+    from core.hixiit import browser_available
+    seen = await browser_available()
+    if not seen["available"]:
+        raise NoKey("браузер не подключён: " + (seen["why"] or "не настроен"))
+
+    from urllib.parse import quote_plus
+    from core.browser_reader import _open_text, _extract
+    page = await _open_text(f"https://duckduckgo.com/?q={quote_plus(query)}")
+    if not page.get("ok"):
+        raise RuntimeError(page.get("error") or "страница не открылась")
+    text = (page.get("text") or "")[:6000]
+    if not text.strip():
+        raise RuntimeError("страница пустая")
+
+    data = await _extract(_BROWSER_SYS,
+                          f"Запрос: {query}\n\nТекст страницы:\n{text}")
+    if data.get("_error"):
+        raise RuntimeError(data["_error"])
+    out = []
+    for item in (data.get("items") or [])[:max_results]:
+        url = str(item.get("url") or "")
+        if url.startswith("http"):
+            out.append({"title": str(item.get("title", ""))[:200],
+                        "snippet": str(item.get("snippet", ""))[:400],
+                        "url": url, "source": "browser"})
+    return out
+
+
 async def search(query: str, max_results: int = 8) -> dict:
     """Поиск по интернету. Каскад источников: отказ одного — не отказ поиска."""
     query = (query or "").strip()
@@ -122,7 +164,11 @@ async def search(query: str, max_results: int = 8) -> dict:
     # Причина по каждому источнику — словами, а не «пусто»: «нет ключа» и
     # «нас заблокировали» чинятся совершенно по-разному.
     tried = []
-    for name, fn in (("perplexity", _search_perplexity), ("duckduckgo", _search_ddg)):
+    # Порядок: платный и точный → дешёвый http → браузер. Браузер последним не
+    # потому что хуже, а потому что медленнее и занимает вкладку.
+    for name, fn in (("perplexity", _search_perplexity),
+                     ("duckduckgo", _search_ddg),
+                     ("браузер", _search_browser)):
         try:
             items = await fn(query, max_results)
         except NoKey as e:

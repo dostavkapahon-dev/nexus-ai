@@ -61,6 +61,21 @@ def browser_ready() -> bool:
         return False
 
 
+def browser_install_error() -> str:
+    """Почему Chromium не встал — то, что сказала сама установка при сборке.
+
+    Раньше неудача глушилась через `|| echo`, и наружу выходило только
+    «не установлен» — без причины чинить нечего, а установка бывает разной:
+    нет места, нет сети, нет системных библиотек.
+    """
+    base = os.getenv("PLAYWRIGHT_BROWSERS_PATH", "") or os.path.expanduser("~/.cache/ms-playwright")
+    try:
+        with open(os.path.join(base, ".install_error")) as f:
+            return f.read().strip()[:400]
+    except Exception:
+        return ""
+
+
 def build_info() -> dict:
     """Коммит, ветка и время старта процесса. Считается один раз."""
     global _cached
