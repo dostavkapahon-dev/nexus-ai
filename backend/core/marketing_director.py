@@ -484,6 +484,24 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
     return {"status": "max_steps", "summary": "Достигнут лимит шагов дирижёра.", "steps": steps}
 
 
+def current_orchestrator() -> dict:
+    """Кто реально будет дирижировать — до запуска, а не после.
+
+    Раньше выбор был виден только по факту: при отсутствии ключа Anthropic
+    система молча переходила на Gemini, и человек считал, что работает Claude.
+    §22 требует называть оркестратор, а назвать его можно только зная заранее.
+    """
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return {"ok": True, "provider": "anthropic", "model": DIRECTOR_MODEL,
+                "human": f"Claude {DIRECTOR_MODEL}"}
+    if os.getenv("GEMINI_API_KEY"):
+        model = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL", "gemini-2.5-flash")
+        return {"ok": True, "provider": "google", "model": model,
+                "human": f"Gemini {model}"}
+    return {"ok": False, "provider": "", "model": "",
+            "human": "нет ключа — дирижёр недоступен"}
+
+
 async def run_director(goal: str, context: str = "", max_steps: int = 12,
                        on_step=None) -> dict:
     """Запуск дирижёра на доступном AI: Anthropic если есть ключ, иначе Gemini.
@@ -492,10 +510,17 @@ async def run_director(goal: str, context: str = "", max_steps: int = 12,
     признака жизни неотличима от зависшей — человек ждёт минуты и не знает,
     работает система или нет.
     """
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return await _run_director_anthropic(goal, context, max_steps, on_step)
-    if os.getenv("GEMINI_API_KEY"):
-        return await _run_director_gemini(goal, context, max_steps, on_step)
+    picked = current_orchestrator()
+    if picked["provider"] == "anthropic":
+        res = await _run_director_anthropic(goal, context, max_steps, on_step)
+    elif picked["provider"] == "google":
+        res = await _run_director_gemini(goal, context, max_steps, on_step)
+    else:
+        res = None
+    if res is not None:
+        # Кто дирижировал — часть результата, а не догадка по логам.
+        return {**res, "orchestrator": picked["human"],
+                "orchestrator_model": picked["model"]}
     return {"status": "error",
             "summary": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
                        "или ANTHROPIC_API_KEY в Подключениях."}

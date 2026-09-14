@@ -121,6 +121,80 @@ async def _answer_callback(callback_id: str, text: str = ""):
         pass
 
 
+async def _edit_message(chat_id: str, message_id: int, text: str) -> bool:
+    """Правит уже отправленное сообщение. Неудача — не повод ронять задачу."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(_url("editMessageText"),
+                             json={"chat_id": chat_id, "message_id": message_id,
+                                   "text": text[:4000], "parse_mode": "HTML",
+                                   "disable_web_page_preview": True})
+        return bool(r.json().get("ok"))
+    except Exception:
+        return False
+
+
+def _live_panel(chat_id: str, title: str, header: str = ""):
+    """Одно сообщение, которое растёт по шагам, вместо россыпи новых.
+
+    Раньше каждый шаг уходил отдельным сообщением: чат засыпало, а общей
+    картины всё равно не было. Здесь человек видит один экран — что уже
+    сделано, что идёт сейчас, и кто именно это делает.
+
+    Возвращает (progress, finish): обе — корутины.
+    """
+    state = {"message_id": None, "steps": [], "current": ""}
+
+    def render(final: str = "") -> str:
+        head = ("✅" if final == "ok" else "⚠️" if final == "fail" else "⚙️")
+        lines = [f"{head} <b>{title}</b>"]
+        if header:
+            lines.append(f"<i>{header}</i>")
+        lines.append("")
+        lines += [f"✅ {s}" for s in state["steps"]]
+        if not final and state["current"]:
+            lines.append(f"⏳ {state['current']}")
+        if final:
+            lines.append("✅ Готово" if final == "ok" else "⚠️ Не доделано")
+        return "\n".join(lines)
+
+    async def _draw(final: str = ""):
+        text = render(final)
+        if state["message_id"] is not None:
+            await _edit_message(chat_id, state["message_id"], text)
+            return
+        # Первое сообщение шлём сами: нужен его message_id, а send_message его
+        # не отдаёт, и менять её возврат ради панели — задеть десятки вызовов.
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.post(_url("sendMessage"),
+                                 json={"chat_id": chat_id, "text": text[:4000],
+                                       "parse_mode": "HTML",
+                                       "disable_web_page_preview": True})
+            data = r.json()
+            if data.get("ok"):
+                state["message_id"] = data["result"]["message_id"]
+        except Exception:
+            # Панель — удобство, а не задача: её сбой не должен ронять работу.
+            pass
+
+    async def progress(label: str):
+        if label == state["current"]:
+            return                      # тот же шаг подряд — это не прогресс
+        if state["current"]:
+            state["steps"].append(state["current"])
+        state["current"] = label
+        await _draw()
+
+    async def finish(ok: bool = True):
+        if state["current"]:
+            state["steps"].append(state["current"])
+            state["current"] = ""
+        await _draw("ok" if ok else "fail")
+
+    return progress, finish
+
+
 async def setup_bot_commands():
     """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
     cmds = [
@@ -752,8 +826,14 @@ async def _dispatch_command(chat_id: str, text: str):
                                "<code>/director разбери мою нишу и сделай план на неделю</code>")
             return
         _last_task[chat_id] = task
-        await send_message(chat_id, f"🧠 Дирижёр взял задачу: <i>{task[:120]}</i>\n"
-                                    "Подключаю агентов, это может занять пару минут...")
+        # Кто дирижирует — говорим сразу и по имени: при отсутствии ключа
+        # Anthropic система молча переходит на Gemini, и человек считал, что
+        # работает Claude.
+        from core.marketing_director import current_orchestrator
+        who = current_orchestrator()
+        progress, panel_finish = _live_panel(
+            chat_id, f"Задача: {task[:80]}", f"🧠 Дирижёр: {who['human']}")
+        await progress("Беру задачу")
         try:
             from core.command_center import run_command
             from core import dialog
@@ -762,21 +842,13 @@ async def _dispatch_command(chat_id: str, text: str):
             # Без истории дирижёр каждый раз начинает с чистого листа.
             history = await dialog.history(chat_id)
 
-            # Один и тот же шаг подряд не повторяем: «🔎 Ищу» пять раз — это
-            # шум, а не прогресс.
-            seen = {"last": ""}
-
-            async def progress(label: str):
-                if label == seen["last"]:
-                    return
-                seen["last"] = label
-                await send_message(chat_id, label)
-
             res = await run_command(task, source="telegram", mirror=False,
                                     context=history, on_step=progress)
         except Exception as e:
+            await panel_finish(ok=False)
             await send_message(chat_id, f"⚠️ Ошибка дирижёра: {str(e)[:200]}")
             return
+        await panel_finish(ok=True)
         reply = res.get("reply") or "Готово."
         await send_message(chat_id, reply, reply_markup=_feedback_kb())
         await _send_director_media(chat_id, res)
