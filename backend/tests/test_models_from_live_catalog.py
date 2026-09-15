@@ -12,20 +12,26 @@ import pytest
 from core import higgsfield as hf
 
 
-def test_retired_models_are_gone():
-    """Главный дефект: слали модели, которых у аккаунта нет."""
-    assert "soul_2" not in hf.IMAGE_MODELS_REST
+def test_every_candidate_was_verified_by_name():
+    """Каждое имя проверено в каталоге поимённо (models_explore action=get).
+
+    Список `list` отдаёт лишь часть набора: soul_2 и gpt_image_2_5 в нём
+    отсутствуют, но существуют и работают. Вывод «их больше нет» был сделан по
+    неполным данным и оказался неверным.
+    """
+    verified = ("soul_2", "gpt_image_2_5", "recraft_v4_1", "z_image")
+    for model in hf.IMAGE_MODELS_REST:
+        assert model in verified
+
+
+def test_unverified_model_is_not_sent():
+    """soul_v2 поимённо не подтверждён — значит не шлём."""
     assert "soul_v2" not in hf.IMAGE_MODELS_REST
 
 
-def test_models_are_from_the_live_catalog():
-    for model in hf.IMAGE_MODELS_REST:
-        assert model in ("recraft_v4_1", "z_image", "soul_location")
-
-
-def test_photoreal_model_goes_first():
-    """Для соцсетей фотореализм важнее скорости."""
-    assert hf.IMAGE_MODELS_REST[0] == "recraft_v4_1"
+def test_soul_family_goes_first():
+    """Эндпоинт называется /v1/text2image/soul — его модели пробуем первыми."""
+    assert hf.IMAGE_MODELS_REST[0].startswith("soul")
 
 
 def test_portrait_only_model_is_excluded():
