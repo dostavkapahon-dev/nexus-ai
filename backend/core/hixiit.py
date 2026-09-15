@@ -359,6 +359,19 @@ async def pick_model(task: str, kind: str, has_reference: bool = False) -> dict:
         models = _as_model_list(res, has_reference)
         if models:
             _models_cache[key] = (now, models)
+            # Каталог, названный самим провайдером, — единственное честное
+            # знание о том, что доступно. Записываем его, чтобы список моделей
+            # не жил в коде и переживал перезапуск.
+            try:
+                from core import model_registry
+                await model_registry.remember_catalog(
+                    "higgsfield",
+                    [{"id": m.get("id") or m.get("name"), "kind": kind,
+                      "label": m.get("name") or m.get("id")} for m in models],
+                    source="MCP models_explore")
+            except Exception as e:
+                print(f"[NEXUS] каталог моделей не записан: {type(e).__name__}: "
+                      f"{str(e)[:120]}", flush=True)
 
     if not models:
         return {}
@@ -937,6 +950,13 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
             cap, got,
             "" if got else str(res.get("error", ""))[:800],
             str(res.get("url") or res.get("provider") or "")[:200])
+        # Та же правда, но по конкретной модели: какая именно сработала, а
+        # какая отказала. Без этого выбор модели навсегда остаётся гаданием.
+        model = str(res.get("model") or "").strip()
+        if model and model not in ("free", "account", "auto"):
+            from core import model_registry
+            await model_registry.mark_result(
+                "higgsfield", model, got, str(res.get("error", ""))[:300])
     except Exception as e:
         print(f"[NEXUS] реестр не записал генерацию: {type(e).__name__}: "
               f"{str(e)[:120]}", flush=True)
