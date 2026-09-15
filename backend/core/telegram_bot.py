@@ -202,6 +202,7 @@ async def setup_bot_commands():
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "can", "description": "Что система умеет подтверждённо"},
+        {"command": "models", "description": "Каталог моделей и что проверено"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1159,6 +1160,20 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("models", "modeli"):
+        # Каталог показывается не из кода, а из реестра: там записано то, что
+        # назвал сам провайдер, и что из этого подтверждено генерацией.
+        from core import model_registry as mr
+        fresh = await mr.freshness("higgsfield")
+        parts = [mr.as_text(await mr.catalog("higgsfield", "image"), "🖼 Картинки"),
+                 "", mr.as_text(await mr.catalog("higgsfield", "video"), "🎬 Видео")]
+        if fresh["when"]:
+            parts += ["", f"Каталог от {fresh['when'][:16].replace('T', ' ')} UTC"
+                          f" · источник: {fresh['source']}"
+                      + (" · устарел" if fresh["stale"] else "")]
+        await send_message(chat_id, "\n".join(parts))
         return
 
     if cmd in ("can", "capabilities", "umeyu"):
