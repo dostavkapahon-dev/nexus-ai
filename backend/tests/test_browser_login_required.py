@@ -10,38 +10,43 @@ import pytest
 from core import hixiit
 
 
-def _domains(monkeypatch, values):
-    monkeypatch.setattr("core.server_browser.session_domains", lambda: values)
+def _cookies(monkeypatch, *domains):
+    """Кладём cookies в ту же переменную, из которой их читает браузер."""
+    import json
+    monkeypatch.setenv("NEXUS_BROWSER_STORAGE_STATE", json.dumps(
+        [{"name": "sid", "value": "x", "domain": d} for d in domains]))
 
 
 def test_no_cookies_means_no_login(monkeypatch):
-    _domains(monkeypatch, [])
+    monkeypatch.setenv("NEXUS_BROWSER_STORAGE_STATE", "")
     res = hixiit.higgsfield_session()
     assert res["ok"] is False
     assert "NEXUS_BROWSER_STORAGE_STATE" in res["why"]
 
 
 def test_foreign_cookies_do_not_count(monkeypatch):
-    _domains(monkeypatch, ["instagram.com", "www.youtube.com"])
+    _cookies(monkeypatch, ".instagram.com", ".youtube.com")
     assert hixiit.higgsfield_session()["ok"] is False
 
 
 def test_higgsfield_cookies_count(monkeypatch):
-    _domains(monkeypatch, ["higgsfield.ai", "instagram.com"])
+    _cookies(monkeypatch, ".higgsfield.ai", ".instagram.com")
     res = hixiit.higgsfield_session()
     assert res["ok"] is True and res["domains"] == ["higgsfield.ai"]
 
 
 def test_subdomain_counts(monkeypatch):
-    _domains(monkeypatch, ["cloud.higgsfield.ai"])
+    _cookies(monkeypatch, ".cloud.higgsfield.ai")
     assert hixiit.higgsfield_session()["ok"] is True
 
 
 def test_broken_browser_module_is_not_a_login(monkeypatch):
+    _cookies(monkeypatch, ".higgsfield.ai")
+
     def boom():
         raise RuntimeError("нет доступа к настройкам")
 
-    monkeypatch.setattr("core.server_browser.session_domains", boom)
+    monkeypatch.setattr("core.server_browser._storage_state", boom)
     res = hixiit.higgsfield_session()
     assert res["ok"] is False and res["why"]
 
@@ -85,3 +90,43 @@ async def test_generation_names_missing_login_as_the_reason(monkeypatch):
     res = await hixiit._generate_once_raw("кадр", kind="video")
     assert res["ok"] is False
     assert any("нет входа в higgsfield.ai" in t for t in res["tried"])
+
+
+def _env(monkeypatch, value):
+    monkeypatch.setenv("NEXUS_BROWSER_STORAGE_STATE", value)
+
+
+def test_missing_variable_is_named_as_such(monkeypatch):
+    monkeypatch.delenv("NEXUS_BROWSER_STORAGE_STATE", raising=False)
+    res = hixiit.higgsfield_session()
+    assert res["ok"] is False
+    assert "не задана" in res["why"]
+
+
+def test_unparsable_value_says_what_to_paste(monkeypatch):
+    """Cookie-Editor умеет отдавать строку заголовка — это не тот формат."""
+    _env(monkeypatch, "session=abc; token=def")
+    res = hixiit.higgsfield_session()
+    assert res["ok"] is False
+    assert "Export as JSON" in res["why"]
+
+
+def test_cookies_from_another_site_name_the_domains(monkeypatch):
+    _env(monkeypatch, '[{"name": "sid", "value": "x", "domain": ".instagram.com"}]')
+    res = hixiit.higgsfield_session()
+    assert res["ok"] is False
+    assert "instagram.com" in res["why"]
+    assert "не от higgsfield.ai" in res["why"]
+
+
+def test_real_higgsfield_cookies_pass(monkeypatch):
+    _env(monkeypatch, '[{"name": "sid", "value": "x", "domain": ".higgsfield.ai"}]')
+    res = hixiit.higgsfield_session()
+    assert res["ok"] is True and res["domains"] == ["higgsfield.ai"]
+
+
+def test_cookie_values_are_never_printed(monkeypatch):
+    """В диагностике не должно быть секретов — только имена доменов."""
+    _env(monkeypatch, '[{"name": "sid", "value": "СЕКРЕТ", "domain": ".instagram.com"}]')
+    res = hixiit.higgsfield_session()
+    assert "СЕКРЕТ" not in res["why"]

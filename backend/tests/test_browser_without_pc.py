@@ -13,10 +13,15 @@ from core import hixiit
 
 
 def _logged_in(monkeypatch, yes=True):
-    """Вход в аккаунт Higgsfield: без него браузерный путь отказывает сразу."""
-    monkeypatch.setattr(
-        "core.server_browser.session_domains",
-        lambda: ["higgsfield.ai"] if yes else [])
+    """Вход в аккаунт Higgsfield: без него браузерный путь отказывает сразу.
+
+    Кладём cookies в ту же переменную, из которой их читает сам браузер, —
+    подменять внутренние функции незачем.
+    """
+    monkeypatch.setenv(
+        "NEXUS_BROWSER_STORAGE_STATE",
+        '[{"name": "sid", "value": "x", "domain": ".higgsfield.ai"}]'
+        if yes else "")
 
 
 def _browser(monkeypatch, desktop=False, server=False):
