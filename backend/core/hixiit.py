@@ -983,9 +983,14 @@ async def browser_available() -> dict:
         if browser_ready():
             return {"available": True, "where": "на сервере", "why": ""}
         from core.version import browser_install_error
+        import os as _os
         detail = browser_install_error()
+        # Где искали — важнее, чем факт «не нашли»: если путь не тот, что задан
+        # в сборке, значит настройки сборки до сервиса не доехали, и чинить
+        # надо это, а не установку.
+        where = _os.getenv("PLAYWRIGHT_BROWSERS_PATH", "") or "домашняя папка (путь не задан)"
         out["why"] = ("Chromium на сервере не установлен — задайте "
-                      "NEXUS_BROWSER_CDP (адрес облачного браузера)")
+                      f"NEXUS_BROWSER_CDP (адрес облачного браузера).\nИскал в: {where}")
         if detail:
             # Причина от самой установки: без неё не отличить «нет места» от
             # «нет сети» и «нет системных библиотек», а чинятся они по-разному.
