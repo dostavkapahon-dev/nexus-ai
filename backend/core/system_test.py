@@ -86,7 +86,10 @@ async def check_search() -> dict:
         first = (items[0].get("title") or items[0].get("url") or "")[:80]
         return _ok(name, f"найдено: {len(items)} ({res.get('provider', '—')})",
                    first, t)
-    return _fail(name, str(res.get("error") or "пустая выдача")[:140], "", t)
+    # Причина по КАЖДОМУ источнику, целиком. Под старым лимитом в 140 символов
+    # текст обрывался на середине последнего источника — а именно он и был
+    # интересен: первые два отказывают предсказуемо (нет ключа, бан робота).
+    return _fail(name, str(res.get("error") or "пустая выдача")[:400], "", t)
 
 
 async def check_hixiit(deep: bool = False) -> dict:
@@ -112,9 +115,21 @@ async def check_hixiit(deep: bool = False) -> dict:
 
     if not deep:
         # Доступ есть, но генерация не запускалась: писать «работает» про то,
-        # чего не проверяли, — ровно та ложь, от которой уходим.
-        return _ok(name, route, "доступ подтверждён; генерация не запускалась "
-                                "(нужен глубокий режим)", t)
+        # чего не проверяли, — ровно та ложь, от которой уходим. Зелёное тут
+        # возможно лишь по чужому доказательству: настоящей генерации, которую
+        # уже сделал рабочий путь и запомнил реестр возможностей.
+        from core import capabilities
+        proof = await capabilities.state("image")
+        if proof["state"] == "yes":
+            return _ok(name, f"{route}; картинка получалась {proof['when']} UTC",
+                       proof.get("evidence") or "подтверждено реестром", t)
+        if proof["state"] == "no":
+            return _fail(name, f"{route}, но последняя генерация не удалась: "
+                               f"{proof['why'][:200]}", "", t)
+        res = _ok(name, route, "доступ подтверждён; генерация ни разу не "
+                               "проверялась — запустите /system_test deep", t)
+        res["warn"] = True
+        return res
 
     from core.hixiit import generate
     try:
@@ -216,7 +231,9 @@ async def run(deep: bool = False) -> dict:
 
     started = time.monotonic()
     results = list(await asyncio.gather(*(one(f) for f in CHECKS)))
-    passed = [r for r in results if r["ok"]]
+    # Непроверенное — не пройденное: иначе итоговое «всё хорошо» снова
+    # означало бы «ничего не проверяли, но ключи на месте».
+    passed = [r for r in results if r["ok"] and not r.get("warn")]
     return {"ok": len(passed) == len(results), "passed": len(passed),
             "total": len(results), "deep": deep,
             "sec": round(time.monotonic() - started, 1), "checks": results}
@@ -226,10 +243,14 @@ def as_text(report: dict) -> str:
     """Отчёт для Telegram: сначала итог, потом каждая проверка с доказательством."""
     head = ("✅ Все проверки пройдены" if report.get("ok")
             else f"⚠️ Пройдено {report.get('passed', 0)} из {report.get('total', 0)}")
+    unchecked = len([c for c in report.get("checks", []) if c.get("warn")])
+    if unchecked:
+        head += f", непроверенных: {unchecked}"
     lines = [f"🧪 <b>Самопроверка системы</b>\n{head} "
              f"за {report.get('sec', 0)} с"]
     for c in report.get("checks", []):
-        lines.append(f"\n{'✅' if c['ok'] else '❌'} <b>{c['name']}</b> — {c['detail']}")
+        icon = "⚠️" if c.get("warn") else ("✅" if c["ok"] else "❌")
+        lines.append(f"\n{icon} <b>{c['name']}</b> — {c['detail']}")
         if c.get("evidence"):
             lines.append(f"   <code>{c['evidence']}</code>")
     if not report.get("deep"):
