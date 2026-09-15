@@ -59,10 +59,20 @@ async def test_hixiit_access_without_generation_is_honest(monkeypatch):
         return {"mcp_ok": True, "credits": 1200}
 
     monkeypatch.setattr("core.hixiit.status", st_ok)
+
+    # Состояние реестра задаём явно: другие тесты в общем прогоне делают
+    # настоящие вызовы и оставляют там свои записи, а проверяем мы здесь не их.
+    async def never_generated(cap):
+        return {"state": "unknown", "why": "настоящей попытки ещё не было",
+                "when": "", "evidence": ""}
+
+    monkeypatch.setattr("core.capabilities.state", never_generated)
     res = await st.check_hixiit(deep=False)
 
-    assert res["ok"] is True
-    assert "не запускалась" in res["evidence"], \
+    # Доступ без подтверждённой генерации — жёлтое, а не зелёное: реестр
+    # возможностей о настоящей картинке ничего не знает.
+    assert res["warn"] is True
+    assert "не проверялась" in res["evidence"], \
         "иначе отчёт утверждает то, чего не проверял"
 
 
