@@ -165,6 +165,13 @@ async def test_installed_chromium_counts_as_server_browser(monkeypatch):
     monkeypatch.setattr("core.server_browser.enabled", lambda: True)
     monkeypatch.setattr("core.server_browser._cdp_endpoint", lambda: "")
     monkeypatch.setattr("core.version.browser_ready", lambda: True)
+    # Установленных файлов теперь недостаточно: браузер обязан ещё и стартовать.
+    monkeypatch.setattr(hixiit, "_BROWSER_START", None)
+
+    async def starts():
+        return True
+
+    monkeypatch.setattr("core.server_browser.ensure_browser", starts)
     seen = await hixiit.browser_available()
     assert seen["available"] and seen["where"] == "на сервере"
 

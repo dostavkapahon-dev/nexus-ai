@@ -1005,7 +1005,20 @@ async def browser_available() -> dict:
             return {"available": True, "where": "облако", "why": ""}
         from core.version import browser_ready
         if browser_ready():
-            return {"available": True, "where": "на сервере", "why": ""}
+            # Файлы на диске — ещё не работающий браузер. На хостинге без прав
+            # администратора Chromium скачивается, но не стартует: не хватает
+            # системных библиотек. Наличие папки в такой ситуации давало ровно
+            # то ложное зелёное, из-за которого «браузер подключён», а задача
+            # падает. Поэтому браузер пробуют ЗАПУСТИТЬ — один раз за процесс,
+            # результат запоминается: запуск дорогой.
+            started = await _browser_starts()
+            if started["ok"]:
+                return {"available": True, "where": "на сервере", "why": ""}
+            out["why"] = ("Chromium установлен, но не запускается: "
+                          + started["why"][:280]
+                          + "\nОбычно это нехватка системных библиотек на хостинге."
+                            " Тогда нужен облачный браузер: NEXUS_BROWSER_CDP.")
+            return out
         from core.version import browser_install_error
         import os as _os
         detail = browser_install_error()
@@ -1022,6 +1035,26 @@ async def browser_available() -> dict:
     except Exception as e:
         out["why"] = _why(e, 120)
     return out
+
+
+_BROWSER_START = None
+
+
+async def _browser_starts(timeout: float = 30.0) -> dict:
+    """Пробует поднять серверный браузер. Ответ кэшируется на время процесса."""
+    global _BROWSER_START
+    if _BROWSER_START is not None:
+        return _BROWSER_START
+    import asyncio
+    from core import server_browser
+    try:
+        await asyncio.wait_for(server_browser.ensure_browser(), timeout=timeout)
+        _BROWSER_START = {"ok": True, "why": ""}
+    except asyncio.TimeoutError:
+        _BROWSER_START = {"ok": False, "why": f"не запустился за {timeout:.0f} с"}
+    except Exception as e:
+        _BROWSER_START = {"ok": False, "why": _why(e, 300)}
+    return _BROWSER_START
 
 
 async def execution_mode() -> str:
