@@ -148,8 +148,12 @@ async def test_director_system_lists_only_available_executors(no_keys, monkeypat
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
     # Промпт собирается асинхронно: в него подмешивается профиль агента из БД.
     sysprompt = await md._full_system()
-    assert "deepseek" in sysprompt
-    assert "perplexity" not in sysprompt
+    # Проверяем именно блок исполнителей: в промпт подмешиваются ещё память и
+    # реестр возможностей, а там имя провайдера может встретиться как причина
+    # отказа («perplexity: нет ключа»), и это не делает его исполнителем.
+    block = sysprompt.split("--- ИСПОЛНИТЕЛИ ДЛЯ delegate")[1].split("\n\n")[0]
+    assert "deepseek" in block
+    assert "perplexity" not in block
 
 
 async def test_director_delegate_tool_calls_dispatch(no_keys, monkeypatch, calls):

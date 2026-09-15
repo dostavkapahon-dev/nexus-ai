@@ -157,3 +157,33 @@ async def test_search_records_its_outcome(monkeypatch):
     res = await websearch.search("тест", budget=1.0)
     assert res["ok"] is False
     assert seen == {"cap": "search", "ok": False}
+
+
+@pytest.mark.asyncio
+async def test_director_prompt_carries_real_capabilities(monkeypatch):
+    """Дирижёр планирует по фактам, а не по списку существующих инструментов."""
+    from core import marketing_director as md
+
+    async def fake_registry():
+        return [{"id": "video", "human": "Видео", "state": "no",
+                 "why": "все пути отказали", "when": "", "evidence": ""},
+                {"id": "image", "human": "Картинка", "state": "yes",
+                 "why": "", "when": "15.09", "evidence": ""}]
+
+    monkeypatch.setattr(capabilities, "registry", fake_registry)
+    prompt = await md._full_system()
+    assert "ЧТО ПОДТВЕРЖДЕНО РЕЗУЛЬТАТОМ" in prompt
+    assert "не работает: Видео" in prompt
+    assert "умею: Картинка" in prompt
+
+
+@pytest.mark.asyncio
+async def test_director_prompt_survives_broken_registry(monkeypatch):
+    """Реестр — наблюдатель: его поломка не должна лишать дирижёра промпта."""
+    from core import marketing_director as md
+
+    async def boom():
+        raise RuntimeError("БД недоступна")
+
+    monkeypatch.setattr(capabilities, "registry", boom)
+    assert await md._full_system()
