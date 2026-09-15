@@ -866,6 +866,15 @@ COOLDOWN_SEC = 600
 _COLD: dict[str, float] = {}
 
 
+# Черновик чужим бесплатным генератором. По умолчанию ВЫКЛЮЧЕН: подделка,
+# выданная за результат, хуже честного отказа — по отказу видно, что чинить.
+FREE_KEY = "hixiit_free_draft"
+
+
+def free_draft_allowed() -> bool:
+    return os.getenv("NEXUS_FREE_DRAFT", "").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _cold(path: str) -> float:
     """Сколько секунд осталось «остывать» этому пути. 0 — можно пробовать."""
     import time
@@ -1029,16 +1038,25 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     else:
         tried.append("Браузер: пропущен (режим «только MCP»)")
 
-    # 4. Бесплатная картинка — чтобы визуал был хоть какой-то
-    if kind == "image" and allow_free:
+    # 4. Бесплатная картинка — только если её РАЗРЕШИЛИ явно.
+    #
+    # Раньше этот путь включался сам, и человек, попросивший кадр в Higgsfield,
+    # получал картинку чужого бесплатного сервиса с его водяным знаком — и ни
+    # слова о том, что Higgsfield вообще не сработал. Отказ с причинами полезнее
+    # правдоподобной подделки: по нему видно, что чинить.
+    if kind == "image" and allow_free and free_draft_allowed():
         from core.skills import free_image
         return {"ok": True, "url": free_image(task, vertical=ratio != "16:9"),
                 "provider": "pollinations_free", "kind": "image", "model": "free",
                 "note": "HIXIIT недоступен, использован бесплатный генератор",
                 "tried": tried}
 
-    return {"ok": False, "kind": kind, "tried": tried,
-            "error": "HIXIIT недоступен ни одним путём:\n• " + "\n• ".join(tried)}
+    error = "HIXIIT недоступен ни одним путём:\n• " + "\n• ".join(tried)
+    if kind == "image" and allow_free and not free_draft_allowed():
+        error += ("\n\nЧерновик бесплатным генератором отключён — он рисует не "
+                  "то, что просили, и ставит чужой водяной знак. Включить — "
+                  "переменная NEXUS_FREE_DRAFT=1 на хостинге.")
+    return {"ok": False, "kind": kind, "tried": tried, "error": error}
 
 
 # Выбранные пользователем модели HIXIIT. Хранятся там же, где остальное
