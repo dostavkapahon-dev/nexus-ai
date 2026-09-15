@@ -1054,19 +1054,38 @@ def higgsfield_session() -> dict:
     лежат в NEXUS_BROWSER_STORAGE_STATE, и по их доменам вход видно сразу.
     """
     out = {"ok": False, "domains": [], "why": ""}
+    # Три причины отказа выглядели одинаково: переменной нет, значение не
+    # разобралось, cookies от другого сайта. Чинятся они по-разному, поэтому
+    # различаем их вслух. Сами значения cookies при этом нигде не печатаются —
+    # только имена доменов.
+    raw = os.getenv("NEXUS_BROWSER_STORAGE_STATE", "").strip()
+    if not raw:
+        out["why"] = ("переменная NEXUS_BROWSER_STORAGE_STATE не задана — "
+                      "добавьте в неё cookies аккаунта higgsfield.ai")
+        return out
     try:
         from core import server_browser
-        domains = server_browser.session_domains()
+        state = server_browser._storage_state()
     except Exception as e:
         out["why"] = _why(e, 120)
         return out
+    if not state:
+        out["why"] = ("NEXUS_BROWSER_STORAGE_STATE задана, но прочитать её не "
+                      "удалось: нужен JSON от Cookie-Editor («Export as JSON»), "
+                      "а не строка заголовка. Проверьте, что значение начинается "
+                      "с [ или { и скопировано целиком")
+        return out
+    domains = sorted({(c.get("domain") or "").lstrip(".")
+                      for c in state.get("cookies", []) if c.get("domain")})
     out["domains"] = [d for d in domains
                       if any(d == h or d.endswith("." + h) for h in HIGGSFIELD_DOMAINS)]
     if out["domains"]:
         out["ok"] = True
         return out
-    out["why"] = ("в браузере нет входа в higgsfield.ai — добавьте cookies "
-                  "аккаунта в переменную NEXUS_BROWSER_STORAGE_STATE")
+    found = ", ".join(domains[:5]) or "ни одного домена"
+    out["why"] = (f"cookies есть ({len(state.get('cookies', []))} шт.), но не от "
+                  f"higgsfield.ai — в них: {found}. Экспортируйте cookies, "
+                  "находясь на вкладке higgsfield.ai")
     return out
 
 
