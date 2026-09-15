@@ -323,20 +323,12 @@ poll_video = poll_job
 # Перебор идёт только по 400: угадывать вслепую нельзя, но и падать на первом
 # отказе, имея проверенные значения из каталога, — значит не сгенерировать
 # ничего. Сработавший набор запоминается, чтобы не перебирать каждый раз.
-# Кандидаты проверены поимённо в каталоге аккаунта (models_explore action=get),
-# а не взяты из памяти и не из одного списка: `list` отдаёт лишь часть набора —
-# soul_2 и gpt_image_2_5 в нём отсутствуют, но существуют и работают.
-#
-# Порядок: сначала семейство Soul — эндпоинт называется /v1/text2image/soul,
-# и его собственные модели логично пробовать первыми; затем универсальная
-# gpt_image_2_5 (документированная модель по умолчанию, умеет 9:16 и текст),
-# затем фотореалистичная recraft_v4_1 и быстрая z_image.
-#
-# soul_cast сюда не входит: он умеет только 16:9 — вертикальный кадр им не
-# сделать. У REST нет способа спросить каталог, поэтому список однажды снова
-# разойдётся с реальностью: HIGGSFIELD_IMAGE_MODEL перекрывает перебор, а отказ
-# «Unavailable model» прямо называет причину.
-IMAGE_MODELS_REST = ("soul_2", "gpt_image_2_5", "recraft_v4_1", "z_image")
+# Модели REST-пути картинок не существует как параметра: официальная схема SDK
+# (`SoulText2ImageInput`) — prompt, width_and_height, quality, batch_size и
+# необязательные style_id/style_strength/seed/enhance_prompt. Прежний перебор
+# имён из каталога MCP был ошибкой: платформа на любое из них отвечала
+# «400 Unavailable model», и это читалось как «аккаунту недоступны модели».
+# Стиль задаётся не именем модели, а style_id из /v1/text2image/soul-styles.
 # Значения REST-эндпоинта, а НЕ каталога MCP: на «2k» платформа отвечает
 # 422 «Input should be '720p' or '1080p'» — она сама называет допустимые.
 IMAGE_QUALITIES = ("1080p", "720p")
@@ -359,10 +351,16 @@ def _params_rejected(error: str) -> bool:
 
 
 def _image_param_sets() -> list[dict]:
-    """Наборы параметров в порядке проверки. Рабочий — первым."""
-    forced = os.getenv("HIGGSFIELD_IMAGE_MODEL", "").strip()
-    models = (forced,) if forced else IMAGE_MODELS_REST
-    sets = [{"model": m, "quality": q} for m in models for q in IMAGE_QUALITIES]
+    """Наборы параметров в порядке проверки. Рабочий — первым.
+
+    Модели здесь больше нет — и это главное. Эндпоинт `/v1/text2image/soul`
+    её не принимает: в официальной схеме SDK (`SoulText2ImageInput`) поля
+    `model` не существует, там только prompt, width_and_height, quality,
+    batch_size и необязательный style_id. Мы слали `model` из каталога MCP —
+    платформа отвечала «400 Unavailable model», и это читалось как «модель
+    недоступна аккаунту», хотя аккаунт был ни при чём.
+    """
+    sets = [{"quality": q} for q in IMAGE_QUALITIES]
     if _working_image_params:
         sets = [_working_image_params] + [x for x in sets
                                           if x != _working_image_params]
@@ -381,11 +379,14 @@ async def create_image(prompt: str, ratio: str = "9:16", quality: str = "") -> d
         body = {
             "prompt": (prompt or "")[:1000],
             "width_and_height": size_for(ratio),
-            "model": params["model"],
             "quality": quality or params["quality"],
             "batch_size": 1,
             "enhance_prompt": True,
         }
+        # Стиль Soul — необязательный; список стилей отдаёт /v1/text2image/soul-styles.
+        style = os.getenv("HIGGSFIELD_STYLE_ID", "").strip()
+        if style:
+            body["style_id"] = style
         res = await _post(PATH_IMAGE, body)
         if res.get("ok"):
             _working_image_params = params
@@ -395,13 +396,6 @@ async def create_image(prompt: str, ratio: str = "9:16", quality: str = "") -> d
             # перебор только сожжёт запросы и спрячет настоящую причину.
             return res
         last = res
-    if "Unavailable model" in str(last.get("error", "")):
-        # Каталог аккаунта меняется: модели исчезают, и список в коде устаревает.
-        # Без этой подсказки отказ выглядит как поломка кода.
-        last = {**last, "error": str(last["error"]) +
-                " — ни одна из известных моделей не доступна аккаунту. Каталог"
-                " мог смениться; задайте HIGGSFIELD_IMAGE_MODEL с именем модели"
-                " из вашего кабинета Higgsfield."}
     return last
 
 
