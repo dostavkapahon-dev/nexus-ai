@@ -128,8 +128,26 @@ def _reraise_control_flow(e: BaseException) -> None:
 
 # ── MCP-путь ──────────────────────────────────────────────────────────────────
 
+# Официальный адрес MCP Higgsfield. Ключ API здесь не работает вовсе: сервер
+# авторизует ПОЛЬЗОВАТЕЛЯ через OAuth в браузере. Поэтому «ключ есть, а MCP
+# молчит» — это не поломка ключа и не повод его менять.
+OFFICIAL_MCP_URL = "https://mcp.higgsfield.ai/mcp"
+
+
 def mcp_configured() -> bool:
     return bool(os.getenv("HIGGSFIELD_MCP_URL"))
+
+
+def mcp_address_note() -> str:
+    """Что не так с адресом MCP — до всякой попытки подключения."""
+    url = os.getenv("HIGGSFIELD_MCP_URL", "").strip()
+    if not url:
+        return ("HIGGSFIELD_MCP_URL не задан. Официальный адрес — "
+                f"{OFFICIAL_MCP_URL}, но он авторизует пользователя через "
+                "OAuth в браузере, а не API-ключом")
+    if url.rstrip("/") != OFFICIAL_MCP_URL:
+        return (f"задан адрес {url[:80]}, официальный — {OFFICIAL_MCP_URL}")
+    return ""
 
 
 def _http_client_factory():
@@ -260,7 +278,16 @@ def probe_verdict(probe: dict) -> str:
         if "401" in err or "403" in err or "unauthorized" in err.lower():
             return ("сервер не принял авторизацию — нужен HIGGSFIELD_MCP_TOKEN "
                     "или в HIGGSFIELD_MCP_URL истёк встроенный секрет")
-        return "не удалось подключиться — проверьте HIGGSFIELD_MCP_URL"
+        note = mcp_address_note()
+        if "timeout" in err.lower() or "connecttimeout" in err.lower():
+            # Молчание вместо ответа — это либо чужой адрес, либо закрытая сеть.
+            # И то и другое чинится не ключом, поэтому говорим прямо.
+            return ("адрес не отвечает с сервера за отведённое время"
+                    + (f"; {note}" if note else
+                       " — сеть хостинга не пускает к mcp.higgsfield.ai")
+                    + ". Генерация от MCP не зависит и идёт по ключу и браузеру")
+        return ("не удалось подключиться"
+                + (f" — {note}" if note else " — проверьте HIGGSFIELD_MCP_URL"))
     if stage == "tools":
         return "подключение есть, но сервер не отдал список инструментов"
     if stage == "balance":
