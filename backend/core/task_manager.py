@@ -42,9 +42,44 @@ RESUME_PREFIX = "task_resume:"
 _RESUMERS: dict = {}
 
 
+# Где живёт обработчик каждого вида задач. Регистрация происходит при импорте
+# модуля, а восстановление — на старте, до того как этот модуль кому-то
+# понадобился: реестр оказывался пустым, и КАЖДАЯ задача с рецептом объявлялась
+# потерянной. Отсюда «задача потеряна при перезапуске» при исправном рецепте.
+RESUMER_MODULES = {"factory": ("core.content_factory", "run_factory")}
+
+
 def register_resumer(name: str, fn) -> None:
     """Регистрирует обработчик, умеющий продолжить задачу по её рецепту."""
     _RESUMERS[name] = fn
+
+
+def resumer_for(name: str):
+    """Обработчик по имени, с ленивым импортом владеющего модуля.
+
+    Полагаться на порядок импортов нельзя: модуль регистрируется, когда его
+    первый раз используют, а восстановление идёт раньше этого.
+    """
+    if not name:
+        return None
+    fn = _RESUMERS.get(name)
+    if fn is not None:
+        return fn
+    where = RESUMER_MODULES.get(name)
+    if not where:
+        return None
+    module, attr = where
+    try:
+        import importlib
+        # Берём функцию напрямую, а не надеемся на регистрацию при импорте:
+        # если модуль уже импортирован, побочный эффект второй раз не сработает.
+        fn = getattr(importlib.import_module(module), attr)
+    except Exception as e:
+        print(f"[NEXUS] обработчик {name} недоступен: "
+              f"{type(e).__name__}: {str(e)[:120]}", flush=True)
+        return None
+    _RESUMERS[name] = fn
+    return fn
 
 
 async def _save_recipe(task_id: str, recipe: dict) -> None:
@@ -324,7 +359,7 @@ async def recover_stuck() -> int:
 
     for item in unfinished:
         recipe = await _recipe(item["id"])
-        handler = _RESUMERS.get((recipe or {}).get("handler", ""))
+        handler = resumer_for((recipe or {}).get("handler", ""))
         # Повторяем только один раз: задача, падающая вместе с сервером снова и
         # снова, иначе крутила бы бесконечный цикл рестартов.
         if handler and item["attempts"] < 2:
