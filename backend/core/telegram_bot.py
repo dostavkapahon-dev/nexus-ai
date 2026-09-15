@@ -201,6 +201,7 @@ async def setup_bot_commands():
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
+        {"command": "can", "description": "Что система умеет подтверждённо"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1139,6 +1140,14 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("can", "capabilities", "umeyu"):
+        # Отдельно от `/diag` и `/system_test`: там — что настроено и что
+        # отвечает, здесь — что уже РЕАЛЬНО дало результат. Зелёное тут нельзя
+        # получить настройкой ключа, только настоящей картинкой или публикацией.
+        from core import capabilities
+        await send_message(chat_id, capabilities.as_text(await capabilities.registry()))
         return
 
     if cmd in ("system_test", "systemtest", "selftest"):

@@ -96,6 +96,33 @@ async def quota_left() -> dict:
 async def publish_instagram(text: str, image_url: str = None, video_url: str = None,
                             images: list[str] | None = None,
                             as_story: bool = False) -> dict:
+    """Публикация в Instagram с записью исхода в реестр возможностей.
+
+    Реестр обещает только подтверждённое результатом, а подтвердить публикацию
+    может лишь сама публикация — поэтому запись делается здесь, вокруг рабочего
+    пути, и на сам результат не влияет.
+    """
+    try:
+        res = await _publish_instagram(text, image_url, video_url, images, as_story)
+    except Exception as e:
+        await _remember(False, f"{type(e).__name__}: {str(e)[:180]}", "")
+        raise
+    await _remember(True, "", str(res.get("permalink") or res.get("id") or "")[:200])
+    return res
+
+
+async def _remember(ok: bool, why: str, evidence: str) -> None:
+    try:
+        from core import capabilities
+        await capabilities.record("publish_instagram", ok, why, evidence)
+    except Exception as e:
+        print(f"[NEXUS] реестр не записал публикацию: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
+
+
+async def _publish_instagram(text: str, image_url: str = None, video_url: str = None,
+                             images: list[str] | None = None,
+                             as_story: bool = False) -> dict:
     """Публикация в Instagram.
 
     Тип определяется тем, что передали: несколько картинок — карусель,

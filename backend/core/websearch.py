@@ -211,11 +211,23 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
             tried.append(f"{name}: {str(e)[:160] or type(e).__name__}")
             continue
         if items:
+            await _remember(True, "", f"{name}: {len(items)} результатов")
             return {"ok": True, "query": query, "provider": name, "items": items}
         tried.append(f"{name}: пусто")
 
-    return {"ok": False, "query": query, "items": [],
-            "error": "поиск не дал результатов — " + "; ".join(tried)}
+    why = "поиск не дал результатов — " + "; ".join(tried)
+    await _remember(False, why, "")
+    return {"ok": False, "query": query, "items": [], "error": why}
+
+
+async def _remember(ok: bool, why: str, evidence: str) -> None:
+    """Исход настоящего поиска — в реестр возможностей (наблюдатель, не участник)."""
+    try:
+        from core import capabilities
+        await capabilities.record("search", ok, why, evidence)
+    except Exception as e:
+        print(f"[NEXUS] реестр не записал поиск: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
 
 
 # ─────────────────────────── чтение страницы ───────────────────────────
