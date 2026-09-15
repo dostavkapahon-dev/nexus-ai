@@ -60,16 +60,34 @@ async def test_video_failure_explains_every_path(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_image_always_returns_something(monkeypatch):
-    """Для картинки есть бесплатный запасной путь — визуал не должен пропадать."""
+async def test_image_refuses_instead_of_faking_it(monkeypatch):
+    """Бесплатный черновик больше не подменяет результат сам собой.
+
+    Так и было: человек просил кадр, Higgsfield молчал, а приходила картинка
+    чужого сервиса с его водяным знаком — и ни слова о том, что произошло.
+    Отказ с причинами полезнее правдоподобной подделки.
+    """
+    for var in ("HIGGSFIELD_MCP_URL", "HIGGSFIELD_API_KEY", "NEXUS_FREE_DRAFT"):
+        monkeypatch.delenv(var, raising=False)
+
+    res = await hixiit.generate("обложка про кофе", kind="image")
+
+    assert res["ok"] is False
+    assert res["tried"], "причины недоступности HIXIIT должны сохраняться"
+    assert "водяной знак" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_image_draft_returns_when_explicitly_allowed(monkeypatch):
+    """Черновик никуда не делся — он теперь по явному согласию."""
     for var in ("HIGGSFIELD_MCP_URL", "HIGGSFIELD_API_KEY"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("NEXUS_FREE_DRAFT", "1")
 
     res = await hixiit.generate("обложка про кофе", kind="image")
 
     assert res["ok"] is True
     assert res["provider"] == "pollinations_free"
-    assert res["tried"], "причины недоступности HIXIIT должны сохраняться"
 
 
 @pytest.mark.asyncio
