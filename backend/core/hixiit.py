@@ -839,6 +839,30 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
 
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
                          image_url: str = None, allow_free: bool = True) -> dict:
+    """Одна попытка генерации, исход которой попадает в реестр возможностей.
+
+    Реестр обязан опираться на настоящие попытки, а не на проверки доступа:
+    здесь единственное место, через которое проходит каждая генерация, поэтому
+    запись делается именно тут и ничего не меняет в самом результате.
+    """
+    res = await _generate_once_raw(task, kind, ratio, image_url, allow_free)
+    try:
+        from core import capabilities
+        cap = "video" if res.get("kind") == "video" else detect_kind(task, kind)
+        cap = "video" if cap == "video" else "image"
+        got = bool(res.get("ok") and res.get("url"))
+        await capabilities.record(
+            cap, got,
+            "" if got else str(res.get("error", ""))[:200],
+            str(res.get("url") or res.get("provider") or "")[:200])
+    except Exception as e:
+        print(f"[NEXUS] реестр не записал генерацию: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
+    return res
+
+
+async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
+                             image_url: str = None, allow_free: bool = True) -> dict:
     """Одна попытка генерации по цепочке путей. Никогда не бросает."""
     kind = detect_kind(task, kind)
     ratio = ratio or detect_ratio(task)

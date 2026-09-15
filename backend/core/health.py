@@ -62,8 +62,18 @@ async def _probe_memory() -> dict:
     from database.db import storage_info
     store = storage_info()
     if not store["persistent"]:
-        return {"ok": False, "detail": "работает, но данные исчезнут при перезапуске"}
-    return {"ok": True, "detail": "запись и чтение подтверждены"}
+        res = {"ok": False, "detail": "работает, но данные исчезнут при перезапуске"}
+    else:
+        res = {"ok": True, "detail": "запись и чтение подтверждены"}
+    # Это настоящая запись и чтение, а не проверка настроек, — такому факту
+    # реестр возможностей верит.
+    try:
+        from core import capabilities
+        await capabilities.record("memory", res["ok"],
+                                  "" if res["ok"] else res["detail"], store.get("where", ""))
+    except Exception:
+        pass
+    return res
 
 
 async def _probe_hixiit() -> dict:

@@ -243,6 +243,23 @@ async def publish_telegram(chat_id: str, text: str, image_url: str = None,
         res = await send_photo(chat_id, image_url, text or "")
     else:
         res = await send_message(chat_id, text or "")
+    await _remember("publish_telegram", res)
     if not res.get("ok"):
         raise RuntimeError(f"Telegram error: {res.get('error')}")
     return {"message_id": res.get("message_id"), "post_url": res.get("post_url", "")}
+
+
+async def _remember(cap: str, res: dict) -> None:
+    """Исход настоящей публикации — в реестр возможностей.
+
+    Реестр обещает пользователю только то, что уже получалось; публикация —
+    как раз такой факт, и узнать его можно только здесь.
+    """
+    try:
+        from core import capabilities
+        await capabilities.record(cap, bool(res.get("ok")),
+                                  str(res.get("error", ""))[:200],
+                                  str(res.get("post_url", ""))[:200])
+    except Exception as e:
+        print(f"[NEXUS] реестр не записал публикацию: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
