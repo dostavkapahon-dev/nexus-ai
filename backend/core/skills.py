@@ -152,7 +152,13 @@ async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
     res = await run_agent(task=task, start_url="https://higgsfield.ai/create",
                           max_steps=max_steps, on_step=on_step)
     ok = res.get("status") == "done"
+    # `detail` — то, что человек прочитает как причину отказа. Раньше сюда
+    # попадал только summary или вопрос агента, а текст ошибки терялся, и
+    # наружу уходило пустое «Браузер: None».
+    detail = (res.get("summary") if ok else
+              res.get("error") or res.get("question") or res.get("message")
+              or f"агент остановился: {res.get('status') or 'без причины'}")
     return {"ok": ok, "provider": "higgsfield_browser", "kind": kind,
             "url": res.get("summary") if ok else None,
-            "status": res.get("status"), "detail": res.get("summary") or res.get("question"),
+            "status": res.get("status"), "detail": detail,
             "steps": res.get("steps")}

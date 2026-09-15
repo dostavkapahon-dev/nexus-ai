@@ -141,8 +141,26 @@ _ACTION_MAP = {
 }
 
 
+class NoScreenshot(RuntimeError):
+    """Браузер не отдал снимок экрана — работать вслепую агент не может."""
+
+
 async def _screenshot() -> dict:
-    return await send_to_desktop({"action": "screenshot"}, timeout=30.0)
+    """Снимок экрана. Отсутствие картинки — это ОТКАЗ С ПРИЧИНОЙ, а не KeyError.
+
+    Браузер отвечает `{"ok": False, "error": ...}`, когда не смог подняться или
+    страница закрылась. Код брал `shot["screenshot"]` вслепую, и наружу уходил
+    голый `KeyError: 'screenshot'` — по нему невозможно понять, что случилось.
+    """
+    shot = await send_to_desktop({"action": "screenshot"}, timeout=30.0)
+    if not isinstance(shot, dict) or not shot.get("screenshot"):
+        why = ""
+        if isinstance(shot, dict):
+            why = str(shot.get("error") or "")
+        raise NoScreenshot("браузер не отдал снимок экрана"
+                           + (f": {why[:200]}" if why else
+                              " и не назвал причину — вероятно, не смог запуститься"))
+    return shot
 
 
 def _image_block(b64: str) -> dict:
@@ -361,10 +379,13 @@ async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25
     не гадать, жив ли бот.
     """
     provider = vision_provider()
-    if provider == "anthropic":
-        return await _run_anthropic(task, start_url, max_steps, on_step)
-    if provider == "google":
-        return await _run_gemini(task, start_url, max_steps, on_step)
+    try:
+        if provider == "anthropic":
+            return await _run_anthropic(task, start_url, max_steps, on_step)
+        if provider == "google":
+            return await _run_gemini(task, start_url, max_steps, on_step)
+    except NoScreenshot as e:
+        return {"status": "error", "error": str(e), "steps": []}
     return {"status": "error",
             "error": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
                      "или ANTHROPIC_API_KEY в Подключениях."}
