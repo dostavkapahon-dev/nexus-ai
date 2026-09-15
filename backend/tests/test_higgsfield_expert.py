@@ -181,3 +181,56 @@ async def test_unlim_status_without_mcp_says_why(client, monkeypatch):
     monkeypatch.delenv("HIGGSFIELD_MCP_URL", raising=False)
     st = await hixiit.unlim_status()
     assert st["available"] is False and "MCP" in st["reason"]
+
+
+# ───────────────── те же знания — браузерному агенту ─────────────────
+
+@pytest.mark.asyncio
+async def test_browser_agent_gets_the_chosen_model(monkeypatch):
+    """Агент выбирал модель на сайте вслепую — отсюда «сделал не то».
+
+    Правила выбора уже есть в проекте; задача агента обязана их нести, а не
+    заводить вторую, отдельную логику.
+    """
+    from core import skills
+    got = {}
+
+    async def fake_agent(task, start_url=None, max_steps=25, on_step=None):
+        got["task"] = task
+        return {"status": "done", "summary": "https://cdn.test/x.png"}
+
+    monkeypatch.setattr(hixiit, "browser_available",
+                        _available := _fake_available())
+    monkeypatch.setattr(hixiit, "higgsfield_session",
+                        lambda: {"ok": True, "domains": ["higgsfield.ai"], "why": ""})
+    monkeypatch.setattr("core.browser_agent.run_agent", fake_agent)
+
+    await skills.higgsfield_via_browser("реклама доставки еды", kind="image")
+    assert "marketing_studio_image" in got["task"], "модель под задачу не передана"
+    assert "Unlimited" in got["task"] and "count=1" in got["task"], \
+        "правила экономии кредитов не переданы"
+
+
+@pytest.mark.asyncio
+async def test_browser_agent_gets_the_prompt_language_of_that_model(monkeypatch):
+    from core import skills
+    got = {}
+
+    async def fake_agent(task, start_url=None, max_steps=25, on_step=None):
+        got["task"] = task
+        return {"status": "done", "summary": "https://cdn.test/x.png"}
+
+    monkeypatch.setattr(hixiit, "browser_available", _fake_available())
+    monkeypatch.setattr(hixiit, "higgsfield_session",
+                        lambda: {"ok": True, "domains": ["higgsfield.ai"], "why": ""})
+    monkeypatch.setattr("core.browser_agent.run_agent", fake_agent)
+
+    await skills.higgsfield_via_browser("портрет человека крупным планом", kind="image")
+    # У каждой модели свой язык промпта — он обязан дойти до агента.
+    assert hixiit.prompt_for("soul_2", "портрет человека крупным планом")[:40] in got["task"]
+
+
+def _fake_available():
+    async def fn(*a, **k):
+        return {"available": True, "where": "на сервере", "why": ""}
+    return fn
