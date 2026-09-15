@@ -92,6 +92,31 @@ async def _full_system() -> str:
     except Exception:
         pass
 
+    # Чем система РЕАЛЬНО подтвердила свою работоспособность. Без этого блока
+    # дирижёр планировал по списку инструментов, то есть обещал видео и
+    # публикацию просто потому, что такие инструменты существуют. Реестр
+    # отвечает фактом, а не наличием функции.
+    try:
+        from core import capabilities
+        rows = await capabilities.registry()
+        lines = [f"{capabilities.WORDS.get(r['state'], '')}: {r['human']}"
+                 + (f" — {r['why'][:120]}" if r.get("why") else "")
+                 for r in rows]
+        base = (base + "\n\n--- ЧТО ПОДТВЕРЖДЕНО РЕЗУЛЬТАТОМ ---\n"
+                + "\n".join(lines)
+                + "\nНе обещай пользователю то, что помечено «не работает»; про "
+                  "«не проверено» говори честно, что это первая попытка.")
+    except Exception:
+        pass
+
+    try:
+        from core.strategy_store import context as strategy_context
+        strat = await strategy_context()
+        if strat:
+            base = base + "\n\n--- ДЕЙСТВУЮЩАЯ СТРАТЕГИЯ ---\n" + strat
+    except Exception:
+        pass
+
     try:
         from core.agent_profile import as_prompt
         profile = await as_prompt()
