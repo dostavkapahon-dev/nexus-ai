@@ -97,3 +97,58 @@ async def test_cloud_browser_skips_the_start_check(monkeypatch, server):
     monkeypatch.setattr(server, "ensure_browser", boom)
     res = await hixiit.browser_available()
     assert res["available"] is True and res["where"] == "облако"
+
+
+@pytest.mark.asyncio
+async def test_status_does_not_wait_for_the_browser(monkeypatch, server):
+    """Статус обязан отвечать сразу: запуск Chromium — это десятки секунд.
+
+    Синхронная проверка вешала /hixiit и «живую проверку» на 45-60 секунд —
+    вместо ложного зелёного получалось молчание, что не лучше.
+    """
+    import asyncio
+    _no_desktop(monkeypatch)
+    monkeypatch.setattr("core.version.browser_ready", lambda: True)
+
+    started = asyncio.Event()
+
+    async def slow():
+        started.set()
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr(server, "ensure_browser", slow)
+    res = await asyncio.wait_for(hixiit.browser_available(quick=True), timeout=1.0)
+    assert res["available"] is False and res["pending"] is True
+    assert "проверяю" in res["why"].lower()
+    # Проверка всё-таки запущена — просто в фоне.
+    await asyncio.wait_for(started.wait(), timeout=1.0)
+    hixiit._BROWSER_PROBE.cancel()
+
+
+@pytest.mark.asyncio
+async def test_known_result_is_returned_without_waiting(monkeypatch, server):
+    monkeypatch.setattr(hixiit, "_BROWSER_START", {"ok": True, "why": ""})
+    _no_desktop(monkeypatch)
+    monkeypatch.setattr("core.version.browser_ready", lambda: True)
+
+    async def must_not_run():
+        raise AssertionError("повторный запуск не нужен: ответ уже известен")
+
+    monkeypatch.setattr(server, "ensure_browser", must_not_run)
+    res = await hixiit.browser_available(quick=True)
+    assert res["available"] is True
+
+
+@pytest.mark.asyncio
+async def test_real_work_still_waits_for_the_browser(monkeypatch, server):
+    """В работе ждать браузер надо: там нужен сам браузер, а не быстрый ответ."""
+    _no_desktop(monkeypatch)
+    monkeypatch.setattr("core.version.browser_ready", lambda: True)
+    calls = []
+
+    async def starts():
+        calls.append(1)
+
+    monkeypatch.setattr(server, "ensure_browser", starts)
+    res = await hixiit.browser_available()
+    assert res["available"] is True and calls == [1]

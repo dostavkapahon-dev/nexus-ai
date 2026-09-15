@@ -1088,7 +1088,9 @@ async def _dispatch_command(chat_id: str, text: str):
         # Не «агент на ПК»: браузер может быть и серверным, и тогда путь работает
         # без компьютера пользователя. Старая строка это скрывала.
         browser = st.get("browser") or {}
-        if browser.get("available"):
+        if browser.get("pending"):
+            lines.append("⏳ браузер — " + browser["why"])
+        elif browser.get("available"):
             lines.append(f"✅ браузер — {browser.get('where', '')}")
             # Браузер без входа в аккаунт для генерации бесполезен: агент
             # упрётся в форму логина. Показываем это отдельной строкой, чтобы

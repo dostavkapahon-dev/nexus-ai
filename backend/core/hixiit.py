@@ -982,7 +982,7 @@ MODE_KEY = "hixiit_execution_mode"
 MODES = ("auto", "mcp", "browser")
 
 
-async def browser_available() -> dict:
+async def browser_available(quick: bool = False) -> dict:
     """Есть ли браузерные «руки» и чьи именно.
 
     Раньше путь через браузер отпирался только `desktop_connected()` — то есть
@@ -1016,9 +1016,14 @@ async def browser_available() -> dict:
             # то ложное зелёное, из-за которого «браузер подключён», а задача
             # падает. Поэтому браузер пробуют ЗАПУСТИТЬ — один раз за процесс,
             # результат запоминается: запуск дорогой.
-            started = await _browser_starts()
+            # В статусе (quick) браузер не запускаем: ждать его десятки секунд
+            # тут нельзя. В работе — наоборот, ждём: там важен сам браузер.
+            started = browser_start_state() if quick else await _browser_starts()
             if started["ok"]:
                 return {"available": True, "where": "на сервере", "why": ""}
+            if started.get("pending"):
+                return {"available": False, "where": "на сервере",
+                        "pending": True, "why": started["why"]}
             out["why"] = ("Chromium установлен, но не запускается: "
                           + started["why"][:280]
                           + "\nОбычно это нехватка системных библиотек на хостинге."
@@ -1090,6 +1095,7 @@ def higgsfield_session() -> dict:
 
 
 _BROWSER_START = None
+_BROWSER_PROBE = None      # фоновая проверка запуска, чтобы статус не ждал
 
 
 async def _browser_starts(timeout: float = 30.0) -> dict:
@@ -1107,6 +1113,30 @@ async def _browser_starts(timeout: float = 30.0) -> dict:
     except Exception as e:
         _BROWSER_START = {"ok": False, "why": _why(e, 300)}
     return _BROWSER_START
+
+
+def browser_start_state() -> dict:
+    """Что известно о запуске браузера ПРЯМО СЕЙЧАС, не запуская его.
+
+    Статус обязан отвечать быстро. Запуск Chromium на слабом хостинге занимает
+    десятки секунд, и синхронная проверка вешала `/hixiit` и «живую проверку» на
+    45-60 секунд — вместо ложного зелёного получилось молчание, что не лучше.
+    Поэтому статус читает уже известный ответ, а если его нет — просит
+    проверить в фоне и честно говорит «проверяется».
+    """
+    global _BROWSER_PROBE
+    if _BROWSER_START is not None:
+        return _BROWSER_START
+    import asyncio
+    if _BROWSER_PROBE is None or _BROWSER_PROBE.done():
+        try:
+            _BROWSER_PROBE = asyncio.get_running_loop().create_task(
+                _browser_starts())
+        except RuntimeError:
+            return {"ok": False, "pending": False,
+                    "why": "запуск браузера ещё не проверялся"}
+    return {"ok": False, "pending": True,
+            "why": "проверяю запуск браузера — ответ будет в следующем /hixiit"}
 
 
 async def execution_mode() -> str:
@@ -1360,7 +1390,10 @@ async def status() -> dict:
             out["api_error"] = _why(e, 180)
     # Браузер бывает не только на ПК: серверный работает без компьютера
     # пользователя, и раньше статус этого не показывал.
-    out["browser"] = await browser_available()
+    # Статус — быстрый: браузер здесь не поднимаем (это десятки секунд), а
+    # читаем уже известный результат. Иначе `/hixiit` и «живая проверка»
+    # висели по 45-60 секунд и падали по таймауту.
+    out["browser"] = await browser_available(quick=True)
     out["browser_agent"] = out["browser"]["available"]
     out["mode"] = await execution_mode()
 
