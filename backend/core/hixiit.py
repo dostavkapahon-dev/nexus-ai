@@ -837,6 +837,52 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     return _warn(res, verdict)
 
 
+async def tell(text: str) -> None:
+    """Сообщить о ходе генерации в живое сообщение текущей задачи.
+
+    Ничего нового не строим: у задачи уже есть одно сообщение в Telegram,
+    которое обновляется по шагам (`core/task_feed`). Не хватало только того,
+    чтобы генерация — самая долгая часть — тоже в него писала. Без этого между
+    «принято» и «готово» человек несколько минут смотрел в пустоту.
+    """
+    try:
+        from core.cost_tracker import current_task_id
+        task_id = current_task_id.get()
+        if not task_id:
+            return
+        from core import task_feed
+        if not task_feed.watching(task_id):
+            return
+        await task_feed.step(task_id, text[:120])
+    except Exception as e:
+        print(f"[NEXUS] не удалось показать ход генерации: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
+
+
+# Путь, который только что отказал, не пробуем снова ближайшие минуты: каждая
+# мёртвая попытка стоит десятков секунд ожидания, и человек ждёт их зря. Через
+# COOLDOWN путь проверяется заново — отказ мог быть временным.
+COOLDOWN_SEC = 600
+_COLD: dict[str, float] = {}
+
+
+def _cold(path: str) -> float:
+    """Сколько секунд осталось «остывать» этому пути. 0 — можно пробовать."""
+    import time
+    left = _COLD.get(path, 0.0) - time.monotonic()
+    return left if left > 0 else 0.0
+
+
+def _chill(path: str, why: str = "") -> None:
+    import time
+    _COLD[path] = time.monotonic() + COOLDOWN_SEC
+
+
+def _warm(path: str) -> None:
+    """Путь сработал — снимаем остывание немедленно."""
+    _COLD.pop(path, None)
+
+
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
                          image_url: str = None, allow_free: bool = True) -> dict:
     """Одна попытка генерации, исход которой попадает в реестр возможностей.
@@ -883,11 +929,18 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     # выбрал браузер осознанно, обычно чтобы не списывать кредиты.
     if mode == "browser":
         tried.append("MCP: пропущен (режим «через браузер»)")
+    elif mcp_configured() and _cold("mcp"):
+        tried.append(f"MCP: пропущен — отказал недавно, повтор через "
+                     f"{_cold('mcp') / 60:.0f} мин")
     elif mcp_configured():
         try:
-            return await _generate_via_mcp(task, kind, ratio, image_url)
+            await tell("Пробую MCP")
+            res = await _generate_via_mcp(task, kind, ratio, image_url)
+            _warm("mcp")
+            return res
         except BaseException as e:
             _reraise_control_flow(e)
+            _chill("mcp")
             tried.append("MCP: " + _why(e, 300))
     else:
         tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
@@ -900,8 +953,12 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
         tried.append("REST: пропущен (режим «только MCP»)")
     elif mode == "browser":
         tried.append("REST: пропущен (режим «через браузер»)")
+    elif _hf_credentials() and _cold("rest"):
+        tried.append(f"REST: пропущен — отказал недавно, повтор через "
+                     f"{_cold('rest') / 60:.0f} мин")
     elif _hf_credentials():
         try:
+            await tell("Пробую API по ключу")
             from core import higgsfield as hf
             # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
             # ждёт именно её.
@@ -915,6 +972,7 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                 done = await hf.generate_image(task, ratio=ratio)
                 model = REST_IMAGE_MODEL
             if done.get("ok") and done.get("url"):
+                _warm("rest")
                 out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
                        "kind": kind, "model": model}
                 # Человек выбрал одну модель, а сделала другая — молчать нельзя.
@@ -927,9 +985,11 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                 if done.get("preview_image"):
                     out["preview_image"] = done["preview_image"]
                 return out
+            _chill("rest")
             tried.append(f"REST: {done.get('error', 'нет ссылки на результат')}")
         except BaseException as e:
             _reraise_control_flow(e)
+            _chill("rest")
             tried.append("REST: " + _why(e))
     else:
         tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
@@ -948,7 +1008,14 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
         elif seen["available"]:
             try:
                 from core.skills import higgsfield_via_browser
-                res = await higgsfield_via_browser(task, image_url, kind=kind)
+                await tell("Открываю higgsfield.ai в браузере")
+
+                async def _say(number, thought, action):
+                    what = (thought or action or "").strip().replace("\n", " ")
+                    await tell(f"Браузер, шаг {number}: {what[:90] or action}")
+
+                res = await higgsfield_via_browser(task, image_url, kind=kind,
+                                                   on_step=_say)
                 if res.get("ok") and res.get("url"):
                     return {"ok": True, "url": res["url"], "provider": "higgsfield_browser",
                             "kind": kind, "model": "account", "where": seen["where"]}

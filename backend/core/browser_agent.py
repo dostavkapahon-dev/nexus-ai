@@ -168,7 +168,8 @@ def _strip_old_images(messages: list) -> None:
                     seen = True
 
 
-async def _run_anthropic(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
+async def _run_anthropic(task: str, start_url: str | None = None, max_steps: int = 25,
+                         on_step=None) -> dict:
     """Run the vision loop until the task is done, blocked, or steps run out."""
     client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
@@ -208,6 +209,7 @@ async def _run_anthropic(task: str, start_url: str | None = None, max_steps: int
 
         name, inp = tool_use.name, tool_use.input
         steps.append({"step": step + 1, "thought": thought, "action": name, "input": inp})
+        await _report(on_step, step + 1, thought, name)
 
         if name == "done":
             return {"status": "done", "summary": inp.get("summary", ""), "steps": steps}
@@ -274,7 +276,8 @@ _GEMINI_ACTIONS_DOC = """\
 """
 
 
-async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
+async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 25,
+                      on_step=None) -> dict:
     """Тот же vision-loop, но на бесплатном Google Gemini (JSON-протокол действий)."""
     import json as _json
     import base64 as _b64
@@ -313,6 +316,7 @@ async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 
         action = data.get("action", "")
         thought = data.get("thought", "")
         steps.append({"step": step + 1, "thought": thought, "action": action, "input": data})
+        await _report(on_step, step + 1, thought, action)
 
         if action == "done":
             return {"status": "done", "summary": data.get("summary", ""), "steps": steps}
@@ -335,13 +339,32 @@ async def _run_gemini(task: str, start_url: str | None = None, max_steps: int = 
     return {"status": "max_steps", "message": f"Достигнут лимит {max_steps} шагов.", "steps": steps}
 
 
-async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25) -> dict:
-    """Запуск браузерного агента на доступном провайдере зрения."""
+async def _report(on_step, number: int, thought: str, action: str) -> None:
+    """Сообщить наблюдателю о шаге. Отчёт никогда не ломает саму работу."""
+    if not on_step:
+        return
+    try:
+        res = on_step(number, thought, action)
+        if hasattr(res, "__await__"):
+            await res
+    except Exception as e:
+        print(f"[NEXUS] отчёт о шаге браузера не ушёл: {type(e).__name__}: "
+              f"{str(e)[:120]}", flush=True)
+
+
+async def run_agent(task: str, start_url: str | None = None, max_steps: int = 25,
+                    on_step=None) -> dict:
+    """Запуск браузерного агента на доступном провайдере зрения.
+
+    `on_step(номер, мысль, действие)` вызывается после каждого шага: работа
+    агента идёт минутами, и человек в Telegram должен видеть, что она ИДЁТ, а
+    не гадать, жив ли бот.
+    """
     provider = vision_provider()
     if provider == "anthropic":
-        return await _run_anthropic(task, start_url, max_steps)
+        return await _run_anthropic(task, start_url, max_steps, on_step)
     if provider == "google":
-        return await _run_gemini(task, start_url, max_steps)
+        return await _run_gemini(task, start_url, max_steps, on_step)
     return {"status": "error",
             "error": "Нет ключа Anthropic или Google. Добавь GEMINI_API_KEY (бесплатно) "
                      "или ANTHROPIC_API_KEY в Подключениях."}

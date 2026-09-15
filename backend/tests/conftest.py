@@ -77,6 +77,20 @@ async def auth_client(client, token):
     yield client
 
 
+@pytest.fixture(autouse=True)
+def _forget_failed_paths():
+    """Каждый тест начинает с чистой памятью об отказавших путях генерации.
+
+    В работе «остывание» пути живёт минутами и это правильно: мёртвый путь не
+    стоит пробовать заново на каждой задаче. Но между тестами оно протекает —
+    отказ в одном тесте молча менял поведение следующего.
+    """
+    from core import hixiit
+    hixiit._COLD.clear()
+    yield
+    hixiit._COLD.clear()
+
+
 def pytest_sessionfinish(session, exitstatus):
     import asyncio
 

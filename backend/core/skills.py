@@ -87,7 +87,8 @@ async def higgsfield_reel(motion_prompt: str, seed_image: str = None,
 
 
 async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
-                                 max_steps: int = 32, kind: str = "video") -> dict:
+                                 max_steps: int = 32, kind: str = "video",
+                                 on_step=None) -> dict:
     """Генерация ЧЕРЕЗ ВАШ аккаунт higgsfield.ai руками браузер-агента.
 
     Не нужен API-ключ: агент работает в залогиненном браузере. Браузер может
@@ -111,32 +112,45 @@ async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
         return {"ok": False, "provider": "higgsfield_browser", "error": login["why"]}
 
     from core.browser_agent import run_agent
+    # Правила выбора модели и языка промпта уже есть в проекте (`hixiit`), но до
+    # браузерного агента не доходили: он выбирал модель на сайте вслепую и писал
+    # промт как придётся. Отсюда «создал не то и качество плохое». Передаём ему
+    # имя модели под задачу и её язык промпта — те же правила, что у остальных
+    # путей, а не вторая, отдельная логика.
+    from core.hixiit import pick_by_task, prompt_for
+    model = pick_by_task(motion_prompt or "", kind, has_reference=bool(seed_image))
     if kind == "image":
-        prompt = (motion_prompt or "cinematic photo, natural light")[:400]
+        prompt = prompt_for(model, (motion_prompt or "cinematic photo, natural light"))[:600]
         task = (
             "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй ИЗОБРАЖЕНИЕ 9:16:\n"
             "1. Открой создание изображения (text-to-image / Image).\n"
             f"2. Вставь промт: {prompt}\n"
-            "3. Если доступна модель с безлимитом (Unlimited) — выбери её: "
-            "кадр не должен списывать кредиты.\n"
-            "4. Выбери формат 9:16 и запусти генерацию.\n"
-            "5. Дождись готовности: wait по 10-15 сек со скриншотами.\n"
-            "6. Когда готово — открой ссылку на изображение (Download/Share) и вызови "
+            f"3. Выбери модель «{model}». Если её нет в списке — возьми ближайшую "
+            "по смыслу и назови в summary, какую взял.\n"
+            "4. Если у модели есть безлимит (Unlimited) — включи его: кадр не "
+            "должен списывать кредиты. Делай ОДИН кадр (count=1), а не пачку.\n"
+            "5. Выбери формат 9:16 и запусти генерацию.\n"
+            "6. Дождись готовности: wait по 10-15 сек со скриншотами.\n"
+            "7. Когда готово — открой ссылку на изображение (Download/Share) и вызови "
             "done с этой ссылкой в summary. Если требуются кредиты или вход — вызови ask."
         )
     else:
-        motion = (motion_prompt or "slow cinematic push-in, dynamic light, parallax")[:400]
+        motion = prompt_for(model, (motion_prompt
+                                    or "slow cinematic push-in, dynamic light, parallax"))[:600]
         task = (
             "Ты в аккаунте higgsfield.ai (уже залогинен). Сгенерируй короткое вертикальное видео 9:16:\n"
             "1. Открой создание видео (image-to-video или text-to-video).\n"
             f"2. Вставь промт движения: {motion}\n"
+            f"2a. Выбери модель «{model}»; нет такой — ближайшую по смыслу, и "
+            "назови её в summary. Если есть безлимит (Unlimited) — включи.\n"
             + (f"3. Если можно задать первый кадр по ссылке — используй: {seed_image}\n" if seed_image else "")
             + "4. Выбери формат 9:16 (вертикальный) и запусти генерацию.\n"
             "5. Дождись готовности: делай wait по 10-15 сек и периодически скриншоть, пока видео не появится.\n"
             "6. Когда готово — открой/скопируй ссылку на видео (кнопка Download/Share) и вызови done "
             "с этой ссылкой в summary. Если требуется оплата/кредиты или вход — вызови ask."
         )
-    res = await run_agent(task=task, start_url="https://higgsfield.ai/create", max_steps=max_steps)
+    res = await run_agent(task=task, start_url="https://higgsfield.ai/create",
+                          max_steps=max_steps, on_step=on_step)
     ok = res.get("status") == "done"
     return {"ok": ok, "provider": "higgsfield_browser", "kind": kind,
             "url": res.get("summary") if ok else None,

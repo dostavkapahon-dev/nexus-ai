@@ -64,7 +64,7 @@ async def test_browser_path_accepts_images(monkeypatch):
     _browser(monkeypatch, desktop=False, server=True)
     got = {}
 
-    async def fake_agent(task, start_url=None, max_steps=25):
+    async def fake_agent(task, start_url=None, max_steps=25, on_step=None):
         got["task"] = task
         return {"status": "done", "summary": "https://cdn.test/pic.png"}
 
@@ -82,7 +82,7 @@ async def test_image_prompt_asks_for_unlimited_model(monkeypatch):
     _browser(monkeypatch, desktop=False, server=True)
     got = {}
 
-    async def fake_agent(task, start_url=None, max_steps=25):
+    async def fake_agent(task, start_url=None, max_steps=25, on_step=None):
         got["task"] = task
         return {"status": "done", "summary": "https://cdn.test/pic.png"}
 
@@ -131,7 +131,7 @@ async def test_browser_mode_skips_mcp_and_rest(monkeypatch):
 
     monkeypatch.setattr(hixiit, "_generate_via_mcp", boom)
 
-    async def fake_browser(prompt, seed=None, max_steps=32, kind="video"):
+    async def fake_browser(prompt, seed=None, max_steps=32, kind="video", on_step=None):
         return {"ok": True, "url": "https://cdn.test/x.png", "kind": kind}
 
     monkeypatch.setattr("core.skills.higgsfield_via_browser", fake_browser)
