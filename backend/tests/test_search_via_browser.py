@@ -18,7 +18,7 @@ def _browser(monkeypatch, available=True, why=""):
 
 
 def _page(monkeypatch, text="Результат 1 https://a.test", ok=True, error=""):
-    async def fake_open(url):
+    async def fake_open(url, timeout_ms=0):
         return {"ok": ok, "text": text, "error": error}
 
     monkeypatch.setattr("core.browser_reader._open_text", fake_open)
@@ -113,12 +113,12 @@ async def test_all_sources_down_names_every_reason(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_browser_search_uses_the_light_page(monkeypatch):
-    """Обычная выдача DuckDuckGo рисуется скриптами — браузер ждал её 50 секунд."""
+async def test_browser_search_uses_a_reachable_index(monkeypatch):
+    """DuckDuckGo с хостинга не открывается вовсе — ни обычный, ни lite."""
     from core import websearch
     opened = {}
 
-    async def fake_open(url):
+    async def fake_open(url, timeout_ms=0):
         opened["url"] = url
         return {"ok": True, "text": "Результаты"}
 
@@ -132,14 +132,14 @@ async def test_browser_search_uses_the_light_page(monkeypatch):
     monkeypatch.setattr("core.browser_reader._open_text", fake_open)
     monkeypatch.setattr("core.browser_reader._extract", fake_extract)
     await websearch._search_browser("маркетинг", 2)
-    assert opened["url"].startswith("https://lite.duckduckgo.com/lite/")
+    assert opened["url"].startswith("https://www.mojeek.com/search")
 
 
 @pytest.mark.asyncio
 async def test_robot_check_is_named_not_called_empty(monkeypatch):
     from core import websearch
 
-    async def fake_open(url):
+    async def fake_open(url, timeout_ms=0):
         return {"ok": True, "text": "Unusual traffic from your computer network"}
 
     async def available():
@@ -150,3 +150,89 @@ async def test_robot_check_is_named_not_called_empty(monkeypatch):
     with pytest.raises(RuntimeError) as e:
         await websearch._search_browser("маркетинг", 2)
     assert "проверку на робота" in str(e.value)
+
+
+@pytest.mark.asyncio
+async def test_mojeek_parses_real_results(monkeypatch):
+    """DuckDuckGo с хостинга не открылся даже за 45 секунд — нужен другой индекс."""
+    from core import websearch
+
+    html = ('<html><body>'
+            '<a href="https://example.test/a" class="ob">Первый результат</a>'
+            '<a href="https://example.test/b" class="ob">Второй результат</a>'
+            '</body></html>')
+
+    class _R:
+        status_code = 200
+        text = html
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            assert "mojeek.com" in url
+            return _R()
+
+    monkeypatch.setattr("httpx.AsyncClient", _C)
+    items = await websearch._search_mojeek("вирусные темы", 5)
+    assert [i["url"] for i in items] == ["https://example.test/a",
+                                         "https://example.test/b"]
+    assert items[0]["title"] == "Первый результат"
+
+
+@pytest.mark.asyncio
+async def test_mojeek_failure_is_named(monkeypatch):
+    from core import websearch
+
+    class _R:
+        status_code = 429
+        text = ""
+
+    class _C:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return _R()
+
+    monkeypatch.setattr("httpx.AsyncClient", _C)
+    with pytest.raises(RuntimeError) as e:
+        await websearch._search_mojeek("тест", 3)
+    assert "429" in str(e.value)
+
+
+@pytest.mark.asyncio
+async def test_browser_search_does_not_wait_45_seconds(monkeypatch):
+    """Ждать полминуты бессмысленно: за это время источник всё равно молчит."""
+    from core import websearch
+    opened = {}
+
+    async def fake_open(url, timeout_ms=0):
+        opened.update(url=url, timeout_ms=timeout_ms)
+        return {"ok": True, "text": "Результаты"}
+
+    async def fake_extract(system, text):
+        return {"items": [{"title": "т", "url": "https://x.test"}]}
+
+    async def available():
+        return {"available": True, "where": "на сервере", "why": ""}
+
+    monkeypatch.setattr("core.hixiit.browser_available", available)
+    monkeypatch.setattr("core.browser_reader._open_text", fake_open)
+    monkeypatch.setattr("core.browser_reader._extract", fake_extract)
+    await websearch._search_browser("маркетинг", 2)
+    assert opened["timeout_ms"] == 15000
+    assert "mojeek.com" in opened["url"]

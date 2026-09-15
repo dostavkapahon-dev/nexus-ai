@@ -107,7 +107,7 @@ async def test_generation_writes_the_model_result(monkeypatch):
     from core import hixiit, capabilities
     seen = {}
 
-    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         return {"ok": True, "url": "https://cdn/x.png", "kind": "image",
                 "model": "soul_2"}
 
@@ -129,7 +129,7 @@ async def test_placeholder_models_are_not_recorded(monkeypatch):
     """«free», «account», «auto» — не модели, в реестре им не место."""
     from core import hixiit, capabilities
 
-    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         return {"ok": True, "url": "https://free/x.png", "kind": "image",
                 "model": "free"}
 

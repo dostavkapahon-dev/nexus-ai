@@ -825,7 +825,7 @@ def _warn(res: dict, verdict: dict) -> dict:
 
 async def generate(task: str, kind: str = "auto", ratio: str = None,
                    image_url: str = None, allow_free: bool = True,
-                   qc: bool = True) -> dict:
+                   qc: bool = True, force: bool = False) -> dict:
     """Сгенерировать медиа с проверкой промпта до и результата после.
 
     Одна повторная попытка при браке: генерация — самый дорогой шаг, и цикл
@@ -836,12 +836,12 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     """
     kind_resolved = detect_kind(task, kind)
     if not qc:
-        return await _generate_once(task, kind, ratio, image_url, allow_free)
+        return await _generate_once(task, kind, ratio, image_url, allow_free, force)
 
     checked = await check_prompt(task, task, "auto", kind_resolved)
     prompt = checked.get("prompt") or task
 
-    res = await _generate_once(prompt, kind, ratio, image_url, allow_free)
+    res = await _generate_once(prompt, kind, ratio, image_url, allow_free, force)
     if checked.get("checked"):
         res["prompt_check"] = checked.get("reason") or "промпт годится"
     if not res.get("ok") or not res.get("url"):
@@ -933,14 +933,15 @@ def _warm(path: str) -> None:
 
 
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
-                         image_url: str = None, allow_free: bool = True) -> dict:
+                         image_url: str = None, allow_free: bool = True,
+                         force: bool = False) -> dict:
     """Одна попытка генерации, исход которой попадает в реестр возможностей.
 
     Реестр обязан опираться на настоящие попытки, а не на проверки доступа:
     здесь единственное место, через которое проходит каждая генерация, поэтому
     запись делается именно тут и ничего не меняет в самом результате.
     """
-    res = await _generate_once_raw(task, kind, ratio, image_url, allow_free)
+    res = await _generate_once_raw(task, kind, ratio, image_url, allow_free, force)
     try:
         from core import capabilities
         cap = "video" if res.get("kind") == "video" else detect_kind(task, kind)
@@ -964,7 +965,8 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
 
 
 async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
-                             image_url: str = None, allow_free: bool = True) -> dict:
+                             image_url: str = None, allow_free: bool = True,
+                             force: bool = False) -> dict:
     """Одна попытка генерации по цепочке путей. Никогда не бросает."""
     kind = detect_kind(task, kind)
     ratio = ratio or detect_ratio(task)
@@ -985,7 +987,7 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     # выбрал браузер осознанно, обычно чтобы не списывать кредиты.
     if mode == "browser":
         tried.append("MCP: пропущен (режим «через браузер»)")
-    elif mcp_configured() and _cold("mcp"):
+    elif mcp_configured() and _cold("mcp") and not force:
         tried.append(f"MCP: пропущен — отказал недавно, повтор через "
                      f"{_cold('mcp') / 60:.0f} мин")
     elif mcp_configured():
@@ -1009,7 +1011,7 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
         tried.append("REST: пропущен (режим «только MCP»)")
     elif mode == "browser":
         tried.append("REST: пропущен (режим «через браузер»)")
-    elif _hf_credentials() and _cold("rest"):
+    elif _hf_credentials() and _cold("rest") and not force:
         tried.append(f"REST: пропущен — отказал недавно, повтор через "
                      f"{_cold('rest') / 60:.0f} мин")
     elif _hf_credentials():

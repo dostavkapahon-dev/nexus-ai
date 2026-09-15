@@ -260,7 +260,9 @@ async def execute(cmd: dict) -> dict:
                 if not url_allowed(target):
                     return {"req_id": req_id, "ok": False,
                             "error": "URL заблокирован: разрешены только http(s) на внешние адреса"}
-                await page.goto(target, timeout=45000)
+                # Срок навигации задаёт вызывающий: поиску ждать 45 секунд
+                # бессмысленно — за это время он всё равно вернёт пустоту.
+                await page.goto(target, timeout=int(cmd.get("timeout_ms") or 45000))
                 await asyncio.sleep(2)
                 return {"req_id": req_id, "ok": True, "url": page.url, "title": await page.title()}
 

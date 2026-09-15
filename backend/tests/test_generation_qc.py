@@ -13,7 +13,7 @@ def generated(monkeypatch):
     """Успешная генерация без обращения к платформе."""
     calls = []
 
-    async def once(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def once(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         calls.append(task)
         return {"ok": True, "url": f"https://cdn/{len(calls)}.png", "kind": "image",
                 "provider": "higgsfield_mcp", "model": "z_image"}

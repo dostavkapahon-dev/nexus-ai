@@ -134,3 +134,47 @@ async def test_broken_watcher_does_not_stop_the_agent(monkeypatch):
         raise RuntimeError("чат недоступен")
 
     await browser_agent._report(boom, 1, "мысль", "click")
+
+
+@pytest.mark.asyncio
+async def test_manual_check_ignores_the_cooldown(monkeypatch):
+    """«Проверь сейчас» должно бить в настоящие пути, а не читать «пропущен».
+
+    Иначе самопроверка показывала «MCP: пропущен — отказал недавно» и выдавала
+    это за результат проверки, хотя не проверила ничего.
+    """
+    calls = []
+
+    async def dead(*a, **k):
+        calls.append(1)
+        raise RuntimeError("ConnectTimeout")
+
+    monkeypatch.setattr(hixiit, "execution_mode", _const("auto"))
+    monkeypatch.setattr(hixiit, "mcp_configured", lambda: True)
+    monkeypatch.setattr(hixiit, "_generate_via_mcp", dead)
+    monkeypatch.setattr("core.higgsfield.credentials", lambda: None)
+    monkeypatch.setattr(hixiit, "browser_available", _const(
+        {"available": False, "where": "", "why": "нет"}))
+
+    await hixiit._generate_once_raw("кадр", kind="video")
+    await hixiit._generate_once_raw("кадр", kind="video", force=True)
+    assert len(calls) == 2, "по просьбе человека путь пробуется заново"
+
+
+@pytest.mark.asyncio
+async def test_deep_selftest_forces_the_real_paths(monkeypatch):
+    from core import system_test
+    seen = {}
+
+    async def fake_generate(task, kind="auto", ratio=None, image_url=None,
+                            allow_free=True, qc=True, force=False):
+        seen["force"] = force
+        return {"ok": True, "url": "https://cdn/x.png"}
+
+    async def fake_status():
+        return {"mcp_ok": False, "api_ok": True, "browser_agent": False}
+
+    monkeypatch.setattr("core.hixiit.status", fake_status)
+    monkeypatch.setattr("core.hixiit.generate", fake_generate)
+    await system_test.check_hixiit(deep=True)
+    assert seen["force"] is True

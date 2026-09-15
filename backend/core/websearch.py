@@ -113,6 +113,53 @@ async def _search_ddg(query: str, max_results: int) -> list[dict]:
             if i.get("url", "").startswith("http")]
 
 
+async def _search_mojeek(query: str, max_results: int) -> list[dict]:
+    """Независимый поисковый индекс простым http-запросом.
+
+    Появился не от хорошей жизни: DuckDuckGo с адреса хостинга либо показывает
+    проверку на робота, либо не отвечает вовсе — страница не открылась даже за
+    45 секунд в браузере. Mojeek отдаёт обычный HTML и серверные адреса не
+    отбивает, поэтому годится там, где остальные молчат.
+    """
+    import re
+    from urllib.parse import quote_plus
+    import httpx
+
+    url = f"https://www.mojeek.com/search?q={quote_plus(query)}"
+    async with httpx.AsyncClient(timeout=12, follow_redirects=True,
+                                 headers={"User-Agent": _UA}) as c:
+        r = await c.get(url)
+    if r.status_code != 200:
+        raise RuntimeError(f"ответил {r.status_code}")
+    html = r.text
+    if _looks_like_robot_check(html):
+        raise RuntimeError("проверка на робота")
+
+    out = []
+    # Выдача — обычные ссылки результатов; заголовок лежит внутри тега.
+    for m in re.finditer(r'<a[^>]+href="(https?://[^"]+)"[^>]*class="[^"]*ob[^"]*"[^>]*>(.*?)</a>',
+                         html, re.S):
+        link, title = m.group(1), _strip_html(m.group(2))
+        if title and link and "mojeek.com" not in link:
+            out.append({"title": title[:200], "url": link, "snippet": "",
+                        "source": "mojeek"})
+        if len(out) >= max_results:
+            break
+    if not out:
+        for m in re.finditer(r'<h2><a href="(https?://[^"]+)"[^>]*>(.*?)</a></h2>',
+                             html, re.S):
+            out.append({"title": _strip_html(m.group(2))[:200], "url": m.group(1),
+                        "snippet": "", "source": "mojeek"})
+            if len(out) >= max_results:
+                break
+    if not out:
+        raise RuntimeError("страница открылась, но ссылок в ней не нашлось")
+    return out
+
+
+_UA = ("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/124.0 Safari/537.36")
+
 _BROWSER_SYS = ("Ты извлекаешь результаты поиска из текста страницы. Верни СТРОГО JSON "
                 '{"items":[{"title":"","snippet":"","url":"https://..."}]} '
                 "без пояснений. Только реальные ссылки со страницы.")
@@ -145,8 +192,10 @@ async def _search_browser(query: str, max_results: int) -> list[dict]:
     # Лёгкая версия выдачи: почти чистый HTML без скриптов. Обычная страница
     # DuckDuckGo рисуется целиком на JavaScript — браузер ждал её по 50 секунд
     # и не дожидался, из-за чего поиск падал по таймауту без объяснения.
+    # Тот же адрес, что и у http-источника: DuckDuckGo с хостинга не открылся
+    # даже за 45 секунд, и держать его здесь — значит снова ждать впустую.
     page = await _open_text(
-        f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}")
+        f"https://www.mojeek.com/search?q={quote_plus(query)}", timeout_ms=15000)
     if not page.get("ok"):
         raise RuntimeError(page.get("error") or "страница не открылась")
     text = (page.get("text") or "")[:6000]
@@ -203,6 +252,7 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
     deadline = asyncio.get_event_loop().time() + float(budget)
     for name, fn, want in (("perplexity", _search_perplexity, 20.0),
                            ("duckduckgo", _search_ddg, 10.0),
+                           ("mojeek", _search_mojeek, 12.0),
                            ("браузер", _search_browser, float(budget))):
         # Срок общий: источник получает своё привычное время, но не больше, чем
         # осталось от бюджета. Иначе «бюджет 15 с» превращался в 40 с, потому

@@ -133,8 +133,10 @@ async def check_hixiit(deep: bool = False) -> dict:
 
     from core.hixiit import generate
     try:
+        # force: человек попросил проверить СЕЙЧАС. Без него проверка читала
+        # «путь пропущен — отказал недавно» и выдавала это за результат.
         res = await generate("минималистичный логотип: чашка кофе",
-                             kind="image", qc=False)
+                             kind="image", qc=False, force=True)
     except Exception as e:
         return _fail(name, f"генерация упала: {type(e).__name__}", str(e)[:140], t)
     url = res.get("url") or res.get("image_url") or ""
