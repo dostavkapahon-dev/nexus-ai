@@ -90,7 +90,7 @@ async def test_generation_writes_to_registry(monkeypatch):
     from core import hixiit
     seen = {}
 
-    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         return {"ok": True, "url": "https://cdn/a.png", "kind": "image"}
 
     async def fake_record(cap, ok, why="", evidence=""):
@@ -108,7 +108,7 @@ async def test_failed_generation_recorded_as_failure(monkeypatch):
     from core import hixiit
     seen = {}
 
-    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         return {"ok": False, "error": "все пути отказали"}
 
     async def fake_record(cap, ok, why="", evidence=""):
@@ -126,7 +126,7 @@ async def test_registry_never_raises_into_the_work(monkeypatch):
     """Наблюдатель не имеет права уронить саму генерацию."""
     from core import hixiit
 
-    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True):
+    async def fake_raw(task, kind="auto", ratio=None, image_url=None, allow_free=True, force=False):
         return {"ok": True, "url": "https://cdn/a.png", "kind": "image"}
 
     async def boom(*a, **k):

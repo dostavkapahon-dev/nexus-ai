@@ -35,9 +35,16 @@ def _profile_url(platform: str, handle: str) -> str | None:
     return None
 
 
-async def _open_text(url: str) -> dict:
-    """Открывает URL в браузере и возвращает {ok, text}."""
-    nav = await server_browser.execute({"action": "navigate", "url": url})
+async def _open_text(url: str, timeout_ms: int = 0) -> dict:
+    """Открывает URL в браузере и возвращает {ok, text}.
+
+    `timeout_ms` — для случаев, когда ждать полминуты бессмысленно: поиск
+    уходил в Page.goto на 45 секунд и возвращал пустоту вместо результатов.
+    """
+    cmd = {"action": "navigate", "url": url}
+    if timeout_ms:
+        cmd["timeout_ms"] = timeout_ms
+    nav = await server_browser.execute(cmd)
     if not nav.get("ok"):
         return {"ok": False, "error": nav.get("error", "navigate failed")}
     txt = await server_browser.execute({"action": "page_text"})
