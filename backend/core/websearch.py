@@ -118,6 +118,14 @@ _BROWSER_SYS = ("Ты извлекаешь результаты поиска и�
                 "без пояснений. Только реальные ссылки со страницы.")
 
 
+def _looks_like_robot_check(text: str) -> bool:
+    """Страница с капчей — это не «пусто», и называть её надо своим именем."""
+    low = (text or "").lower()
+    return any(mark in low for mark in
+               ("unusual traffic", "are you a robot", "проверка на робота",
+                "verify you are human", "captcha", "подтвердите, что вы не робот"))
+
+
 async def _search_browser(query: str, max_results: int) -> list[dict]:
     """Поиск руками браузера — без ключей и без платных API.
 
@@ -134,12 +142,20 @@ async def _search_browser(query: str, max_results: int) -> list[dict]:
 
     from urllib.parse import quote_plus
     from core.browser_reader import _open_text, _extract
-    page = await _open_text(f"https://duckduckgo.com/?q={quote_plus(query)}")
+    # Лёгкая версия выдачи: почти чистый HTML без скриптов. Обычная страница
+    # DuckDuckGo рисуется целиком на JavaScript — браузер ждал её по 50 секунд
+    # и не дожидался, из-за чего поиск падал по таймауту без объяснения.
+    page = await _open_text(
+        f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}")
     if not page.get("ok"):
         raise RuntimeError(page.get("error") or "страница не открылась")
     text = (page.get("text") or "")[:6000]
     if not text.strip():
         raise RuntimeError("страница пустая")
+    if _looks_like_robot_check(text):
+        raise RuntimeError("выдача показала проверку на робота — адрес сервера "
+                           "в чёрном списке поисковика; нужен ключ поиска "
+                           "(PERPLEXITY_API_KEY) или облачный браузер")
 
     data = await _extract(_BROWSER_SYS,
                           f"Запрос: {query}\n\nТекст страницы:\n{text}")

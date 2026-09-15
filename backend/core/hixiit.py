@@ -853,7 +853,7 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
         got = bool(res.get("ok") and res.get("url"))
         await capabilities.record(
             cap, got,
-            "" if got else str(res.get("error", ""))[:200],
+            "" if got else str(res.get("error", ""))[:800],
             str(res.get("url") or res.get("provider") or "")[:200])
     except Exception as e:
         print(f"[NEXUS] реестр не записал генерацию: {type(e).__name__}: "
@@ -940,7 +940,12 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     # Pollinations — отсюда и «очень страшные» результаты.
     if mode != "mcp":
         seen = await browser_available()
-        if seen["available"]:
+        login = higgsfield_session()
+        if seen["available"] and not login["ok"]:
+            # Без входа агент всё равно упрётся в форму логина, потратив
+            # десятки шагов и минуты ожидания. Честный отказ дешевле.
+            tried.append(f"Браузер ({seen['where']}): {login['why']}")
+        elif seen["available"]:
             try:
                 from core.skills import higgsfield_via_browser
                 res = await higgsfield_via_browser(task, image_url, kind=kind)
@@ -1034,6 +1039,34 @@ async def browser_available() -> dict:
             out["why"] += f"\nПричина при сборке: {detail[:200]}"
     except Exception as e:
         out["why"] = _why(e, 120)
+    return out
+
+
+# Домены, по которым видно, что в браузере есть вход в аккаунт Higgsfield.
+HIGGSFIELD_DOMAINS = ("higgsfield.ai", "cloud.higgsfield.ai", "platform.higgsfield.ai")
+
+
+def higgsfield_session() -> dict:
+    """Залогинен ли серверный браузер в Higgsfield.
+
+    Браузерный путь предполагал «ты уже в аккаунте» и без входа тратил десятки
+    шагов агента, чтобы упереться в форму логина. Проверка дешёвая: cookies
+    лежат в NEXUS_BROWSER_STORAGE_STATE, и по их доменам вход видно сразу.
+    """
+    out = {"ok": False, "domains": [], "why": ""}
+    try:
+        from core import server_browser
+        domains = server_browser.session_domains()
+    except Exception as e:
+        out["why"] = _why(e, 120)
+        return out
+    out["domains"] = [d for d in domains
+                      if any(d == h or d.endswith("." + h) for h in HIGGSFIELD_DOMAINS)]
+    if out["domains"]:
+        out["ok"] = True
+        return out
+    out["why"] = ("в браузере нет входа в higgsfield.ai — добавьте cookies "
+                  "аккаунта в переменную NEXUS_BROWSER_STORAGE_STATE")
     return out
 
 

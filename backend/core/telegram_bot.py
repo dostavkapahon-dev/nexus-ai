@@ -1090,6 +1090,15 @@ async def _dispatch_command(chat_id: str, text: str):
         browser = st.get("browser") or {}
         if browser.get("available"):
             lines.append(f"✅ браузер — {browser.get('where', '')}")
+            # Браузер без входа в аккаунт для генерации бесполезен: агент
+            # упрётся в форму логина. Показываем это отдельной строкой, чтобы
+            # «браузер есть» не читалось как «генерация через сайт работает».
+            from core.hixiit import higgsfield_session
+            login = higgsfield_session()
+            if login["ok"]:
+                lines.append("   ✅ вход в аккаунт: " + ", ".join(login["domains"]))
+            else:
+                lines.append("   ⚠️ " + login["why"])
         else:
             lines.append("❌ браузер — " + (browser.get("why") or "не настроен"))
         lines += [

@@ -44,7 +44,7 @@ async def record(cap: str, ok: bool, why: str = "", evidence: str = "") -> None:
     """Записать исход НАСТОЯЩЕЙ попытки. Вызывается рабочим путём, не проверкой."""
     if cap not in CAPABILITIES:
         return
-    payload = json.dumps({"ok": bool(ok), "why": (why or "")[:300],
+    payload = json.dumps({"ok": bool(ok), "why": (why or "")[:800],
                           "evidence": (evidence or "")[:300],
                           "when": _now().isoformat()}, ensure_ascii=False)
     try:
@@ -134,5 +134,7 @@ def as_text(rows: list[dict]) -> str:
             line += f" ({r['when']} UTC)"
         lines.append(line)
         if r.get("why"):
-            lines.append(f"   {r['why'][:200]}")
+            # Причина печатается целиком до 600 знаков: под старым лимитом в
+            # 200 в отчёт не попадал третий путь генерации — а он и был нужен.
+            lines.append(f"   {r['why'][:600]}")
     return "\n".join(lines)

@@ -12,6 +12,13 @@ import pytest
 from core import hixiit
 
 
+def _logged_in(monkeypatch, yes=True):
+    """Вход в аккаунт Higgsfield: без него браузерный путь отказывает сразу."""
+    monkeypatch.setattr(
+        "core.server_browser.session_domains",
+        lambda: ["higgsfield.ai"] if yes else [])
+
+
 def _browser(monkeypatch, desktop=False, server=False):
     monkeypatch.setattr("api.routes_desktop.desktop_connected", lambda: desktop)
 
@@ -48,6 +55,7 @@ async def test_no_browser_explains_why(monkeypatch):
 @pytest.mark.asyncio
 async def test_browser_path_accepts_images(monkeypatch):
     """Картинки раньше до браузера не доходили — только видео."""
+    _logged_in(monkeypatch)
     _browser(monkeypatch, desktop=False, server=True)
     got = {}
 
@@ -65,6 +73,7 @@ async def test_browser_path_accepts_images(monkeypatch):
 @pytest.mark.asyncio
 async def test_image_prompt_asks_for_unlimited_model(monkeypatch):
     """На сайте действует безлимит — кадр не должен списывать кредиты."""
+    _logged_in(monkeypatch)
     _browser(monkeypatch, desktop=False, server=True)
     got = {}
 
@@ -107,6 +116,7 @@ async def test_unknown_mode_falls_back_to_auto(monkeypatch):
 @pytest.mark.asyncio
 async def test_browser_mode_skips_mcp_and_rest(monkeypatch):
     """Выбранный человеком путь обязан соблюдаться, а не подменяться молча."""
+    _logged_in(monkeypatch)
     monkeypatch.setattr(hixiit, "execution_mode", _const("browser"))
     monkeypatch.setattr(hixiit, "mcp_configured", lambda: True)
     _browser(monkeypatch, desktop=False, server=True)
