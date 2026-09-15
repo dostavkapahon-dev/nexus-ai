@@ -110,3 +110,43 @@ async def test_all_sources_down_names_every_reason(monkeypatch):
     assert not res["ok"]
     assert "PERPLEXITY" in res["error"] and "403" in res["error"]
     assert "NEXUS_BROWSER_CDP" in res["error"]
+
+
+@pytest.mark.asyncio
+async def test_browser_search_uses_the_light_page(monkeypatch):
+    """Обычная выдача DuckDuckGo рисуется скриптами — браузер ждал её 50 секунд."""
+    from core import websearch
+    opened = {}
+
+    async def fake_open(url):
+        opened["url"] = url
+        return {"ok": True, "text": "Результаты"}
+
+    async def fake_extract(system, text):
+        return {"items": [{"title": "т", "url": "https://x.test"}]}
+
+    async def available():
+        return {"available": True, "where": "на сервере", "why": ""}
+
+    monkeypatch.setattr("core.hixiit.browser_available", available)
+    monkeypatch.setattr("core.browser_reader._open_text", fake_open)
+    monkeypatch.setattr("core.browser_reader._extract", fake_extract)
+    await websearch._search_browser("маркетинг", 2)
+    assert opened["url"].startswith("https://lite.duckduckgo.com/lite/")
+
+
+@pytest.mark.asyncio
+async def test_robot_check_is_named_not_called_empty(monkeypatch):
+    from core import websearch
+
+    async def fake_open(url):
+        return {"ok": True, "text": "Unusual traffic from your computer network"}
+
+    async def available():
+        return {"available": True, "where": "на сервере", "why": ""}
+
+    monkeypatch.setattr("core.hixiit.browser_available", available)
+    monkeypatch.setattr("core.browser_reader._open_text", fake_open)
+    with pytest.raises(RuntimeError) as e:
+        await websearch._search_browser("маркетинг", 2)
+    assert "проверку на робота" in str(e.value)

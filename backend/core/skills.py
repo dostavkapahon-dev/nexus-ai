@@ -99,11 +99,16 @@ async def higgsfield_via_browser(motion_prompt: str, seed_image: str = None,
     Картинки сюда тоже приходят: на сайте действует безлимит, и это
     единственный путь, где кадр не стоит кредитов.
     """
-    from core.hixiit import browser_available
+    from core.hixiit import browser_available, higgsfield_session
     seen = await browser_available()
     if not seen["available"]:
         return {"ok": False, "provider": "higgsfield_browser",
                 "error": "Браузер недоступен: " + (seen["why"] or "не настроен")}
+    # Задача агента начинается словами «ты уже залогинен» — а если нет, он
+    # потратит десятки шагов, чтобы упереться в форму входа. Проверяем заранее.
+    login = higgsfield_session()
+    if not login["ok"]:
+        return {"ok": False, "provider": "higgsfield_browser", "error": login["why"]}
 
     from core.browser_agent import run_agent
     if kind == "image":
