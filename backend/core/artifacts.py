@@ -142,6 +142,35 @@ async def undelivered(hours: int = 24) -> list[dict]:
     return [r for r in await recent(limit=50, hours=hours) if not r.get("telegram")]
 
 
+async def redeliver(art_id: str, chat_id: str) -> dict:
+    """Отправить УЖЕ СОЗДАННЫЙ результат заново, ничего не генерируя.
+
+    Требование §29. Сбой доставки не должен стоить новой генерации: файл есть,
+    он сохранён, и повторять надо ровно доставку. Иначе неудачная отправка
+    видео превращается в повторное списание кредитов и второй файл в ленте.
+    """
+    row = await get(art_id)
+    if not row:
+        return {"ok": False, "error": f"артефакт {art_id} не найден"}
+    url = row.get("url") or ""
+    if not url:
+        return {"ok": False, "error": "у артефакта нет ссылки на файл"}
+
+    from publishers.telegram_pub import send_photo, send_video
+    caption = (f"{row.get('provider', '')} {row.get('model', '')}\n"
+               f"{row.get('prompt', '')[:200]}").strip()
+    try:
+        if row.get("kind") == "video":
+            await send_video(chat_id, url, caption)
+        else:
+            await send_photo(chat_id, url, caption)
+    except Exception as e:
+        await mark(art_id, telegram=f"не доставлено: {str(e)[:120]}")
+        return {"ok": False, "error": str(e)[:200]}
+    await mark(art_id, telegram="доставлено повторно")
+    return {"ok": True, "kind": row.get("kind", ""), "url": url}
+
+
 def as_text(rows: list[dict]) -> str:
     if not rows:
         return "📦 <b>Результаты</b>\nПока ничего не создано."
