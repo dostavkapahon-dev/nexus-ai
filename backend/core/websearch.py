@@ -132,16 +132,26 @@ async def _search_gemini(query: str, max_results: int) -> list[dict]:
     import google.generativeai as genai
     genai.configure(api_key=key)
 
-    def _ask():
-        from core.ai_router import resolve_gemini_model
-        model = genai.GenerativeModel(
-            resolve_gemini_model() or "gemini-2.5-flash",
-            tools="google_search_retrieval")
+    def _ask(name: str):
+        model = genai.GenerativeModel(name, tools="google_search_retrieval")
         return model.generate_content(
             f"Найди в интернете свежие материалы: {query}\n"
             "Ответь списком: заголовок — ссылка — одна строка сути.")
 
-    resp = await asyncio.to_thread(_ask)
+    from core.ai_router import resolve_gemini_model, _replacement_from_error
+    name = resolve_gemini_model() or "gemini-2.5-flash"
+    try:
+        resp = await asyncio.to_thread(_ask, name)
+    except Exception as e:
+        # Google снимает модели и прямо называет замену в тексте отказа
+        # («Please update your code to use models/X»). Слушаем его, а не свой
+        # список: иначе поиск умирает вместе с очередной снятой моделью — так
+        # и вышло с gemini-2.5-flash-lite.
+        alt = _replacement_from_error(e) or await asyncio.to_thread(
+            resolve_gemini_model, name)
+        if not alt or alt == name:
+            raise
+        resp = await asyncio.to_thread(_ask, alt)
     out = []
 
     # Ссылки берём из метаданных ответа: это адреса, которые Google реально

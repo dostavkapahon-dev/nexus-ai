@@ -207,6 +207,7 @@ async def setup_bot_commands():
         {"command": "providers", "description": "Подключения: что доказано работой"},
         {"command": "resend", "description": "Прислать созданное заново"},
         {"command": "netcheck", "description": "Замер сети: куда сервер дозванивается"},
+        {"command": "hftest", "description": "Higgsfield: полный ответ платформы"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1163,6 +1164,25 @@ async def _dispatch_command(chat_id: str, text: str):
             lines += ["", "Нужны <code>HIGGSFIELD_API_KEY</code> и "
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
+        await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("hftest", "hfprobe"):
+        # Полный ответ платформы вместо обрезанного «400: Unavailabl…».
+        import json as _json
+        from core.higgsfield import probe
+        await send_message(chat_id, "🔬 Делаю один настоящий запрос к Higgsfield…")
+        res = await probe()
+        lines = [f"🔬 <b>Ответ Higgsfield</b>",
+                 f"Адрес: <code>{res.get('base', '—')}</code>",
+                 f"Статус: <b>{res.get('status', res.get('stage', '—'))}</b>",
+                 f"Заголовки: {', '.join(res.get('headers', [])) or '—'}",
+                 "",
+                 "Отправлено:",
+                 f"<code>{_json.dumps(res.get('sent', {}), ensure_ascii=False)}</code>",
+                 "",
+                 "Получено:",
+                 f"<code>{_json.dumps(res.get('response', res.get('error', '')), ensure_ascii=False)[:900]}</code>"]
         await send_message(chat_id, "\n".join(lines))
         return
 
