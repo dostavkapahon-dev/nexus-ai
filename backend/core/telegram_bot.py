@@ -204,6 +204,7 @@ async def setup_bot_commands():
         {"command": "can", "description": "Что система умеет подтверждённо"},
         {"command": "models", "description": "Каталог моделей и что проверено"},
         {"command": "drive", "description": "Google Drive: проверка архива"},
+        {"command": "providers", "description": "Подключения: что доказано работой"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1161,6 +1162,13 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("providers", "connections", "podkl"):
+        # Один экран вместо трёх: что подключено, что доказано работой, а что
+        # только заявлено ключом.
+        from core import providers
+        await send_message(chat_id, providers.as_text(await providers.registry()))
         return
 
     if cmd in ("drive", "disk"):
