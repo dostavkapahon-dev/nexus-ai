@@ -206,6 +206,7 @@ async def setup_bot_commands():
         {"command": "drive", "description": "Google Drive: проверка архива"},
         {"command": "providers", "description": "Подключения: что доказано работой"},
         {"command": "resend", "description": "Прислать созданное заново"},
+        {"command": "netcheck", "description": "Замер сети: куда сервер дозванивается"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1163,6 +1164,14 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("netcheck", "net", "set"):
+        # Измерение вместо догадок: когда таймаутит всё подряд, надо знать,
+        # сеть это, память или занятый событийный цикл.
+        from core import netcheck
+        await send_message(chat_id, "📡 Замеряю исходящую сеть по адресам…")
+        await send_message(chat_id, netcheck.as_text(await netcheck.run()))
         return
 
     if cmd in ("providers", "connections", "podkl"):
