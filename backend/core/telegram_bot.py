@@ -203,6 +203,7 @@ async def setup_bot_commands():
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "can", "description": "Что система умеет подтверждённо"},
         {"command": "models", "description": "Каталог моделей и что проверено"},
+        {"command": "drive", "description": "Google Drive: проверка архива"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1160,6 +1161,32 @@ async def _dispatch_command(chat_id: str, text: str):
                           "<code>HIGGSFIELD_SECRET</code> из cloud.higgsfield.ai — "
                           "работают в паре, по отдельности запрос отклоняется."]
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("drive", "disk"):
+        from core import drive_store
+        ready = drive_store.configured()
+        if not ready["ok"]:
+            await send_message(
+                chat_id,
+                "💾 <b>Google Drive</b>\n❌ " + ready["why"]
+                + ("\n\nАдрес сервисного аккаунта: <code>"
+                   + drive_store.account_email() + "</code>"
+                   if drive_store.account_email() else ""))
+            return
+        await send_message(chat_id, "💾 Проверяю Drive по-настоящему: "
+                                    "запись → чтение → удаление…")
+        res = await drive_store.check()
+        if res["ok"]:
+            await send_message(chat_id, "💾 <b>Google Drive</b>\n✅ READY — файл "
+                                        "записан, прочитан и удалён\n"
+                                        f"Аккаунт: <code>{res.get('email', '')}</code>")
+        else:
+            await send_message(
+                chat_id,
+                f"💾 <b>Google Drive</b>\n❌ не прошло на шаге «{res.get('stage', '')}»\n"
+                f"{res.get('error', '')[:400]}\n\n"
+                f"Аккаунт: <code>{res.get('email', '')}</code>")
         return
 
     if cmd in ("results", "artifacts", "rezultaty"):
