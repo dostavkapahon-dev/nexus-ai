@@ -877,6 +877,30 @@ async def generate(task: str, kind: str = "auto", ratio: str = None,
     return _warn(res, verdict)
 
 
+async def _archive(res: dict) -> None:
+    """Сложить готовый файл в архив, если он подключён. Никогда не бросает."""
+    try:
+        from core import drive_store
+        if not drive_store.configured()["ok"]:
+            return
+        kind = res.get("kind") or "image"
+        ext = ".mp4" if kind == "video" else ".png"
+        from datetime import datetime
+        name = f"{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{kind}{ext}"
+        put = await drive_store.upload_url(res["url"], name, kind)
+        if put.get("ok"):
+            res["drive_link"] = put.get("link", "")
+            from core import artifacts
+            await artifacts.mark(res.get("artifact_id", ""),
+                                 storage=put.get("link") or put.get("id", ""))
+        else:
+            print(f"[NEXUS] архив Drive не принял файл: {put.get('error', '')[:150]}",
+                  flush=True)
+    except Exception as e:
+        print(f"[NEXUS] архив Drive недоступен: {type(e).__name__}: "
+              f"{str(e)[:150]}", flush=True)
+
+
 async def tell(text: str) -> None:
     """Сообщить о ходе генерации в живое сообщение текущей задачи.
 
@@ -973,6 +997,10 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
                 model=model, prompt=task,
                 external_job=str(res.get("job_id") or ""),
                 note=str(res.get("note") or ""))
+            # Архив в Drive. Ссылка провайдера живёт недолго: без этого шага
+            # готовый кадр через сутки превращается в мёртвый адрес. Неудача
+            # архивации не отменяет результат — он уже есть и уже записан.
+            await _archive(res)
     except Exception as e:
         print(f"[NEXUS] реестр не записал генерацию: {type(e).__name__}: "
               f"{str(e)[:120]}", flush=True)
