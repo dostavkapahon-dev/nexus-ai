@@ -100,29 +100,23 @@ async def test_cloud_browser_skips_the_start_check(monkeypatch, server):
 
 
 @pytest.mark.asyncio
-async def test_status_does_not_wait_for_the_browser(monkeypatch, server):
-    """Статус обязан отвечать сразу: запуск Chromium — это десятки секунд.
+async def test_status_does_not_touch_the_browser(monkeypatch, server):
+    """Статус не только не ждёт браузер — он его и не поднимает.
 
-    Синхронная проверка вешала /hixiit и «живую проверку» на 45-60 секунд —
-    вместо ложного зелёного получалось молчание, что не лучше.
+    Chromium забирает память у всего процесса: статус, поднимающий его в фоне,
+    и есть причина, по которой сервер начинал таймаутить на обычных запросах.
     """
     import asyncio
     _no_desktop(monkeypatch)
     monkeypatch.setattr("core.version.browser_ready", lambda: True)
 
-    started = asyncio.Event()
+    async def must_not_run():
+        raise AssertionError("статус не должен поднимать браузер")
 
-    async def slow():
-        started.set()
-        await asyncio.sleep(30)
-
-    monkeypatch.setattr(server, "ensure_browser", slow)
+    monkeypatch.setattr(server, "ensure_browser", must_not_run)
     res = await asyncio.wait_for(hixiit.browser_available(quick=True), timeout=1.0)
     assert res["available"] is False and res["pending"] is True
-    assert "проверяю" in res["why"].lower()
-    # Проверка всё-таки запущена — просто в фоне.
-    await asyncio.wait_for(started.wait(), timeout=1.0)
-    hixiit._BROWSER_PROBE.cancel()
+    assert "при первой генерации" in res["why"]
 
 
 @pytest.mark.asyncio

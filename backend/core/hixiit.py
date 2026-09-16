@@ -1273,19 +1273,16 @@ def browser_start_state() -> dict:
     Поэтому статус читает уже известный ответ, а если его нет — просит
     проверить в фоне и честно говорит «проверяется».
     """
-    global _BROWSER_PROBE
     if _BROWSER_START is not None:
         return _BROWSER_START
-    import asyncio
-    if _BROWSER_PROBE is None or _BROWSER_PROBE.done():
-        try:
-            _BROWSER_PROBE = asyncio.get_running_loop().create_task(
-                _browser_starts())
-        except RuntimeError:
-            return {"ok": False, "pending": False,
-                    "why": "запуск браузера ещё не проверялся"}
+    # Сам запуск отсюда НЕ начинаем. Chromium забирает память у всего процесса,
+    # и статус, поднимающий его в фоне, — это статус, из-за которого сервер
+    # начинает таймаутить на обычных запросах. Браузер поднимается только тогда,
+    # когда он действительно нужен для работы, и тогда же становится известен
+    # ответ.
     return {"ok": False, "pending": True,
-            "why": "проверяю запуск браузера — ответ будет в следующем /hixiit"}
+            "why": "запуск браузера ещё не проверялся — проверю при первой "
+                   "генерации через браузер"}
 
 
 async def execution_mode() -> str:

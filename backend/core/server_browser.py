@@ -176,6 +176,9 @@ def _profile_dir() -> str:
 
 
 # Аргументы под маломощный хостинг (Render free): без sandbox и /dev/shm.
+# Флаги подобраны под маленький инстанс: Chromium по умолчанию поднимает
+# процесс на вкладку и заранее греет сеть, а на 512 МБ это выдавливает из
+# памяти сам сервер — и тогда таймаутит ВСЁ, включая обычные http-запросы.
 _LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -183,13 +186,67 @@ _LAUNCH_ARGS = [
     "--disable-setuid-sandbox",
     "--no-first-run",
     "--no-zygote",
+    "--single-process",                 # один процесс вместо процесса на вкладку
+    "--renderer-process-limit=1",
+    "--disable-extensions",
+    "--disable-background-networking",
+    "--disable-background-timer-throttling",
+    "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+    "--mute-audio",
+    "--blink-settings=imagesEnabled=false",   # картинки в выдаче нам не нужны
 ]
+
+# Через сколько секунд простоя закрыть браузер. Он не вызывался никогда, и
+# поднятый однажды Chromium жил до перезапуска сервиса, забирая память у всего
+# остального — отсюда «не ответил за 10 секунд» у поиска и «за 60 секунд» у
+# Higgsfield на сервере, где до установки браузера всё отвечало.
+IDLE_CLOSE_SEC = float(os.getenv("NEXUS_BROWSER_IDLE_SEC", "120"))
+_last_use = 0.0
+_idle_task = None
+
+
+def _touch() -> None:
+    """Отметить, что браузером только что пользовались."""
+    global _last_use
+    import time
+    _last_use = time.monotonic()
+
+
+async def _close_when_idle() -> None:
+    """Закрыть браузер, когда он перестал быть нужен.
+
+    Память на маленьком инстансе — общий ресурс: пока Chromium висит, её не
+    хватает ни исходящим запросам, ни самому серверу.
+    """
+    import time
+    while True:
+        await asyncio.sleep(15)
+        if _context is None and _browser is None:
+            return
+        if time.monotonic() - _last_use < IDLE_CLOSE_SEC:
+            continue
+        print(f"[NEXUS] браузер простаивал {IDLE_CLOSE_SEC:.0f} с — закрываю, "
+              "чтобы вернуть память", flush=True)
+        await shutdown()
+        return
+
+
+def _watch_idle() -> None:
+    global _idle_task
+    if _idle_task is not None and not _idle_task.done():
+        return
+    try:
+        _idle_task = asyncio.get_running_loop().create_task(_close_when_idle())
+    except RuntimeError:
+        _idle_task = None
 
 
 async def ensure_browser():
     """Лениво даёт страницу браузера. Удалённый (CDP) режим — если задан эндпоинт,
     иначе локальный persistent-context Chromium. Повторно использует соединение."""
     global _playwright, _browser, _context, _page
+    _touch()
+    _watch_idle()
     if _context is not None and _page is not None:
         return _page
 
@@ -217,7 +274,8 @@ async def ensure_browser():
     # ЛОКАЛЬНЫЙ Chromium (для VPS с запасом памяти).
     os.makedirs(_profile_dir(), exist_ok=True)
     headless = os.getenv("NEXUS_BROWSER_HEADLESS", "1").strip() not in ("0", "false", "no")
-    opts = {"headless": headless, "viewport": {"width": 1280, "height": 800}, "args": _LAUNCH_ARGS}
+    opts = {"headless": headless, "viewport": {"width": 900, "height": 700},
+            "args": _LAUNCH_ARGS}
     exe = os.getenv("BROWSER_PATH")
     if exe:
         opts["executable_path"] = exe
@@ -238,6 +296,7 @@ async def execute(cmd: dict) -> dict:
     if not enabled():
         return {"ok": False, "error": "Серверный браузер выключен (NEXUS_SERVER_BROWSER=0)."}
 
+    _touch()        # работа идёт — не закрывать браузер под руками
     action = cmd.get("action", "")
     req_id = cmd.get("req_id", "")
     async with _lock:
