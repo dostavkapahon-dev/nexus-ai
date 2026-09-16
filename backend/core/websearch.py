@@ -113,6 +113,58 @@ async def _search_ddg(query: str, max_results: int) -> list[dict]:
             if i.get("url", "").startswith("http")]
 
 
+async def _search_gemini(query: str, max_results: int) -> list[dict]:
+    """Поиск руками Google через Gemini, у которого есть встроенный инструмент.
+
+    Появился по результатам замера сети с сервера: DuckDuckGo и Mojeek оттуда
+    недоступны вовсе (ConnectTimeout за 8 секунд), а Google отвечает. Отдельный
+    ключ для поиска не нужен — работает тот же GEMINI_API_KEY, который уже
+    обслуживает тексты, а ссылки приходят из настоящей выдачи Google, а не из
+    памяти модели.
+    """
+    import asyncio
+    import os
+
+    key = (os.getenv("GEMINI_API_KEY") or "").strip()
+    if not key:
+        raise NoKey("нет ключа GEMINI_API_KEY")
+
+    import google.generativeai as genai
+    genai.configure(api_key=key)
+
+    def _ask():
+        from core.ai_router import resolve_gemini_model
+        model = genai.GenerativeModel(
+            resolve_gemini_model() or "gemini-2.5-flash",
+            tools="google_search_retrieval")
+        return model.generate_content(
+            f"Найди в интернете свежие материалы: {query}\n"
+            "Ответь списком: заголовок — ссылка — одна строка сути.")
+
+    resp = await asyncio.to_thread(_ask)
+    out = []
+
+    # Ссылки берём из метаданных ответа: это адреса, которые Google реально
+    # нашёл, а не то, что модель могла придумать.
+    for cand in getattr(resp, "candidates", []) or []:
+        meta = getattr(cand, "grounding_metadata", None)
+        for chunk in (getattr(meta, "grounding_chunks", None) or []):
+            web = getattr(chunk, "web", None)
+            uri = getattr(web, "uri", "") if web else ""
+            title = getattr(web, "title", "") if web else ""
+            if uri.startswith("http"):
+                out.append({"title": (title or uri)[:200], "url": uri,
+                            "snippet": "", "source": "google"})
+            if len(out) >= max_results:
+                break
+        if len(out) >= max_results:
+            break
+
+    if not out:
+        raise RuntimeError("Google не вернул ссылок на эту тему")
+    return out
+
+
 async def _search_mojeek(query: str, max_results: int) -> list[dict]:
     """Независимый поисковый индекс простым http-запросом.
 
@@ -250,9 +302,12 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
     # время вызывающего, и наружу уходило «не ответил за 45 секунд» — по такому
     # тексту неизвестно даже, какой из источников завис.
     deadline = asyncio.get_event_loop().time() + float(budget)
+    # Порядок по измеренной доступности с сервера: Google (через Gemini)
+    # отвечает, DuckDuckGo и Mojeek с хостинга не открываются вовсе.
     for name, fn, want in (("perplexity", _search_perplexity, 20.0),
-                           ("duckduckgo", _search_ddg, 10.0),
-                           ("mojeek", _search_mojeek, 12.0),
+                           ("google", _search_gemini, 25.0),
+                           ("duckduckgo", _search_ddg, 8.0),
+                           ("mojeek", _search_mojeek, 8.0),
                            ("браузер", _search_browser, float(budget))):
         # Срок общий: источник получает своё привычное время, но не больше, чем
         # осталось от бюджета. Иначе «бюджет 15 с» превращался в 40 с, потому

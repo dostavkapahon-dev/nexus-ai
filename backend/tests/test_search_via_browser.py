@@ -236,3 +236,65 @@ async def test_browser_search_does_not_wait_45_seconds(monkeypatch):
     await websearch._search_browser("маркетинг", 2)
     assert opened["timeout_ms"] == 15000
     assert "mojeek.com" in opened["url"]
+
+
+@pytest.mark.asyncio
+async def test_google_source_extracts_real_links(monkeypatch):
+    """Замер сети: DuckDuckGo и Mojeek с хостинга закрыты, Google отвечает.
+
+    Ссылки берём из метаданных ответа — это адреса, которые Google реально
+    нашёл, а не то, что модель могла придумать.
+    """
+    from core import websearch
+
+    class _Web:
+        uri = "https://example.test/article"
+        title = "Живая статья"
+
+    class _Chunk:
+        web = _Web()
+
+    class _Meta:
+        grounding_chunks = [_Chunk()]
+
+    class _Cand:
+        grounding_metadata = _Meta()
+
+    class _Resp:
+        candidates = [_Cand()]
+
+    class _Model:
+        def __init__(self, *a, **k):
+            pass
+
+        def generate_content(self, prompt):
+            return _Resp()
+
+    # Подменяем атрибуты самого модуля: `import google.generativeai` внутри
+    # функции берёт уже загруженный модуль, и запись в sys.modules его не
+    # заменит.
+    import google.generativeai as genai
+    monkeypatch.setattr(genai, "configure", lambda **k: None)
+    monkeypatch.setattr(genai, "GenerativeModel", _Model)
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    items = await websearch._search_gemini("вирусные темы", 5)
+    assert items[0]["url"] == "https://example.test/article"
+    assert items[0]["source"] == "google"
+
+
+@pytest.mark.asyncio
+async def test_google_source_without_key_says_so(monkeypatch):
+    from core import websearch
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(websearch.NoKey):
+        await websearch._search_gemini("тест", 3)
+
+
+def test_unreachable_sources_are_no_longer_first():
+    """Порядок источников следует измеренной доступности, а не привычке."""
+    import inspect
+    from core import websearch
+    body = inspect.getsource(websearch.search)
+    google_at = body.index('"google"')
+    ddg_at = body.index('"duckduckgo"')
+    assert google_at < ddg_at, "доступный источник должен идти раньше закрытого"
