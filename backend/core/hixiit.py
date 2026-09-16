@@ -133,6 +133,10 @@ def _reraise_control_flow(e: BaseException) -> None:
 # молчит» — это не поломка ключа и не повод его менять.
 OFFICIAL_MCP_URL = "https://mcp.higgsfield.ai/mcp"
 
+# Сколько статус ждёт MCP. Коротко намеренно: статус обязан отвечать быстро, а
+# «не ответил» здесь так же информативно, как подробная ошибка через минуту.
+MCP_STATUS_TIMEOUT = 8.0
+
 
 def mcp_configured() -> bool:
     return bool(os.getenv("HIGGSFIELD_MCP_URL"))
@@ -1572,16 +1576,32 @@ async def status() -> dict:
     out["mode"] = await execution_mode()
 
     if out["mcp_configured"]:
-        try:
-            out["unlim"] = await unlim_status()
-        except BaseException as e:
-            _reraise_control_flow(e)
-        try:
-            bal = await _mcp_call("balance", {}, timeout=30)
+        # Замер с сервера показал: до mcp.higgsfield.ai соединение доходит за
+        # полсекунды, но вызов после этого виснет — там нужен OAuth-вход
+        # человека, которого на хостинге нет. Прежние два вызова по 30 секунд
+        # складывались ровно в те 60, за которые «проверка не ответила»: статус
+        # ждал того, чего дождаться нельзя. Даём обоим общий короткий срок —
+        # ответ «MCP не отвечает» ничем не хуже, а приходит сразу.
+        import asyncio as _asyncio
+
+        async def _mcp_facts():
+            try:
+                out["unlim"] = await unlim_status()
+            except BaseException as e:
+                _reraise_control_flow(e)
+            bal = await _mcp_call("balance", {}, timeout=MCP_STATUS_TIMEOUT)
             out["mcp_ok"] = True
             if isinstance(bal, dict):
                 out["credits"] = bal.get("credits")
                 out["plan"] = bal.get("subscription_plan_type")
+
+        try:
+            await _asyncio.wait_for(_mcp_facts(), timeout=MCP_STATUS_TIMEOUT)
+        except _asyncio.TimeoutError:
+            out["mcp_ok"] = False
+            out["mcp_error"] = (f"не ответил за {MCP_STATUS_TIMEOUT:.0f} с — "
+                                "соединение есть, но вызов не проходит "
+                                "(нужен OAuth-вход пользователя)")
         except BaseException as e:
             _reraise_control_flow(e)
             out["mcp_ok"] = False
