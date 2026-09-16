@@ -1183,6 +1183,15 @@ async def _dispatch_command(chat_id: str, text: str):
                  "",
                  "Получено:",
                  f"<code>{_json.dumps(res.get('response', res.get('error', '')), ensure_ascii=False)[:900]}</code>"]
+        st = res.get("styles")
+        if st:
+            lines += ["", "Стили Soul (модель подбирается по ним):"]
+            if st.get("ok"):
+                lines.append(f"нашлось {st['count']}, первый: "
+                             f"<code>{st['first'].get('id')}</code> "
+                             f"{st['first'].get('name', '')}")
+            else:
+                lines.append(f"каталог не отдался: {st.get('error')}")
         await send_message(chat_id, "\n".join(lines))
         return
 
