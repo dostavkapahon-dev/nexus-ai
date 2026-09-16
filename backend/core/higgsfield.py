@@ -184,6 +184,42 @@ def key_problem() -> str:
             "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx.")
 
 
+async def probe() -> dict:
+    """Один настоящий запрос к Higgsfield с полным ответом платформы.
+
+    Отчёты показывали обрезанное «Higgsfield вернул 400: Unavailabl…», и по
+    такому куску чинить нечего: непонятно даже, о какой модели речь, если поля
+    `model` мы не отправляем вовсе. Здесь ответ показывается целиком — статус,
+    тело, адрес и то, какие заголовки ушли (имена, не значения).
+    """
+    problem = key_problem()
+    if problem:
+        return {"ok": False, "stage": "ключ", "error": problem}
+
+    body = {"prompt": "test", "width_and_height": SIZES["9:16"],
+            "quality": "1080p", "batch_size": 1, "enhance_prompt": False}
+    out = {"ok": False, "stage": "запрос", "sent": body,
+           "headers": sorted(_headers().keys())}
+    for base in _bases():
+        url = f"{base}{PATH_IMAGE}"
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.post(url, headers=_headers(), json={"params": body})
+        except Exception as e:
+            out.update(base=url, error=f"{type(e).__name__}: {str(e)[:200]}")
+            continue
+        try:
+            data = r.json()
+        except Exception:
+            data = r.text[:600]
+        out.update(base=url, status=r.status_code,
+                   response=data if isinstance(data, (dict, list)) else str(data)[:600])
+        if r.status_code < 400:
+            out.update(ok=True, stage="принято")
+        return out
+    return out
+
+
 def size_for(ratio: str) -> str:
     return SIZES.get((ratio or "").strip(), SIZES["9:16"])
 

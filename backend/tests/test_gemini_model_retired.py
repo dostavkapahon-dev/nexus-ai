@@ -88,3 +88,55 @@ def test_no_models_left_after_avoid(monkeypatch):
 
     monkeypatch.setattr("httpx.get", lambda *a, **kw: _Resp())
     assert r.resolve_gemini_model(avoid="gemini-2.5-flash-lite") is None
+
+
+@pytest.mark.asyncio
+async def test_search_follows_the_replacement_hint(monkeypatch):
+    """Поиск не должен умирать вместе с очередной снятой моделью.
+
+    С живого сервера: «google: 404 models/gemini-2.5-flash-lite is no longer
+    available… use models/gemini-3.5-flash-lite». Замена названа самим Google —
+    её и берём.
+    """
+    from core import websearch
+    tried = []
+
+    class _Web:
+        uri = "https://example.test/a"
+        title = "Статья"
+
+    class _Chunk:
+        web = _Web()
+
+    class _Meta:
+        grounding_chunks = [_Chunk()]
+
+    class _Cand:
+        grounding_metadata = _Meta()
+
+    class _Resp:
+        candidates = [_Cand()]
+
+    class _Model:
+        def __init__(self, name, **kw):
+            self.name = name
+
+        def generate_content(self, prompt):
+            tried.append(self.name)
+            if self.name == "gemini-2.5-flash-lite":
+                raise RuntimeError(
+                    "404 This model models/gemini-2.5-flash-lite is no longer "
+                    "available to new users. Please update your code to use "
+                    "models/gemini-3.5-flash-lite for the latest features")
+            return _Resp()
+
+    import google.generativeai as genai
+    monkeypatch.setattr(genai, "configure", lambda **k: None)
+    monkeypatch.setattr(genai, "GenerativeModel", _Model)
+    monkeypatch.setattr("core.ai_router.resolve_gemini_model",
+                        lambda avoid="": "gemini-2.5-flash-lite")
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+
+    items = await websearch._search_gemini("тренды", 3)
+    assert tried == ["gemini-2.5-flash-lite", "gemini-3.5-flash-lite"]
+    assert items[0]["url"] == "https://example.test/a"
