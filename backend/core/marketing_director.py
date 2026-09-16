@@ -430,6 +430,11 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
         # остаются только внутри дирижёра и до человека не доходят.
         if name in ("make_image", "make_video") and result.get("url"):
             step["media_url"] = result["url"]
+            # Идентификатор артефакта идёт вместе с результатом: по нему видно,
+            # что файл уже сохранён, и его можно отправить заново, если чат
+            # не принял.
+            if result.get("artifact_id"):
+                step["artifact_id"] = result["artifact_id"]
             # Кто именно нарисовал кадр и по какому тексту. Без этого человек
             # видит картинку «не по своим словам» и не может понять, почему:
             # цепочка могла уйти на запасной бесплатный генератор.
@@ -511,6 +516,11 @@ async def _run_director_gemini(goal: str, context: str = "", max_steps: int = 12
                          "cost": result.get("cost")})
         if tool in ("make_image", "make_video") and result.get("url"):
             step["media_url"] = result["url"]
+            # Идентификатор артефакта идёт вместе с результатом: по нему видно,
+            # что файл уже сохранён, и его можно отправить заново, если чат
+            # не принял.
+            if result.get("artifact_id"):
+                step["artifact_id"] = result["artifact_id"]
             # Кто именно нарисовал кадр и по какому тексту. Без этого человек
             # видит картинку «не по своим словам» и не может понять, почему:
             # цепочка могла уйти на запасной бесплатный генератор.
