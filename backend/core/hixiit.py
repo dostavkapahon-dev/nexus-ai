@@ -958,6 +958,21 @@ async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
             from core import model_registry
             await model_registry.mark_result(
                 "higgsfield", model, got, str(res.get("error", ""))[:300])
+
+        # Созданное записывается ДО всякой доставки. Прежний порядок —
+        # «сгенерировали и сразу отправили» — терял результат целиком, если
+        # отправка не прошла: ссылка провайдера живёт недолго, а кредиты уже
+        # списаны. Теперь у результата есть свой идентификатор, по которому его
+        # можно найти и отправить заново.
+        if got:
+            from core import artifacts
+            from core.cost_tracker import current_task_id
+            res["artifact_id"] = await artifacts.save(
+                url=res["url"], kind=res.get("kind") or cap,
+                task_id=current_task_id.get(), provider=res.get("provider", ""),
+                model=model, prompt=task,
+                external_job=str(res.get("job_id") or ""),
+                note=str(res.get("note") or ""))
     except Exception as e:
         print(f"[NEXUS] реестр не записал генерацию: {type(e).__name__}: "
               f"{str(e)[:120]}", flush=True)

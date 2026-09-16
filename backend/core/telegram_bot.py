@@ -1162,6 +1162,17 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines))
         return
 
+    if cmd in ("results", "artifacts", "rezultaty"):
+        from core import artifacts
+        rows = await artifacts.recent(limit=8)
+        lost = await artifacts.undelivered()
+        text = artifacts.as_text(rows)
+        if lost:
+            text += (f"\n\n⚠️ Не дошло до чата: {len(lost)}. "
+                     "Файлы сохранены — перешлю по запросу.")
+        await send_message(chat_id, text)
+        return
+
     if cmd in ("models", "modeli"):
         # Каталог показывается не из кода, а из реестра: там записано то, что
         # назвал сам провайдер, и что из этого подтверждено генерацией.
@@ -1883,13 +1894,26 @@ async def _send_director_media(chat_id: str, res: dict):
         # от запасного бесплатного генератора неотличим от кадра Higgsfield,
         # и жалоба «получилось не по моим словам» неразрешима.
         caption = _media_caption(step)
+        art_id = step.get("artifact_id") or ""
         try:
             if step["action"] == "make_video":
                 await send_video(chat_id, url, caption)
             else:
                 await send_photo(chat_id, url, caption)
+            if art_id:
+                from core import artifacts
+                await artifacts.mark(art_id, telegram="доставлено")
         except Exception as e:
-            await send_message(chat_id, f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>")
+            # Файл не пропал: он записан артефактом до отправки, и его можно
+            # найти и отправить заново. Раньше здесь оставалась только ссылка,
+            # а с ней — риск потерять результат совсем.
+            if art_id:
+                from core import artifacts
+                await artifacts.mark(art_id, telegram=f"не доставлено: {str(e)[:120]}")
+            await send_message(
+                chat_id,
+                f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>"
+                + (f"\nСохранено как <b>{art_id}</b> — не потеряется" if art_id else ""))
 
 
 def _model_rows(models: list, prefix: str, current: str) -> list:
