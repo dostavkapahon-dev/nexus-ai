@@ -205,6 +205,7 @@ async def setup_bot_commands():
         {"command": "models", "description": "Каталог моделей и что проверено"},
         {"command": "drive", "description": "Google Drive: проверка архива"},
         {"command": "providers", "description": "Подключения: что доказано работой"},
+        {"command": "resend", "description": "Прислать созданное заново"},
         {"command": "setup", "description": "Настройка: что осталось подключить"},
         {"command": "autopost", "description": "Автоматика: расписание и автопубликация"},
         {"command": "hixiit", "description": "HIXIIT: генеративный слой и кредиты"},
@@ -1197,6 +1198,23 @@ async def _dispatch_command(chat_id: str, text: str):
                 f"Аккаунт: <code>{res.get('email', '')}</code>")
         return
 
+    if cmd in ("resend", "poslat"):
+        # Повтор доставки, а не генерации: файл уже создан и оплачен.
+        from core import artifacts
+        art_id = text.split(maxsplit=1)[1].strip() if " " in text else ""
+        if not art_id:
+            lost = await artifacts.undelivered()
+            if not lost:
+                await send_message(chat_id, "Всё созданное уже доставлено.")
+                return
+            art_id = lost[0]["id"]
+        await send_message(chat_id, f"📦 Отправляю заново {art_id} "
+                                    "(генерация не повторяется)…")
+        res = await artifacts.redeliver(art_id, chat_id)
+        if not res["ok"]:
+            await send_message(chat_id, f"❌ не вышло: {res['error']}")
+        return
+
     if cmd in ("results", "artifacts", "rezultaty"):
         from core import artifacts
         rows = await artifacts.recent(limit=8)
@@ -1945,10 +1963,15 @@ async def _send_director_media(chat_id: str, res: dict):
             if art_id:
                 from core import artifacts
                 await artifacts.mark(art_id, telegram=f"не доставлено: {str(e)[:120]}")
+            # Что именно сломалось и что повторять. Сбой доставки не должен
+            # выглядеть как повод генерировать заново — это чужие деньги.
+            from core import failures
+            verdict = failures.explain(e)
             await send_message(
                 chat_id,
-                f"🔗 {url}\n<i>(не удалось отправить файлом: {str(e)[:80]})</i>"
-                + (f"\nСохранено как <b>{art_id}</b> — не потеряется" if art_id else ""))
+                f"🔗 {url}\n<i>{verdict['why']}: {str(e)[:80]}</i>"
+                + (f"\nСохранено как <b>{art_id}</b> — {verdict['action']}."
+                   f"\nПовторить: <code>/resend {art_id}</code>" if art_id else ""))
 
 
 def _model_rows(models: list, prefix: str, current: str) -> list:
