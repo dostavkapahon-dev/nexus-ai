@@ -25,7 +25,10 @@ async def test_image_goes_through_hixiit_first(client, monkeypatch):
 
     assert url == "https://cdn/hf.png"
     assert called["kind"] == "image"
-    assert called["ratio"] == "9:16", "вертикальный формат для Instagram"
+    # Кадр в ленту Instagram — 4:5, а не 9:16: это требование площадки, и
+    # именно его теперь отдаёт core.formats. Раньше сюда уходил вертикальный
+    # сторис-формат, и пост обрезался.
+    assert called["ratio"] == "4:5", "формат ленты Instagram"
     assert called["allow_free"] is False, "бесплатная подмена здесь только запутает"
 
 

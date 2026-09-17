@@ -103,13 +103,26 @@ def _create_kb() -> dict:
 
 
 def _platform_kb(kind: str) -> dict:
-    """Шаг 2: для какой площадки."""
-    return {"inline_keyboard": [
-        [{"text": "Instagram", "callback_data": f"pf_{kind}_instagram"},
-         {"text": "TikTok", "callback_data": f"pf_{kind}_tiktok"}],
-        [{"text": "Telegram", "callback_data": f"pf_{kind}_telegram"},
-         {"text": "YouTube", "callback_data": f"pf_{kind}_youtube"}],
-    ]}
+    """Шаг 2: для какой площадки. На кнопке — сразу формат этой площадки.
+
+    Формат берётся из core.formats, а не пишется здесь руками: кнопка и
+    генерация должны обещать одно и то же. Shorts и VK Клипы раньше выбрать
+    было нельзя вовсе, хотя формат у них свой.
+    """
+    from core import formats
+    rows, row = [], []
+    for code, title in formats.PLATFORMS:
+        s = formats.spec(code, kind)
+        mark = f"{title} · {s['ratio']}"
+        if s["seconds"]:
+            mark += f" · {s['seconds']}с"
+        row.append({"text": mark, "callback_data": f"pf_{kind}_{code}"})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return {"inline_keyboard": rows}
 
 
 async def _answer_callback(callback_id: str, text: str = ""):
@@ -2191,10 +2204,15 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
               "carousel": "Карусель"}
     goal = f"{titles.get(kind, 'Контент')}: {real_topic or 'тема по трендам'}"
 
+    # Формат называем до генерации: «не тот формат» должно быть видно раньше,
+    # чем потрачены кредиты, а не после получения кадра.
+    from core import formats
+    fmt = formats.describe(platform, kind) if platform else "формат по площадкам"
     await send_message(chat_id,
                        f"🎬 <b>План готов</b>\n"
                        f"{titles.get(kind, 'Контент')} · {platform or 'все площадки'} · "
                        f"{real_topic or 'тема по трендам'}\n"
+                       f"Формат: {fmt}\n"
                        f"Запускаю. Готовое пришлю на согласование.")
 
     factory_args = {"topic": real_topic, "platforms": platforms, "dry_run": False,

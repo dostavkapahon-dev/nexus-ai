@@ -237,10 +237,15 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
 
     from core.media_generator import generate_image, generate_clip
 
+    # Кадры делаем под ту площадку, которую выбрал человек. Раньше во всех трёх
+    # вызовах площадка была жёстко задана инстаграмом — что бы ни нажали
+    # кнопкой, формат кадра получался один и тот же.
+    target = (platforms[0] if platforms else "instagram")
+
     # 3a. Обложка
     try:
         cover = await generate_image(brief.get("cover_prompt") or plan.get("image_prompt")
-                                     or cover_prompt(plan.get("hook_text", "")), platform="instagram")
+                                     or cover_prompt(plan.get("hook_text", "")), platform=target)
         report["assets"]["cover"] = cover
         report["steps"].append({"step": "cover", "ok": bool(cover)})
     except Exception as e:
@@ -271,7 +276,7 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             prompt_full = (f"{slide['image_prompt']}. Единый стиль серии: {style}"
                            if style else slide["image_prompt"])
             try:
-                img = await generate_image(prompt_full, platform="instagram")
+                img = await generate_image(prompt_full, platform=target)
             except Exception:
                 img = ""
             frames.append({"n": slide.get("n"), "role": slide.get("role"),
@@ -287,7 +292,7 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             prompt_full = (f"{prompt_img}. Единый стиль серии: {style}"
                            if style else prompt_img)
             try:
-                img = await generate_image(prompt_full, platform="instagram")
+                img = await generate_image(prompt_full, platform=target)
             except Exception:
                 img = ""
             frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
