@@ -189,6 +189,11 @@ app.include_router(social_public_router)
 # Desktop agent — WebSocket must be outside auth dependency
 app.include_router(desktop_router)
 
+# Возврат после входа в Higgsfield. Без пароля: сюда человека присылает сама
+# платформа, и подлинность проверяется по state, а не по нашей сессии.
+from api.routes_mcp import router as mcp_router
+app.include_router(mcp_router)
+
 @app.get("/api/health")
 async def health():
     """Лёгкий health-эндпоинт для внешней «пробуждалки» (UptimeRobot и т.п.),

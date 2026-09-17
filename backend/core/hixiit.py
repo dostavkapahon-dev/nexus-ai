@@ -147,8 +147,19 @@ BROWSER_STATUS_TIMEOUT = 6.0
 STORE_STATUS_TIMEOUT = 6.0
 
 
+def mcp_url() -> str:
+    """Адрес MCP. Официальный — умолчание, а не обязательная переменная.
+
+    После входа по OAuth требовать от человека ещё и вписать адрес руками —
+    лишний шаг, на котором «подключил, а не работает» случалось каждый раз.
+    """
+    return (os.getenv("HIGGSFIELD_MCP_URL", "").strip()
+            or (OFFICIAL_MCP_URL if os.getenv("HIGGSFIELD_MCP_TOKEN", "").strip()
+                else ""))
+
+
 def mcp_configured() -> bool:
-    return bool(os.getenv("HIGGSFIELD_MCP_URL"))
+    return bool(mcp_url())
 
 
 def mcp_address_note() -> str:
@@ -192,9 +203,11 @@ async def _mcp_session():
     рабочий вызов: вторая копия логики подключения рано или поздно разойдётся с
     первой, и тогда «проверка зелёная, а генерация падает».
     """
-    url = os.getenv("HIGGSFIELD_MCP_URL", "")
+    url = mcp_url()
     if not url:
-        raise RuntimeError("HIGGSFIELD_MCP_URL не задан")
+        raise RuntimeError(
+            "MCP не подключён: нет ни HIGGSFIELD_MCP_URL, ни выполненного "
+            "входа. Войти — команда /hfconnect")
 
     # Импорт ленивый и защищённый: сломанная сборка mcp/cryptography роняет
     # интерпретатор через pyo3 PanicException, а она НЕ наследуется от Exception
@@ -247,7 +260,23 @@ async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
         async with _mcp_session() as session:
             return _unwrap(await session.call_tool(tool, args))
 
-    return await asyncio.wait_for(_run(), timeout=timeout)
+    try:
+        return await asyncio.wait_for(_run(), timeout=timeout)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        # Истёкший доступ — не повод звать человека: ради этого и хранится
+        # refresh-токен. Продлеваем молча и повторяем ровно один раз.
+        text = str(e).lower()
+        if not any(m in text for m in ("401", "unauthorized", "invalid_token",
+                                       "token expired")):
+            raise
+        from core import mcp_oauth
+        again = await mcp_oauth.refresh()
+        if not again.get("ok"):
+            raise RuntimeError(
+                f"доступ MCP истёк и не продлился: {again.get('error', '')}. "
+                "Войдите заново: /hfconnect") from None
+        return await asyncio.wait_for(_run(), timeout=timeout)
 
 
 async def mcp_probe(timeout: float = 30.0) -> dict:

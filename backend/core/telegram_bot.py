@@ -1208,6 +1208,41 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines))
         return
 
+    if cmd in ("hfconnect", "hflogin", "mcpconnect"):
+        # §13 ТЗ: человек входит один раз, дальше MCP работает на сервере сам.
+        from core import mcp_oauth
+        await send_message(chat_id, "🔑 Готовлю вход в Higgsfield…")
+        res = await mcp_oauth.start()
+        if not res.get("ok"):
+            await send_message(chat_id,
+                               "❌ Не получилось начать вход:\n"
+                               f"{res.get('error', '')}")
+            return
+        await send_message(
+            chat_id,
+            "🔥 <b>Вход в Higgsfield</b>\n\n"
+            f'<a href="{res["url"]}">Открыть страницу входа</a>\n\n'
+            "Войдите своим аккаунтом и разрешите доступ. После этого вкладку "
+            "можно закрыть — токен останется на сервере, и генерация пойдёт "
+            "через MCP без вашего участия.\n\n"
+            f"Адрес возврата: <code>{res['redirect']}</code>")
+        return
+
+    if cmd in ("hfstate", "mcpstate"):
+        from core import mcp_oauth
+        st = await mcp_oauth.state()
+        lines = ["🔥 <b>Higgsfield MCP</b>",
+                 f"Сервер: <code>{st['server']}</code>",
+                 f"Вход выполнен: {'да' if st['connected'] else 'нет'}",
+                 f"Продлевается сам: {'да' if st['refreshable'] else 'нет'}",
+                 f"Адрес возврата: <code>{st['redirect'] or 'не задан'}</code>"]
+        if not st["redirect"]:
+            lines.append("\nЗадайте NEXUS_PUBLIC_URL — адрес сервиса на Render.")
+        if not st["connected"]:
+            lines.append("\nВойти: /hfconnect")
+        await send_message(chat_id, "\n".join(lines))
+        return
+
     if cmd in ("routes", "marshrut", "router"):
         # §6/§14/§36: каким каналом система будет выполнять генерацию и почему.
         # Порядок считается из режима, настроенности, остывания и истории.
