@@ -704,9 +704,18 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     params = {"model": model_id, "prompt": prompt_for(model_id, task)[:1500],
               "aspect_ratio": ratio, "count": 1}
 
-    # Безлимит тратим, только когда он есть и покрывает выбранную модель:
-    # иначе платформа вернёт отказ вместо генерации.
-    unlim = await unlim_status()
+    # Качество отправляем, только если человек выбрал его руками. При «auto»
+    # своё умолчание у платформы точнее нашего: у разных моделей разные шкалы
+    # (720p/1080p у одних, 1.5k/2k у других), и навязанное значение — это отказ
+    # вместо кадра.
+    want_quality = await frame_quality()
+    if want_quality != "auto":
+        params["quality"] = want_quality
+
+    # Безлимит тратим, только когда он есть, покрывает выбранную модель и его
+    # не выключили руками: иначе платформа вернёт отказ вместо генерации.
+    allow_unlim = await use_unlim()
+    unlim = await unlim_status() if allow_unlim else {"available": False}
     swapped_from = ""
     if unlim.get("available"):
         covered = unlim.get("models") or []
@@ -1054,7 +1063,14 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                              force: bool = False) -> dict:
     """Одна попытка генерации по цепочке путей. Никогда не бросает."""
     kind = detect_kind(task, kind)
-    ratio = ratio or detect_ratio(task)
+    # Порядок неслучаен. Явный аргумент — это «сделай для YouTube», он главнее
+    # всего. Дальше настройка, выбранная руками в /hf. И только потом догадка
+    # по словам задачи: она самая слабая, потому что «вертикально» в тексте
+    # может и не быть.
+    if not ratio:
+        chosen_format = await frame_format()
+        ratio = (chosen_format if chosen_format != "auto"
+                 else detect_ratio(task))
     tried = []
     mode = await execution_mode()
     quality = await quality_mode()
@@ -1191,6 +1207,16 @@ MODES = ("auto", "mcp", "api", "browser")
 # Режим качества — отдельная ось от канала (§10/§17 ТЗ). Канал отвечает на
 # вопрос «через что», режим качества — «чем жертвуем при равной пригодности».
 QUALITY_KEY = "hixiit_quality_mode"
+
+# Настройки кадра, выбранные человеком. Хранятся тем же способом, что режимы:
+# KV в таблице Connection — переживает перезапуск и не требует миграции схемы.
+FORMAT_KEY = "hixiit_frame_format"
+FRAME_QUALITY_KEY = "hixiit_frame_quality"
+UNLIM_KEY = "hixiit_use_unlim"
+
+# Соотношения берём из core.formats, чтобы список был один на всю систему:
+# второй перечень рано или поздно разойдётся с первым.
+FRAME_QUALITIES = ("auto", "720p", "1080p", "2k")
 
 
 async def browser_available(quick: bool = False) -> dict:
@@ -1385,6 +1411,87 @@ async def set_execution_mode(value: str) -> bool:
         else:
             db.add(Connection(key_name=MODE_KEY, key_value=value))
         await db.commit()
+    return True
+
+
+async def _kv(key: str, env: str = "") -> str:
+    """Значение настройки: база важнее окружения, пусто — значит не задано."""
+    try:
+        from sqlalchemy import select
+        from database.db import AsyncSessionLocal
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(
+                Connection.key_name == key))
+            row = r.scalar_one_or_none()
+        value = (row.key_value or "").strip() if row else ""
+    except Exception:
+        value = ""
+    if not value and env:
+        value = os.getenv(env, "").strip()
+    return value
+
+
+async def _kv_put(key: str, value: str) -> None:
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=key, key_value=value))
+        await db.commit()
+
+
+def frame_formats() -> tuple:
+    """Соотношения, из которых можно выбирать. Список один на всю систему."""
+    from core.formats import PIXELS
+    return ("auto",) + tuple(PIXELS.keys())
+
+
+async def frame_format() -> str:
+    """Соотношение сторон, выбранное руками. `auto` — решает площадка/задача."""
+    value = (await _kv(FORMAT_KEY, "NEXUS_FRAME_FORMAT")).lower()
+    return value if value in frame_formats() else "auto"
+
+
+async def set_frame_format(value: str) -> bool:
+    value = (value or "auto").strip().lower()
+    if value not in frame_formats():
+        return False
+    await _kv_put(FORMAT_KEY, value)
+    return True
+
+
+async def frame_quality() -> str:
+    """Качество кадра. `auto` — не отправляем вовсе, платформа берёт своё."""
+    value = (await _kv(FRAME_QUALITY_KEY, "NEXUS_FRAME_QUALITY")).lower()
+    return value if value in FRAME_QUALITIES else "auto"
+
+
+async def set_frame_quality(value: str) -> bool:
+    value = (value or "auto").strip().lower()
+    if value not in FRAME_QUALITIES:
+        return False
+    await _kv_put(FRAME_QUALITY_KEY, value)
+    return True
+
+
+async def use_unlim() -> bool:
+    """Тратить ли безлимит. По умолчанию да.
+
+    Не использовать выданный безлимит — значит зря списывать кредиты, поэтому
+    выключение должно быть осознанным действием, а не умолчанием.
+    """
+    value = (await _kv(UNLIM_KEY, "NEXUS_USE_UNLIM")).lower()
+    return value not in ("0", "off", "no", "false", "нет")
+
+
+async def set_use_unlim(on: bool) -> bool:
+    await _kv_put(UNLIM_KEY, "1" if on else "0")
     return True
 
 

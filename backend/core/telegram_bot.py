@@ -380,6 +380,7 @@ async def _provider_lines() -> list:
 # Человеческие имена режимов Higgsfield — в одном месте, чтобы подпись в статусе
 # и подтверждение при переключении не разъезжались.
 MODE_NAMES = {"auto": "автоматически", "mcp": "только MCP",
+              "api": "только API по ключу",
               "browser": "через браузер в аккаунте"}
 
 
@@ -1254,6 +1255,40 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines))
         return
 
+    if cmd in ("hf", "higgs", "хигсфилд"):
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd.startswith("hffmt_"):
+        from core.hixiit import set_frame_format
+        value = cmd[len("hffmt_"):]
+        if not await set_frame_format(value):
+            await send_message(chat_id, "Такого формата нет.")
+            return
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd.startswith("hfq_"):
+        from core.hixiit import set_frame_quality
+        value = cmd[len("hfq_"):]
+        if not await set_frame_quality(value):
+            await send_message(chat_id, "Такого качества нет.")
+            return
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd in ("hfunlim_on", "hfunlim_off"):
+        from core.hixiit import set_use_unlim
+        await set_use_unlim(cmd.endswith("_on"))
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd == "hfgen":
+        # Генерация текущими настройками — чтобы проверить выбор сразу, не
+        # вспоминая отдельную команду.
+        await _dispatch_command(chat_id, "/image кадр по текущим настройкам")
+        return
+
     if cmd in ("routes", "marshrut", "router"):
         # §6/§14/§36: каким каналом система будет выполнять генерацию и почему.
         # Порядок считается из режима, настроенности, остывания и истории.
@@ -2121,6 +2156,68 @@ def _model_rows(models: list, prefix: str, current: str) -> list:
         rows.append([{"text": f"{mark}{m['label']}"[:60],
                       "callback_data": f"{prefix}{m['value']}"}])
     return rows
+
+
+async def _show_hf_panel(chat_id: str):
+    """Один экран Higgsfield: что выбрано сейчас и чем это переключить.
+
+    До него управление было размазано: модели в /model, канал в /hixiit,
+    качество текстовой командой, а формат вообще не выбирался. Человек не мог
+    ответить на простой вопрос «чем и в каком виде сейчас будет сделан кадр».
+    """
+    from core.hixiit import (execution_mode, preferred_model, frame_format,
+                             frame_quality, use_unlim, unlim_status,
+                             frame_formats, FRAME_QUALITIES, mcp_configured)
+
+    mode = await execution_mode()
+    fmt = await frame_format()
+    quality = await frame_quality()
+    unlim_on = await use_unlim()
+    cur_img = await preferred_model("image")
+    cur_vid = await preferred_model("video")
+
+    lines = ["🔥 <b>Higgsfield</b>", "",
+             f"🔌 Канал: <b>{MODE_NAMES.get(mode, mode)}</b>",
+             f"🎨 Модель фото: <b>{cur_img or 'AUTO'}</b>",
+             f"🎬 Модель видео: <b>{cur_vid or 'AUTO'}</b>",
+             f"📐 Формат: <b>{fmt}</b>"
+             + (" (решает площадка или задача)" if fmt == "auto" else ""),
+             f"⚙️ Качество: <b>{quality}</b>"
+             + (" (умолчание платформы)" if quality == "auto" else "")]
+
+    # Безлимит спрашиваем у платформы, а не показываем настройку как факт:
+    # включённый переключатель и выданное платформой право — разные вещи.
+    if not unlim_on:
+        lines.append("♾ Безлимит: <b>выключен вами</b> — генерации спишут кредиты")
+    elif not mcp_configured():
+        lines.append("♾ Безлимит: неизвестно — нужен вход, /hfconnect")
+    else:
+        st = await unlim_status()
+        if st.get("available"):
+            left = st.get("remaining")
+            lines.append(f"♾ Безлимит: <b>есть</b>"
+                         + (f", осталось {left}" if left is not None else ""))
+        else:
+            lines.append(f"♾ Безлимит: нет — {st.get('reason', 'причина неизвестна')}")
+
+    fmt_row = [{"text": ("• " + f if f == fmt else f),
+                "callback_data": f"hffmt_{f}"} for f in frame_formats()]
+    q_row = [{"text": ("• " + q if q == quality else q),
+              "callback_data": f"hfq_{q}"} for q in FRAME_QUALITIES]
+    kb = {"inline_keyboard": [
+        [{"text": "🎨 Модель фото", "callback_data": "model"},
+         {"text": "🎬 Модель видео", "callback_data": "model"}],
+        fmt_row[:3], fmt_row[3:],
+        q_row,
+        [{"text": ("♾ Безлимит: вкл" if unlim_on else "♾ Безлимит: выкл"),
+          "callback_data": "hfunlim_off" if unlim_on else "hfunlim_on"}],
+        [{"text": "🔌 Авто", "callback_data": "hfmode_auto"},
+         {"text": "MCP", "callback_data": "hfmode_mcp"},
+         {"text": "Браузер", "callback_data": "hfmode_browser"}],
+        [{"text": "▶️ Сгенерировать кадр", "callback_data": "hfgen"}],
+    ]}
+    kb["inline_keyboard"] = [row for row in kb["inline_keyboard"] if row]
+    await send_message(chat_id, "\n".join(lines), reply_markup=kb)
 
 
 async def _show_model_menu(chat_id: str):
