@@ -124,8 +124,11 @@ async def check_hixiit(deep: bool = False) -> dict:
             return _ok(name, f"{route}; картинка получалась {proof['when']} UTC",
                        proof.get("evidence") or "подтверждено реестром", t)
         if proof["state"] == "no":
+            # Причина здесь — это список из трёх путей с их отказами, и обрезка
+            # съедала ровно хвост: «Браузер: Chromium установлен, но не з…».
+            # Именно он и нужен, чтобы чинить. В сообщение Telegram влезает.
             return _fail(name, f"{route}, но последняя генерация не удалась: "
-                               f"{proof['why'][:200]}", "", t)
+                               f"{proof['why'][:900]}", "", t)
         res = _ok(name, route, "доступ подтверждён; генерация ни разу не "
                                "проверялась — запустите /system_test deep", t)
         res["warn"] = True

@@ -43,12 +43,18 @@ def _client(monkeypatch, status, payload):
             _C.sent = json
             return _R()
 
+        async def get(self, url, headers=None):
+            # Каталог стилей: probe спрашивает его, когда платформа не
+            # смогла подобрать модель.
+            return _R()
+
     monkeypatch.setattr("httpx.AsyncClient", _C)
     return _C
 
 
 @pytest.mark.asyncio
 async def test_full_error_body_is_returned(monkeypatch):
+    hf._styles_cache = []
     _client(monkeypatch, 400, {"detail": "Unavailable model for this account"})
     res = await hf.probe()
     assert res["ok"] is False

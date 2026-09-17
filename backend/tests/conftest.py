@@ -85,10 +85,14 @@ def _forget_failed_paths():
     стоит пробовать заново на каждой задаче. Но между тестами оно протекает —
     отказ в одном тесте молча менял поведение следующего.
     """
-    from core import hixiit
+    from core import hixiit, websearch
     hixiit._COLD.clear()
+    # То же самое для поиска: недоступный источник запоминается на минуты,
+    # и без очистки один тест решал за следующий, какие источники живы.
+    websearch._DEAD.clear()
     yield
     hixiit._COLD.clear()
+    websearch._DEAD.clear()
 
 
 def pytest_sessionfinish(session, exitstatus):

@@ -110,7 +110,11 @@ async def generate_image_ex(prompt: str, provider: str = "auto",
     """
     asked = prompt
     why = ""          # причина, по которой пришлось уйти от основного пути
-    size = "1080x1920" if platform in ("tiktok", "instagram", "youtube") else "1080x1080"
+    # Формат — требование площадки, а не догадка по её названию. Прежняя
+    # строка делала горизонтальный YouTube вертикальным, а пост в Instagram —
+    # квадратом: оба кадра приходилось переснимать.
+    from core import formats
+    size = formats.size_for(platform, "image")
     prompt = await enrich_image_prompt(prompt)
 
     # HIXIIT (Higgsfield) — основной генеративный слой: он сам подбирает модель
@@ -122,7 +126,7 @@ async def generate_image_ex(prompt: str, provider: str = "auto",
         try:
             from core.hixiit import generate as hixiit_generate
             res = await hixiit_generate(prompt, kind="image",
-                                        ratio="9:16" if size == "1080x1920" else "1:1",
+                                        ratio=formats.ratio_for(platform, "image"),
                                         allow_free=False)
         except Exception as e:
             res = {"ok": False, "error": str(e)[:200]}

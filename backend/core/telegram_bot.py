@@ -103,13 +103,26 @@ def _create_kb() -> dict:
 
 
 def _platform_kb(kind: str) -> dict:
-    """Шаг 2: для какой площадки."""
-    return {"inline_keyboard": [
-        [{"text": "Instagram", "callback_data": f"pf_{kind}_instagram"},
-         {"text": "TikTok", "callback_data": f"pf_{kind}_tiktok"}],
-        [{"text": "Telegram", "callback_data": f"pf_{kind}_telegram"},
-         {"text": "YouTube", "callback_data": f"pf_{kind}_youtube"}],
-    ]}
+    """Шаг 2: для какой площадки. На кнопке — сразу формат этой площадки.
+
+    Формат берётся из core.formats, а не пишется здесь руками: кнопка и
+    генерация должны обещать одно и то же. Shorts и VK Клипы раньше выбрать
+    было нельзя вовсе, хотя формат у них свой.
+    """
+    from core import formats
+    rows, row = [], []
+    for code, title in formats.PLATFORMS:
+        s = formats.spec(code, kind)
+        mark = f"{title} · {s['ratio']}"
+        if s["seconds"]:
+            mark += f" · {s['seconds']}с"
+        row.append({"text": mark, "callback_data": f"pf_{kind}_{code}"})
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    return {"inline_keyboard": rows}
 
 
 async def _answer_callback(callback_id: str, text: str = ""):
@@ -1183,7 +1196,86 @@ async def _dispatch_command(chat_id: str, text: str):
                  "",
                  "Получено:",
                  f"<code>{_json.dumps(res.get('response', res.get('error', '')), ensure_ascii=False)[:900]}</code>"]
+        st = res.get("styles")
+        if st:
+            lines += ["", "Стили Soul (модель подбирается по ним):"]
+            if st.get("ok"):
+                lines.append(f"нашлось {st['count']}, первый: "
+                             f"<code>{st['first'].get('id')}</code> "
+                             f"{st['first'].get('name', '')}")
+            else:
+                lines.append(f"каталог не отдался: {st.get('error')}")
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("hfconnect", "hflogin", "mcpconnect"):
+        # §13 ТЗ: человек входит один раз, дальше MCP работает на сервере сам.
+        from core import mcp_oauth
+        await send_message(chat_id, "🔑 Готовлю вход в Higgsfield…")
+        res = await mcp_oauth.start()
+        if not res.get("ok"):
+            await send_message(chat_id,
+                               "❌ Не получилось начать вход:\n"
+                               f"{res.get('error', '')}")
+            return
+        await send_message(
+            chat_id,
+            "🔥 <b>Вход в Higgsfield</b>\n\n"
+            f'<a href="{res["url"]}">Открыть страницу входа</a>\n\n'
+            "Войдите своим аккаунтом и разрешите доступ. После этого вкладку "
+            "можно закрыть — токен останется на сервере, и генерация пойдёт "
+            "через MCP без вашего участия.\n\n"
+            f"Адрес возврата: <code>{res['redirect']}</code>")
+        return
+
+    if cmd in ("hfstate", "mcpstate"):
+        from core import mcp_oauth
+        st = await mcp_oauth.state()
+        lines = ["🔥 <b>Higgsfield MCP</b>",
+                 f"Сервер: <code>{st['server']}</code>",
+                 f"Вход выполнен: {'да' if st['connected'] else 'нет'}",
+                 f"Продлевается сам: {'да' if st['refreshable'] else 'нет'}",
+                 f"Адрес возврата: <code>{st['redirect'] or 'не задан'}</code>"]
+        if not st["redirect"]:
+            lines.append("\nЗадайте NEXUS_PUBLIC_URL — адрес сервиса на Render.")
+        if not st["connected"]:
+            lines.append("\nВойти: /hfconnect")
+        await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("routes", "marshrut", "router"):
+        # §6/§14/§36: каким каналом система будет выполнять генерацию и почему.
+        # Порядок считается из режима, настроенности, остывания и истории.
+        from core import exec_router
+        from core.hixiit import (execution_mode, quality_mode, mcp_configured,
+                                 _cold)
+        from core.higgsfield import credentials as _creds
+        mode = await execution_mode()
+        quality = await quality_mode()
+        rows = await exec_router.order(
+            mode, quality,
+            {"mcp": mcp_configured(), "rest": bool(_creds()), "browser": True},
+            {c: _cold(c) for c in ("mcp", "rest", "browser")})
+        text = exec_router.as_text(rows)
+        text += f"\n\nРежим канала: <b>{mode}</b> · режим качества: <b>{quality}</b>"
+        text += "\nСменить: /quality fast|quality|economy|auto"
+        await send_message(chat_id, text)
+        return
+
+    if cmd == "quality":
+        from core.hixiit import set_quality_mode, quality_mode
+        want = (args or "").strip().lower()
+        if not want:
+            await send_message(chat_id,
+                               f"Режим качества: <b>{await quality_mode()}</b>\n"
+                               "Варианты: auto, fast, quality, economy")
+            return
+        if await set_quality_mode(want):
+            await send_message(chat_id, f"✅ Режим качества: <b>{want}</b>")
+        else:
+            await send_message(chat_id,
+                               "Не знаю такого режима. Варианты: auto, fast, "
+                               "quality, economy")
         return
 
     if cmd in ("netcheck", "net", "set"):
@@ -2182,10 +2274,15 @@ async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
               "carousel": "Карусель"}
     goal = f"{titles.get(kind, 'Контент')}: {real_topic or 'тема по трендам'}"
 
+    # Формат называем до генерации: «не тот формат» должно быть видно раньше,
+    # чем потрачены кредиты, а не после получения кадра.
+    from core import formats
+    fmt = formats.describe(platform, kind) if platform else "формат по площадкам"
     await send_message(chat_id,
                        f"🎬 <b>План готов</b>\n"
                        f"{titles.get(kind, 'Контент')} · {platform or 'все площадки'} · "
                        f"{real_topic or 'тема по трендам'}\n"
+                       f"Формат: {fmt}\n"
                        f"Запускаю. Готовое пришлю на согласование.")
 
     factory_args = {"topic": real_topic, "platforms": platforms, "dry_run": False,

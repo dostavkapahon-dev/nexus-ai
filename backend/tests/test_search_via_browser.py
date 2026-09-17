@@ -132,7 +132,7 @@ async def test_browser_search_uses_a_reachable_index(monkeypatch):
     monkeypatch.setattr("core.browser_reader._open_text", fake_open)
     monkeypatch.setattr("core.browser_reader._extract", fake_extract)
     await websearch._search_browser("маркетинг", 2)
-    assert opened["url"].startswith("https://www.mojeek.com/search")
+    assert opened["url"].startswith("https://www.google.com/search")
 
 
 @pytest.mark.asyncio
@@ -149,7 +149,10 @@ async def test_robot_check_is_named_not_called_empty(monkeypatch):
     monkeypatch.setattr("core.browser_reader._open_text", fake_open)
     with pytest.raises(RuntimeError) as e:
         await websearch._search_browser("маркетинг", 2)
-    assert "проверку на робота" in str(e.value)
+    # Причина называется по каждому индексу: какой именно нас отбил — это и
+    # есть то, что чинят дальше.
+    assert "проверка на робота" in str(e.value)
+    assert "google" in str(e.value)
 
 
 @pytest.mark.asyncio
@@ -234,8 +237,10 @@ async def test_browser_search_does_not_wait_45_seconds(monkeypatch):
     monkeypatch.setattr("core.browser_reader._open_text", fake_open)
     monkeypatch.setattr("core.browser_reader._extract", fake_extract)
     await websearch._search_browser("маркетинг", 2)
-    assert opened["timeout_ms"] == 15000
-    assert "mojeek.com" in opened["url"]
+    # Двадцать секунд на индекс: их теперь несколько, и ждать бесконечно
+    # нельзя, но и пятнадцати живой выдаче не всегда хватало.
+    assert opened["timeout_ms"] == 20000
+    assert "google.com" in opened["url"], "первым — индекс, доступный с сервера"
 
 
 @pytest.mark.asyncio

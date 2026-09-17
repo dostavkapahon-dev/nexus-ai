@@ -36,6 +36,7 @@ _working_base: str = ""
 PATH_IMAGE = "/v1/text2image/soul"
 PATH_VIDEO = "/v1/image2video/dop"
 PATH_JOBSET = "/v1/job-sets/{id}"
+PATH_STYLES = "/v1/text2image/soul-styles"
 
 # Размеры кадра Soul: платформа принимает только этот список значений, поэтому
 # соотношение сторон переводим в разрешение, а не шлём «9:16».
@@ -216,6 +217,16 @@ async def probe() -> dict:
                    response=data if isinstance(data, (dict, list)) else str(data)[:600])
         if r.status_code < 400:
             out.update(ok=True, stage="принято")
+        elif _unavailable_model(str(data)):
+            # Тело схему прошло, а модель не подобралась. Единственное, что
+            # это объясняет у Soul, — отсутствие стиля. Спрашиваем каталог
+            # прямо здесь, чтобы в отчёт попал факт, а не догадка.
+            st = await soul_styles(force=True)
+            out["styles"] = ({"ok": True,
+                              "count": len(st["items"]),
+                              "first": st["items"][0]}
+                             if st.get("ok") else
+                             {"ok": False, "error": st.get("error")})
         return out
     return out
 
@@ -386,6 +397,73 @@ def _params_rejected(error: str) -> bool:
     return "400" in text or "422" in text
 
 
+_styles_cache: list[dict] = []
+
+
+def _unavailable_model(error: str) -> bool:
+    """Платформа не смогла подобрать модель Soul под запрос.
+
+    Это единственная ошибка, которую не чинит перебор качества: тело запроса
+    схему проходит (на негодное качество платформа отвечает 422 с перечнем
+    допустимых значений), а падает уже подбор модели. У Soul модель задаётся
+    не именем, а стилем — значит, ответ на неё один: взять style_id из
+    каталога платформы.
+    """
+    return "unavailable model" in str(error or "").lower()
+
+
+async def soul_styles(force: bool = False) -> dict:
+    """Каталог стилей Soul с самой платформы. Запрос бесплатный (GET).
+
+    Список не зашит в код намеренно: стили у аккаунтов разные и меняются,
+    а зашитое имя — это ровно тот способ, которым генерация ломалась раньше.
+    """
+    global _styles_cache
+    if _styles_cache and not force:
+        return {"ok": True, "items": _styles_cache, "cached": True}
+    problem = key_problem()
+    if problem:
+        return {"ok": False, "error": problem}
+    last = {"ok": False, "error": "Higgsfield не ответил"}
+    for base in _bases():
+        try:
+            async with httpx.AsyncClient(timeout=30) as c:
+                r = await c.get(f"{base}{PATH_STYLES}", headers=_headers())
+        except Exception as e:
+            last = {"ok": False,
+                    "error": f"Higgsfield недоступен ({base}): "
+                             f"{type(e).__name__}: {str(e)[:150]}"}
+            continue
+        if r.status_code == 404:
+            last = {"ok": False, "error": _error_text(404, f"{base}{PATH_STYLES}")}
+            continue
+        if r.status_code >= 400:
+            return {"ok": False, "error": _error_text(r.status_code, r.text[:300])}
+        try:
+            data = r.json()
+        except Exception:
+            return {"ok": False, "error": "Higgsfield вернул не JSON на список стилей"}
+        raw = data.get("items") or data.get("styles") or data if isinstance(data, dict) else data
+        items = []
+        for it in (raw if isinstance(raw, list) else []):
+            if isinstance(it, dict) and it.get("id"):
+                items.append({"id": str(it["id"]), "name": str(it.get("name") or "")})
+        if not items:
+            return {"ok": False, "error": "Higgsfield отдал пустой список стилей Soul"}
+        _styles_cache = items
+        return {"ok": True, "items": items}
+    return last
+
+
+async def _style_id() -> str:
+    """Стиль для запроса: заданный руками важнее найденного в каталоге."""
+    env = os.getenv("HIGGSFIELD_STYLE_ID", "").strip()
+    if env:
+        return env
+    found = await soul_styles()
+    return found["items"][0]["id"] if found.get("ok") else ""
+
+
 def _image_param_sets() -> list[dict]:
     """Наборы параметров в порядке проверки. Рабочий — первым.
 
@@ -424,6 +502,15 @@ async def create_image(prompt: str, ratio: str = "9:16", quality: str = "") -> d
         if style:
             body["style_id"] = style
         res = await _post(PATH_IMAGE, body)
+        if not res.get("ok") and _unavailable_model(res.get("error", "")) \
+                and "style_id" not in body:
+            # Модель Soul платформа подбирает по стилю. Без него у аккаунта
+            # не остаётся умолчания — отсюда и «Unavailable model» на теле,
+            # которое схему проходит. Берём стиль из каталога и повторяем.
+            sid = await _style_id()
+            if sid:
+                body["style_id"] = sid
+                res = await _post(PATH_IMAGE, body)
         if res.get("ok"):
             _working_image_params = params
             return res
@@ -496,7 +583,10 @@ async def check() -> dict:
     last = {"ok": False, "error": "Higgsfield не ответил"}
     for base in _bases():
         try:
-            async with httpx.AsyncClient(timeout=20) as c:
+            # Десять секунд на адрес, а не двадцать: адресов два, и вместе они
+            # укладываются в срок, который статусу отведён целиком. При
+            # прежнем значении проверка не успевала ответить вовсе.
+            async with httpx.AsyncClient(timeout=10) as c:
                 r = await c.get(f"{base}/v1/text2image/soul-styles",
                                 headers=_headers())
         except Exception as e:
