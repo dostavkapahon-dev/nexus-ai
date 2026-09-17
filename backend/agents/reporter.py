@@ -73,6 +73,7 @@ class Reporter:
             f"  • Потрачено: ${total_cost:.4f}",
             f"  • Токенов: {total_tokens:,}",
             "",
+            _storage_line(),
             f"🧠 <b>AI режим:</b> {active_ai} ({ai_mode})",
             f"🔧 <b>Агентов:</b> 8 модулей",
             f"⚠️ <b>Ошибок за 24ч:</b> {recent_errors}",
@@ -131,3 +132,22 @@ async def _top_causes(total: int, top: int = 3) -> list:
     if lines:
         lines.append("   Разбор: /errors")
     return lines
+
+
+def _storage_line() -> str:
+    """Где лежат данные и переживут ли они деплой.
+
+    Это видно в вебе, но не было видно в Telegram — а именно в Telegram человек
+    смотрит статус. Разница между «Postgres» и «файл в контейнере» решающая:
+    во втором случае каждый деплой стирает ключи, память и вход в Higgsfield,
+    и система «ломается сама по себе» без всякой причины.
+    """
+    try:
+        from database.db import storage_info
+        st = storage_info()
+    except Exception:
+        return "💾 <b>Хранилище:</b> не определено"
+    if st["persistent"]:
+        return f"💾 <b>Хранилище:</b> {st['kind']} — переживает деплой"
+    return (f"💾 <b>Хранилище:</b> {st['kind']} ⚠️ данные сотрутся при деплое "
+            f"(нужен DATABASE_URL)")
