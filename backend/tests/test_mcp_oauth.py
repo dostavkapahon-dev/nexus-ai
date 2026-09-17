@@ -185,3 +185,33 @@ async def test_server_without_resource_metadata_still_works(monkeypatch, store):
     _http(monkeypatch, partial)
     res = await oa.start()
     assert res["ok"] is True
+
+@pytest.mark.asyncio
+async def test_scopes_of_the_server_are_not_requested(monkeypatch, store):
+    """Сервер объявляет всё, что умеет, — но нашему клиенту положено не всё.
+
+    Живой отказ Higgsfield: «The OAuth 2.0 Client is not allowed to request
+    scope 'private_metadata'». Он приходил до экрана согласия, потому что мы
+    просили `scopes_supported` целиком.
+    """
+    def wide(method, url, body):
+        if url.endswith("/.well-known/oauth-authorization-server"):
+            return 200, {**META,
+                         "scopes_supported": ["generate", "private_metadata"]}
+        return _normal(method, url, body)
+    _http(monkeypatch, wide)
+    res = await oa.start()
+    assert res["ok"] is True
+    assert "private_metadata" not in res["url"]
+    assert "scope=" not in res["url"], "своих прав нет — параметр не шлём вовсе"
+
+
+@pytest.mark.asyncio
+async def test_scope_granted_at_registration_is_used(monkeypatch, store):
+    def with_scope(method, url, body):
+        if url.endswith("/register"):
+            return 200, {"client_id": "client-1", "scope": "generate"}
+        return _normal(method, url, body)
+    _http(monkeypatch, with_scope)
+    res = await oa.start()
+    assert "scope=generate" in res["url"]

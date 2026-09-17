@@ -175,12 +175,21 @@ async def start() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 
+    # Права просим только те, что сервер выдал ИМЕННО нашему клиенту при
+    # регистрации. Раньше сюда шёл `scopes_supported` из метаданных сервера —
+    # это всё, что он умеет вообще, а не то, что положено нам. Среди них был
+    # `private_metadata`, и вход обрывался отказом «The OAuth 2.0 Client is
+    # not allowed to request scope» ещё до экрана согласия. Нет своего списка
+    # — не шлём `scope` вовсе: сервер выдаст права по умолчанию.
+    granted = str(client.get("scope") or "").strip()
+
     verifier, challenge = _verifier()
     state = secrets.token_urlsafe(24)
     await _kv_set(FLOW_KEY, json.dumps({
         "state": state, "verifier": verifier, "token": meta["token"],
         "client_id": client.get("client_id", ""),
         "client_secret": client.get("client_secret", ""),
+        "scope": granted,
         "started": time.time()}, ensure_ascii=False))
 
     from urllib.parse import urlencode
@@ -191,9 +200,8 @@ async def start() -> dict:
               "code_challenge": challenge,
               "code_challenge_method": "S256",
               "resource": server_url()}
-    scopes = meta.get("scopes") or []
-    if scopes:
-        params["scope"] = " ".join(scopes[:10])
+    if granted:
+        params["scope"] = granted
     return {"ok": True, "url": f"{meta['authorize']}?{urlencode(params)}",
             "redirect": redirect_uri()}
 
