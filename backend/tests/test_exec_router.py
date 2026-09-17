@@ -36,7 +36,9 @@ async def test_every_channel_is_listed_even_when_skipped():
 async def test_unconfigured_channel_is_named_not_hidden():
     rows = await er.order("auto", "auto", {"mcp": False, "rest": True,
                                            "browser": True}, {})
-    assert "не настроен" in _why(rows, "mcp")
+    # У MCP причина своя: он авторизует пользователя, а не ключ, поэтому
+    # человеку нужна команда входа, а не имя переменной.
+    assert "/hfconnect" in _why(rows, "mcp")
     assert "mcp" not in _live(rows)
 
 
@@ -106,7 +108,7 @@ async def test_text_names_the_order_and_every_reason():
     rows = await er.order("auto", "auto", {"mcp": False, "rest": True,
                                            "browser": True}, {"rest": 300})
     text = er.as_text(rows)
-    assert "Порядок:" in text and "не настроен" in text and "повтор через" in text
+    assert "Порядок:" in text and "/hfconnect" in text and "повтор через" in text
 
 
 @pytest.mark.asyncio
