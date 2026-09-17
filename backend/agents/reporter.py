@@ -76,6 +76,7 @@ class Reporter:
             f"🧠 <b>AI режим:</b> {active_ai} ({ai_mode})",
             f"🔧 <b>Агентов:</b> 8 модулей",
             f"⚠️ <b>Ошибок за 24ч:</b> {recent_errors}",
+        ] + await _top_causes(recent_errors) + [
             "",
             "═══════════════════════════════",
         ]
@@ -106,3 +107,27 @@ class Reporter:
         return "\n".join(lines)
 
 reporter = Reporter()
+
+
+async def _top_causes(total: int, top: int = 3) -> list:
+    """Три самые частые причины прямо в статусе.
+
+    Одно число «118» не говорит ничего: чинить по нему нечего, а выглядит оно
+    так, будто сломано всё. Почти всегда это одна поломка, повторившаяся сто
+    раз, — и вот её и надо назвать.
+    """
+    if not total:
+        return []
+    try:
+        from core.notify import error_digest
+        data = await error_digest(24, limit=top)
+    except Exception:
+        return []
+    lines = []
+    for g in data.get("groups", []):
+        lines.append(f"   • {g['count']}× {g['who']}: {g['code']}")
+    if data.get("kinds", 0) > len(lines):
+        lines.append(f"   • …и ещё причин: {data['kinds'] - len(lines)}")
+    if lines:
+        lines.append("   Разбор: /errors")
+    return lines

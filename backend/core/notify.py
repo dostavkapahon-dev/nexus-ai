@@ -133,3 +133,69 @@ async def recent_errors(hours: int = 24, limit: int = 10) -> dict:
 
     return {"hours": hours, "tasks": tasks, "agents": agents,
             "total": len(tasks) + len(agents)}
+
+
+async def error_digest(hours: int = 24, limit: int = 8) -> dict:
+    """Что именно ломается — сгруппированное по причине, а не последние десять.
+
+    «Ошибок за 24ч: 118» ничего не говорит: это может быть одна поломка,
+    повторившаяся сто раз, а может быть сто разных. Пока не видно, какая
+    причина повторяется, чинить нечего. Здесь ошибки сводятся по коду отказа
+    (§28) и по тому, кто их получил, с числом повторов.
+    """
+    from datetime import datetime, timedelta
+    from sqlalchemy import select, desc
+    from database.db import AsyncSessionLocal
+    from database.models import Task, AgentLog
+    from core import failures
+
+    since = datetime.utcnow() - timedelta(hours=hours)
+    groups: dict = {}
+
+    def add(who: str, error: str, at) -> None:
+        code = failures.classify(error)
+        key = (who, code)
+        row = groups.setdefault(key, {"who": who, "code": code, "count": 0,
+                                      "sample": "", "last": None})
+        row["count"] += 1
+        if not row["sample"]:
+            row["sample"] = str(error or "")[:200]
+        if at and (row["last"] is None or at > row["last"]):
+            row["last"] = at
+
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(
+            select(Task).where(Task.status == "FAILED")
+            .where(Task.created_at >= since).order_by(desc(Task.created_at)))
+        for t in r.scalars().all():
+            add(f"задача {t.kind or '—'}", t.error or "", t.finished_at)
+
+        r = await db.execute(
+            select(AgentLog).where(AgentLog.status != "success")
+            .where(AgentLog.created_at >= since).order_by(desc(AgentLog.created_at)))
+        for a in r.scalars().all():
+            add(a.agent_name or "агент", a.error or "", a.created_at)
+
+    rows = sorted(groups.values(), key=lambda g: -g["count"])
+    return {"hours": hours, "total": sum(g["count"] for g in rows),
+            "groups": rows[:limit], "kinds": len(rows)}
+
+
+def digest_text(data: dict) -> str:
+    """Сводка для Telegram: сверху то, что повторяется чаще всего."""
+    from core import failures
+
+    if not data.get("total"):
+        return f"✅ За последние {data.get('hours', 24)} ч ошибок нет."
+    lines = [f"🚨 <b>Ошибки за {data['hours']} ч: {data['total']}</b>",
+             f"Разных причин: {data['kinds']}", ""]
+    for g in data["groups"]:
+        verdict = failures.explain(g["sample"])
+        when = (g["last"].strftime("%d.%m %H:%M") if g.get("last") else "—")
+        lines.append(f"<b>{g['count']}×</b> {g['who']} · <code>{g['code']}</code>")
+        lines.append(f"   {verdict['why']}")
+        lines.append(f"   {g['sample'][:150]}")
+        lines.append(f"   последняя: {when} UTC · {verdict['action']}")
+        lines.append("")
+    lines.append("Подробности по одной задаче: /task &lt;id&gt;")
+    return "\n".join(lines)[:4000]

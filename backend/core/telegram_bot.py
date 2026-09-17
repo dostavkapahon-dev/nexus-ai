@@ -510,15 +510,18 @@ async def _dispatch_command(chat_id: str, text: str):
 
     if cmd == "errors":
         # Всё сломанное за сутки в одном месте: провалы задач и ошибки моделей.
-        from core.notify import recent_errors
+        from core.notify import recent_errors, error_digest, digest_text
         hours = 24
         if args and args[0].isdigit():
             hours = max(1, min(int(args[0]), 168))
+        # Сначала сводка по причинам: сотня ошибок почти всегда оказывается
+        # одной поломкой, повторившейся сто раз. Без группировки это не видно.
+        await send_message(chat_id, digest_text(await error_digest(hours)))
         data = await recent_errors(hours)
         if not data["total"]:
             await send_message(chat_id, f"✅ За последние {hours} ч ошибок нет.")
             return
-        lines = [f"🚨 <b>Ошибки за {hours} ч</b>", ""]
+        lines = [f"🕘 <b>Последние по времени</b>", ""]
         if data["tasks"]:
             lines.append("<b>Задачи:</b>")
             for t in data["tasks"]:

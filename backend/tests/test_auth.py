@@ -65,18 +65,24 @@ async def test_security_headers(client):
     assert r.headers["X-Frame-Options"] == "DENY"
 
 
-def test_token_previous_hour_still_valid(monkeypatch):
-    """Токен привязан к часу и должен приниматься ещё час после выпуска."""
+def test_token_survives_a_working_day(monkeypatch):
+    """Вход не должен слетать посреди работы.
+
+    Раньше метка считалась по часу и принималась только текущая с предыдущей:
+    через час-два дашборд выбрасывал на экран пароля, и снаружи это выглядело
+    как «панель не грузится».
+    """
     real = time.time
-    monkeypatch.setattr(time, "time", lambda: real() - 3600)
+    monkeypatch.setattr(time, "time", lambda: real() - 3 * 86400)
     old = make_token()
     monkeypatch.setattr(time, "time", real)
     assert verify_token(old)
 
 
-def test_token_two_hours_old_rejected(monkeypatch):
+def test_month_old_token_rejected(monkeypatch):
+    """Вечный вход — это не сессия."""
     real = time.time
-    monkeypatch.setattr(time, "time", lambda: real() - 3 * 3600)
+    monkeypatch.setattr(time, "time", lambda: real() - 30 * 86400)
     old = make_token()
     monkeypatch.setattr(time, "time", real)
     assert not verify_token(old)
