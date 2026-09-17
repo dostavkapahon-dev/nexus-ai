@@ -103,6 +103,44 @@ async def _search_perplexity(query: str, max_results: int) -> list[dict]:
     return out[:max_results]
 
 
+async def _search_brave(query: str, max_results: int) -> list[dict]:
+    """Brave Search API — обычный поисковый индекс по ключу.
+
+    Зачем ещё один источник. С хостинга бесплатные пути перекрыты: DuckDuckGo
+    отвечает проверкой на робота, Mojeek не открывается, а поиск «через Google»
+    идёт ключом Gemini и вместе с ним упирается в квоту — то есть исчерпанная
+    квота модели гасит ещё и поиск. Brave от этого не зависит: отдельный ключ,
+    бесплатный тариф, обычный HTTP.
+    """
+    import os
+    import httpx
+
+    key = (os.getenv("BRAVE_API_KEY", "") or "").strip()
+    if not key:
+        raise NoKey("нет ключа BRAVE_API_KEY")
+    async with httpx.AsyncClient(timeout=15) as c:
+        r = await c.get("https://api.search.brave.com/res/v1/web/search",
+                        params={"q": query, "count": max(1, min(max_results, 20))},
+                        headers={"Accept": "application/json",
+                                 "X-Subscription-Token": key})
+    if r.status_code == 429:
+        raise RuntimeError("исчерпан лимит запросов Brave")
+    if r.status_code in (401, 403):
+        raise RuntimeError(f"ключ Brave не принят ({r.status_code})")
+    if r.status_code >= 400:
+        raise RuntimeError(f"Brave ответил {r.status_code}")
+    data = r.json() if r.content else {}
+    out = []
+    for item in ((data.get("web") or {}).get("results") or []):
+        url = item.get("url") or ""
+        if not url.startswith("http"):
+            continue
+        out.append({"title": (item.get("title") or "")[:200],
+                    "snippet": (item.get("description") or "")[:400],
+                    "url": url, "source": "brave"})
+    return out[:max_results]
+
+
 async def _search_ddg(query: str, max_results: int) -> list[dict]:
     """Бесплатный источник. Причину отказа поднимаем наверх: DuckDuckGo часто
     блокирует запросы с серверных адресов, и это лечится не тем же, чем «пусто»."""
@@ -380,6 +418,7 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
     # Порядок по измеренной доступности с сервера: Google (через Gemini)
     # отвечает, DuckDuckGo и Mojeek с хостинга не открываются вовсе.
     for name, fn, want in (("perplexity", _search_perplexity, 20.0),
+                           ("brave", _search_brave, 15.0),
                            ("google", _search_gemini, 25.0),
                            ("duckduckgo", _search_ddg, 8.0),
                            ("mojeek", _search_mojeek, 8.0),

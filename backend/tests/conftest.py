@@ -87,6 +87,7 @@ def _forget_failed_paths():
     """
     from core import hixiit, websearch
     hixiit._COLD.clear()
+    hixiit._COLD_WHY.clear()
     # То же самое для поиска: недоступный источник запоминается на минуты,
     # и без очистки один тест решал за следующий, какие источники живы.
     websearch._DEAD.clear()
@@ -96,6 +97,7 @@ def _forget_failed_paths():
     hixiit._CATALOG_CACHE.clear()
     yield
     hixiit._COLD.clear()
+    hixiit._COLD_WHY.clear()
     websearch._DEAD.clear()
     hixiit._CATALOG_CACHE.clear()
 

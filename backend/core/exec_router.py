@@ -152,7 +152,8 @@ def _score(channel: str, row: dict, quality: str) -> float:
 
 async def order(mode: str = "auto", quality: str = "auto",
                 configured: dict | None = None,
-                cooling: dict | None = None) -> list[dict]:
+                cooling: dict | None = None,
+                reasons: dict | None = None) -> list[dict]:
     """Порядок каналов с объяснением по каждому.
 
     `configured` — {канал: bool}, есть ли доступ вообще.
@@ -164,6 +165,7 @@ async def order(mode: str = "auto", quality: str = "auto",
     """
     configured = configured or {}
     cooling = cooling or {}
+    reasons = reasons or {}
     data = await stats()
     allowed = MODE_ONLY.get(mode)
     quality = quality if quality in QUALITY_MODES else "auto"
@@ -182,10 +184,15 @@ async def order(mode: str = "auto", quality: str = "auto",
             item.update(use=False, why=MISSING.get(channel, "не настроен"),
                         score=-1)
         elif cooling.get(channel, 0) > 0:
-            item.update(use=False,
-                        why=f"пропущен — отказал недавно, повтор через "
-                            f"{cooling[channel] / 60:.0f} мин",
-                        score=-1)
+            # Причина отказа важнее срока: «повтор через 9 мин» не говорит,
+            # что чинить, а «вход не выполнен» или «400 Unavailable model» —
+            # говорит.
+            was = (reasons.get(channel) or "").strip()
+            why = (f"пропущен — отказал недавно ({was[:200]}), повтор через "
+                   f"{cooling[channel] / 60:.0f} мин" if was else
+                   f"пропущен — отказал недавно, повтор через "
+                   f"{cooling[channel] / 60:.0f} мин")
+            item.update(use=False, why=why, score=-1)
         rows.append(item)
 
     rows.sort(key=lambda r: (-r["score"], CHANNELS.index(r["channel"])))

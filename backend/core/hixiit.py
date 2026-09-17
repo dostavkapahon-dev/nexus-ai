@@ -1060,6 +1060,8 @@ async def tell(text: str) -> None:
 # COOLDOWN путь проверяется заново — отказ мог быть временным.
 COOLDOWN_SEC = 600
 _COLD: dict[str, float] = {}
+# Причина последнего отказа по каждому пути — рядом со сроком остывания.
+_COLD_WHY: dict[str, str] = {}
 
 
 # Черновик чужим бесплатным генератором. По умолчанию ВЫКЛЮЧЕН: подделка,
@@ -1079,13 +1081,28 @@ def _cold(path: str) -> float:
 
 
 def _chill(path: str, why: str = "") -> None:
+    """Путь отказал — не трогаем его несколько минут. Причину ЗАПОМИНАЕМ.
+
+    Раньше `why` принимался и выбрасывался. Из-за этого в отчётах стояло
+    «пропущен — отказал недавно, повтор через 9 мин» по всем трём каналам, и
+    настоящая причина — чего именно не хватило — не доходила до человека
+    вообще. Чинить по такому тексту нечего.
+    """
     import time
     _COLD[path] = time.monotonic() + COOLDOWN_SEC
+    if why:
+        _COLD_WHY[path] = str(why)[:300]
 
 
 def _warm(path: str) -> None:
     """Путь сработал — снимаем остывание немедленно."""
     _COLD.pop(path, None)
+    _COLD_WHY.pop(path, None)
+
+
+def cold_reason(path: str) -> str:
+    """Из-за чего путь остывает. Пусто — причина не сохранилась."""
+    return _COLD_WHY.get(path, "") if _cold(path) else ""
 
 
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
@@ -1236,8 +1253,10 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                   "rest": bool(_hf_credentials()),
                   "browser": True}
     cooling = {c: (0.0 if force else _cold(c)) for c in ("mcp", "rest", "browser")}
+    reasons = {c: cold_reason(c) for c in ("mcp", "rest", "browser")}
 
-    for step in await exec_router.order(mode, quality, configured, cooling):
+    for step in await exec_router.order(mode, quality, configured, cooling,
+                                        reasons):
         channel = step["channel"]
         name = exec_router.HUMAN[channel]
         if not step["use"]:
@@ -1248,8 +1267,8 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
             res = await runners[channel]()
         except BaseException as e:
             _reraise_control_flow(e)
-            _chill(channel)
             why = _why(e, 300)
+            _chill(channel, why)
             await exec_router.record(channel, False, error=why)
             tried.append(f"{name}: {why}")
             continue
