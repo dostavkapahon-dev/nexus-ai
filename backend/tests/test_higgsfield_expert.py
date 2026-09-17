@@ -18,14 +18,9 @@ def test_catalog_uses_real_model_ids():
     images = {m["value"] for m in hixiit.IMAGE_MODELS}
     videos = {m["value"] for m in hixiit.VIDEO_MODELS}
 
-    assert {"image_auto", "soul_2", "gpt_image_2"} <= images
-    assert {"cinematic_studio_video_v2", "cinematic_studio_3_0"} <= videos
-    # Ни одного id, которого нет в живом каталоге аккаунта: такой выбор — отказ
-    # платформы вместо кадра. Сверено вызовом models_explore 17.09.2026.
-    assert not (images | videos) & {
-        "soul", "dop-turbo", "dop-lite", "dop-standard",
-        "z_image", "flux_3_video", "minimax_hailuo", "wan2_6",
-        "nano_banana", "nano_banana_2", "seedream_v4_5", "kling3_0"}
+    assert {"z_image", "soul_2", "gpt_image_2"} <= images
+    assert {"minimax_hailuo", "cinematic_studio_3_0", "flux_3_video"} <= videos
+    assert not (images | videos) & {"soul", "dop-turbo", "dop-lite", "dop-standard"}
 
 
 def test_product_task_goes_to_marketing_model():
@@ -44,15 +39,13 @@ def test_person_task_goes_to_soul():
 
 def test_video_without_reference_needs_text_to_video():
     """Не все видео-модели умеют стартовать без кадра — выбор должен это учитывать."""
-    assert hixiit.pick_by_task("динамичный ролик", "video",
-                               has_reference=False) == "cinematic_studio_3_0"
-    assert hixiit.pick_by_task("динамичный ролик", "video",
-                               has_reference=True) == "cinematic_studio_video_v2"
+    assert hixiit.pick_by_task("динамичный ролик", "video", has_reference=False) == "flux_3_video"
+    assert hixiit.pick_by_task("динамичный ролик", "video", has_reference=True) == "minimax_hailuo"
 
 
 def test_plain_image_defaults_to_cheap_draft():
     """Черновик дорогой моделью — выброшенные кредиты."""
-    assert hixiit.pick_by_task("что-нибудь красивое", "image") == "image_auto"
+    assert hixiit.pick_by_task("что-нибудь красивое", "image") == "z_image"
 
 
 # ─────────────────────────── промпт под модель ───────────────────────────

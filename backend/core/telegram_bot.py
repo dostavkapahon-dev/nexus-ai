@@ -213,6 +213,7 @@ async def setup_bot_commands():
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
         {"command": "image", "description": "Сделать кадр: /image шашлык на мангале"},
+        {"command": "hfmodels", "description": "Все модели Higgsfield и выбор"},
         {"command": "video", "description": "Сделать ролик: /video жарка шашлыка"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
@@ -1016,6 +1017,14 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, "Не знаю такой режим. Доступны: auto, mcp, browser.")
         return
 
+    if cmd.startswith("mdl_"):
+        parts = cmd.split("_")
+        kind = parts[1] if len(parts) > 1 else "image"
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        await _show_catalog(chat_id, kind if kind in ("image", "video") else "image",
+                            page)
+        return
+
     if cmd.startswith(("setimg_", "setvid_")):
         kind = "image" if cmd.startswith("setimg_") else "video"
         value = cmd.split("_", 1)[1]
@@ -1024,6 +1033,8 @@ async def _dispatch_command(chat_id: str, text: str):
         human = "изображений" if kind == "image" else "видео"
         await send_message(chat_id, f"💾 Модель {human}: <b>{value}</b>\nСохранено — "
                                     "используется и после перезапуска.")
+        # Экран перерисовываем: без этого не видно, что выбор применился.
+        await _show_catalog(chat_id, kind)
         return
 
     # Автоматика: расписание видно, а выключатель — управляемый. Раньше он был
@@ -1928,6 +1939,12 @@ async def _dispatch_command(chat_id: str, text: str):
                     source="telegram", ref_id=args[0])
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
+    elif cmd in ("hfmodels", "allmodels", "модели"):
+        # Весь каталог аккаунта, а не срез из шести зашитых моделей.
+        want = (args[0].lower() if args else "image")
+        await _show_catalog(chat_id, "video" if want.startswith(("vid", "вид", "рол"))
+                            else "image")
+
     elif cmd in ("image", "img", "photo", "кадр", "video", "clip"):
         # Прямая генерация одного файла: человек просит кадр — он получает
         # кадр, а не запуск полного конвейера с исследованием и монтажом.
@@ -2014,6 +2031,7 @@ async def _dispatch_command(chat_id: str, text: str):
             "/music [url] [настроение] — добавить трек",
             "/pc       — статус подключённого ПК",
             "/do [задача] — выполнить в браузере на ПК",
+            "/hfmodels [image|video] — весь каталог моделей, выбор кнопкой",
             "/image [что] — один кадр (формат по площадке)",
             "/video [что] — один ролик",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
@@ -2229,10 +2247,85 @@ async def _show_hf_panel(chat_id: str):
         [{"text": "🔌 Авто", "callback_data": "hfmode_auto"},
          {"text": "MCP", "callback_data": "hfmode_mcp"},
          {"text": "Браузер", "callback_data": "hfmode_browser"}],
+        [{"text": "🧠 Все модели картинок", "callback_data": "mdl_image_0"},
+         {"text": "🎬 Видео", "callback_data": "mdl_video_0"}],
         [{"text": "▶️ Сгенерировать кадр", "callback_data": "hfgen"}],
     ]}
     kb["inline_keyboard"] = [row for row in kb["inline_keyboard"] if row]
     await send_message(chat_id, "\n".join(lines), reply_markup=kb)
+
+
+PAGE_SIZE = 8
+
+
+async def _show_catalog(chat_id: str, kind: str = "image", page: int = 0):
+    """Весь каталог Higgsfield постранично — и выбор прямо отсюда.
+
+    В /model список обрезался двенадцатью строками: у аккаунта моделей втрое
+    больше, и остальные просто не показывались. «Открыть все ИИ» — это и значит
+    показать каталог целиком, а не решить за человека, какие шесть ему нужны.
+    """
+    from core.hixiit import catalog_full, preferred_model, mcp_configured
+
+    human = "изображений" if kind == "image" else "видео"
+    if not mcp_configured():
+        await send_message(chat_id,
+                           f"🧠 <b>Модели {human}</b>\n\nКаталог открывается "
+                           f"через MCP, а вход не выполнен: /hfconnect.\n"
+                           f"Без него доступен только путь по ключу с одной "
+                           f"картиночной моделью.")
+        return
+
+    rows = await catalog_full(kind)
+    if not rows:
+        await send_message(chat_id,
+                           f"🧠 <b>Модели {human}</b>\n\nПлатформа не отдала "
+                           f"каталог. Что именно ответило — в /hixiit.")
+        return
+
+    current = await preferred_model(kind)
+    pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    chunk = rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+
+    lines = [f"🧠 <b>Модели {human}</b> — всего {len(rows)}",
+             f"Сейчас: <b>{current or 'AUTO — систему решает сама'}</b>", ""]
+    for m in chunk:
+        marks = " ✅" if m["value"] == current else ""
+        if m["unlim"]:
+            marks += " ♾"
+        if not m["usable"]:
+            # Честнее показать и пометить, чем спрятать: человек видит модель на
+            # сайте и не понимает, куда она делась из бота.
+            marks += " ⚠️"
+        who = f" · {m['provider']}" if m["provider"] else ""
+        lines.append(f"<b>{m['label']}</b>{marks}{who}")
+        if m["about"]:
+            lines.append(f"<i>{m['about']}</i>")
+        lines.append(f"<code>{m['value']}</code>")
+        lines.append("")
+    lines.append("♾ — покрывается безлимитом · ⚠️ — нужен вход, которого бот "
+                 "сам не даёт (стиль, ссылка, размеры)")
+
+    prefix = "setimg_" if kind == "image" else "setvid_"
+    keyboard = [[{"text": f"{'✅ ' if m['value'] == current else ''}{m['label']}"[:60],
+                  "callback_data": f"{prefix}{m['value']}"}] for m in chunk]
+
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀️ Назад", "callback_data": f"mdl_{kind}_{page - 1}"})
+    nav.append({"text": f"{page + 1}/{pages}", "callback_data": f"mdl_{kind}_{page}"})
+    if page < pages - 1:
+        nav.append({"text": "Вперёд ▶️", "callback_data": f"mdl_{kind}_{page + 1}"})
+    keyboard.append(nav)
+    keyboard.append([
+        {"text": "🎨 Картинки", "callback_data": "mdl_image_0"},
+        {"text": "🎬 Видео", "callback_data": "mdl_video_0"},
+    ])
+    keyboard.append([{"text": "↩️ AUTO — решает система",
+                      "callback_data": f"{prefix}auto"}])
+    await send_message(chat_id, "\n".join(lines)[:3800],
+                       reply_markup={"inline_keyboard": keyboard})
 
 
 async def _show_model_menu(chat_id: str):

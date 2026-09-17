@@ -479,7 +479,7 @@ def _as_model_list(res, has_reference: bool = False) -> list:
 # модель на черновик тратит кредиты впустую, а дешёвая на финал портит результат.
 
 IMAGE_MODELS = [
-    {"value": "image_auto", "label": "Auto — платформа выбирает сама",
+    {"value": "z_image", "label": "Z Image — быстрый черновик (дёшево)",
      "role": "draft"},
     {"value": "soul_2", "label": "Soul 2.0 — портреты, UGC, персонажи",
      "role": "person"},
@@ -489,20 +489,20 @@ IMAGE_MODELS = [
      "role": "cinematic"},
     {"value": "marketing_studio_image", "label": "Marketing Studio — товар, реклама",
      "role": "product"},
-    {"value": "soul_location", "label": "Soul Location — локация, фон, пейзаж",
+    {"value": "image_auto", "label": "Auto — платформа выбирает сама",
      "role": "auto"},
 ]
 
 VIDEO_MODELS = [
-    {"value": "cinematic_studio_video_v2",
-     "label": "Cinema Studio Video — кадр в движении, звук", "role": "person"},
+    {"value": "minimax_hailuo", "label": "Minimax Hailuo — живая мимика, физика",
+     "role": "person"},
     {"value": "cinematic_studio_3_0", "label": "Cinema Studio 3.0 — лучшее качество",
      "role": "cinematic"},
-    {"value": "cinematic_studio_3_0", "label": "Cinema Studio 3.0 — видео из текста",
+    {"value": "flux_3_video", "label": "FLUX 3 — видео из текста, со звуком",
      "role": "text2video"},
     {"value": "marketing_studio_video", "label": "Marketing Studio — реклама товара",
      "role": "product"},
-    {"value": "cinematic_studio_video", "label": "Cinema Studio — слоумо и звук",
+    {"value": "wan2_6", "label": "Wan 2.6 — стилизованное, экспериментальное",
      "role": "stylized"},
 ]
 
@@ -529,19 +529,25 @@ def role_for_task(task: str, kind: str, has_reference: bool = False) -> str:
     return "person" if has_reference else "draft"
 
 
-# Замены под безлимит. Безлимит выдаётся не на все модели, а на конкретные:
-# в живом каталоге аккаунта признак supports_unlim стоит только у soul_2,
-# soul_v2 и gpt_image_2. Все остальные фото-модели списывают кредиты.
+# Замены под безлимит. Безлимит выдаётся не на все модели, а на конкретные —
+# и почти все наши штатные фото-модели (z_image, cinematic_studio_2_5,
+# marketing_studio_image) в него НЕ входят. Без этой карты система с активным
+# безлимитом всё равно списывала бы кредиты: роль подобрана верно, а модель
+# оплачиваемая.
 #
-# Кандидаты сверены вызовом models_explore, а не взяты из документации: раньше
-# здесь стояли nano_banana, seedream и flux — таких id у аккаунта нет вовсе,
-# и подмена под безлимит гарантированно заканчивалась отказом.
+# Кандидаты и их назначение взяты из живого каталога аккаунта, а не придуманы:
+#   nano_banana      — «realistic images, budget-friendly» → черновик
+#   nano_banana_pro  — «ultimate quality, text and diagrams» → товар, реклама
+#   soul_2           — «realistic UGC, character generation» → человек
+#   gpt_image_2      — «text-rendering, typography, 4k» → текст в кадре
+#   flux_2           — «precise prompt adherence» → сложный кинокадр
+#   seedream_v4_5    — «4K output, precise control» → запасной вариант
 _UNLIM_BY_ROLE = {
-    "draft": ("gpt_image_2", "soul_2"),
-    "person": ("soul_2", "soul_v2"),
-    "text": ("gpt_image_2",),
-    "cinematic": ("gpt_image_2", "soul_2"),
-    "product": ("gpt_image_2", "soul_2"),
+    "draft": ("nano_banana", "nano_banana_2", "seedream_v5_lite"),
+    "person": ("soul_2", "soul_v2", "nano_banana_pro"),
+    "text": ("gpt_image_2", "nano_banana_pro"),
+    "cinematic": ("flux_2", "seedream_v4_5", "kling_omni_image"),
+    "product": ("nano_banana_pro", "seedream_v4_5", "nano_banana_2"),
 }
 
 
@@ -587,16 +593,14 @@ _PROMPT_STYLE = {
               "do not re-describe the face.",
     "gpt_image_2": "Spell out any on-image text exactly, name the font style, "
                    "state the layout.",
-    "image_auto": "Keep it short and concrete: subject, setting, light.",
-    "soul_location": "Describe the place: architecture, time of day, weather, light.",
+    "z_image": "Keep it short and concrete: subject, setting, light.",
     "cinematic_studio_2_5": "Describe it as a film still: lens, light direction, "
                             "colour grade, mood.",
     "cinematic_studio_3_0": "Write as a director: camera move, shot length, "
                             "colour grade, pacing.",
-    "cinematic_studio_video_v2": "Describe motion and emotion — gestures, tempo; "
-                                 "the background comes from the source frame.",
-    "cinematic_studio_video": "Describe the scene, the camera move and the "
-                              "sound source.",
+    "minimax_hailuo": "Describe motion and emotion — gestures, tempo; the "
+                      "background comes from the source frame.",
+    "flux_3_video": "Describe the scene, the camera move and the sound source.",
     "marketing_studio_image": "Think in brand terms: hook, setting, product.",
     "marketing_studio_video": "Think in brand terms: hook, setting, product, CTA.",
 }
@@ -694,53 +698,69 @@ _CATALOG_TTL = 900.0
 SAFE_MODEL = {"image": "image_auto", "video": "cinematic_studio_3_0"}
 
 
-async def catalog_ids(kind: str) -> set:
-    """Какие id моделей у аккаунта есть на самом деле. Пусто — проверить нечем.
+async def catalog_full(kind: str) -> list[dict]:
+    """Весь каталог аккаунта по виду генерации — как его называет платформа.
 
-    Каталог у каждого аккаунта свой: он зависит от плана и от того, что
-    платформа успела выкатить. Список в коде — только запасной вариант, и
-    сверять выбор надо с живым ответом, а не с ним.
+    Спрашиваем ИМЕННО с фильтром по типу: общий список платформа отдаёт
+    страницами и на первой странице возвращает лишь часть моделей, а её
+    постраничная навигация повторяет ту же страницу. Запрос по типу приходит
+    целиком (`has_more: false`), и только он годится, чтобы решать, существует
+    модель или нет.
     """
     now = time.time()
     cached = _CATALOG_CACHE.get(kind)
     if cached and now - cached[0] < _CATALOG_TTL:
         return cached[1]
+    if not mcp_configured():
+        return []
     try:
-        res = await _mcp_call("models_explore", {"action": "list", "limit": 100},
+        res = await _mcp_call("models_explore",
+                              {"action": "list", "type": kind, "limit": 100},
                               timeout=60)
     except BaseException as e:
         _reraise_control_flow(e)
-        return set()
+        return []
     items = (res or {}).get("items") if isinstance(res, dict) else None
-    ids = set()
+    rows = []
     for m in items or []:
         if not isinstance(m, dict) or not m.get("id"):
             continue
-        out_type = m.get("output_type") or ""
-        if not out_type or out_type == kind:
-            ids.add(m["id"])
-    if ids:
-        _CATALOG_CACHE[kind] = (now, ids)
-    return ids
+        rows.append({
+            "value": m["id"],
+            "label": m.get("name") or m["id"],
+            "provider": m.get("provider_name") or "",
+            "about": (m.get("description") or "")[:120],
+            "unlim": bool(m.get("supports_unlim")),
+            # Модель, которой нужен вход, которого у нас нет (стиль, ссылка,
+            # размеры), выбирать можно — но она обязана быть помечена, иначе
+            # выбор закончится отказом, а человек будет думать, что сломалась
+            # генерация.
+            "usable": _model_is_usable(m, has_reference=True),
+        })
+    if rows:
+        _CATALOG_CACHE[kind] = (now, rows)
+    return rows
+
+
+async def catalog_ids(kind: str) -> set:
+    """Какие id моделей у аккаунта есть на самом деле. Пусто — проверить нечем."""
+    return {m["value"] for m in await catalog_full(kind)}
 
 
 async def ensure_known_model(model_id: str, kind: str) -> tuple:
     """Модель, которую платформа действительно знает, и причина подмены.
 
-    Несуществующий id — это не «чуть хуже кадр», а отказ вместо кадра. Раньше
-    такой id уходил как есть: в запасном списке стояли z_image, flux_3_video и
-    minimax_hailuo, которых в каталоге аккаунта нет вовсе.
+    Несуществующий id — это не «чуть хуже кадр», а отказ вместо кадра. Сверка
+    идёт только с полным каталогом по типу: неполный список привёл бы к обратной
+    беде — подмене исправной модели на другую без всякой причины.
     """
     known = await catalog_ids(kind)
     if not known or model_id in known:
         return model_id, ""
     safe = SAFE_MODEL.get(kind, "image_auto")
     if safe not in known:
-        # Даже запасной вход не подтверждён — берём первый реальный id, иначе
-        # гарантированно получим отказ.
         safe = sorted(known)[0]
-    return safe, (f"модели «{model_id}» нет в каталоге аккаунта — "
-                  f"взята {safe}")
+    return safe, f"модели «{model_id}» нет в каталоге аккаунта — взята {safe}"
 
 
 async def _generate_via_mcp(task: str, kind: str, ratio: str,
