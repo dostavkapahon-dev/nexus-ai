@@ -15,6 +15,7 @@
 """
 import asyncio
 import ipaddress
+import time
 import socket
 from urllib.parse import urlparse
 
@@ -227,6 +228,21 @@ _BROWSER_SYS = ("Ты извлекаешь результаты поиска и�
                 "без пояснений. Только реальные ссылки со страницы.")
 
 
+# Адреса выдачи для браузера. Лёгкие версии там, где они есть: обычная
+# страница рисуется скриптами, и браузер ждёт её дольше, чем имеет смысла.
+_BROWSER_ENGINES = (
+    "https://www.google.com/search?q={q}&num=20",
+    "https://lite.duckduckgo.com/lite/?q={q}",
+    "https://www.bing.com/search?q={q}",
+    "https://www.mojeek.com/search?q={q}",
+)
+
+
+def _engine_name(url: str) -> str:
+    host = urlparse(url).netloc
+    return host.replace("www.", "").split(".")[0]
+
+
 def _looks_like_robot_check(text: str) -> bool:
     """Страница с капчей — это не «пусто», и называть её надо своим именем."""
     low = (text or "").lower()
@@ -251,22 +267,32 @@ async def _search_browser(query: str, max_results: int) -> list[dict]:
 
     from urllib.parse import quote_plus
     from core.browser_reader import _open_text, _extract
-    # Лёгкая версия выдачи: почти чистый HTML без скриптов. Обычная страница
-    # DuckDuckGo рисуется целиком на JavaScript — браузер ждал её по 50 секунд
-    # и не дожидался, из-за чего поиск падал по таймауту без объяснения.
-    # Тот же адрес, что и у http-источника: DuckDuckGo с хостинга не открылся
-    # даже за 45 секунд, и держать его здесь — значит снова ждать впустую.
-    page = await _open_text(
-        f"https://www.mojeek.com/search?q={quote_plus(query)}", timeout_ms=15000)
-    if not page.get("ok"):
-        raise RuntimeError(page.get("error") or "страница не открылась")
-    text = (page.get("text") or "")[:6000]
-    if not text.strip():
-        raise RuntimeError("страница пустая")
-    if _looks_like_robot_check(text):
-        raise RuntimeError("выдача показала проверку на робота — адрес сервера "
-                           "в чёрном списке поисковика; нужен ключ поиска "
-                           "(PERPLEXITY_API_KEY) или облачный браузер")
+
+    # Порядок по измеренной доступности с сервера, а не по вкусу: /netcheck
+    # показал, что Google с хостинга открывается, а Mojeek и DuckDuckGo не
+    # открываются вовсе. Браузер сидит на том же хосте, поэтому единственный
+    # адрес, который здесь стоял (Mojeek), был недостижим и для него — поиск
+    # ждал страницу, которой не будет. Пробуем по очереди: первая отдавшая
+    # текст без проверки на робота и выигрывает.
+    why = []
+    text = ""
+    for engine in _BROWSER_ENGINES:
+        page = await _open_text(engine.format(q=quote_plus(query)),
+                                timeout_ms=20000)
+        if not page.get("ok"):
+            why.append(f"{_engine_name(engine)}: {page.get('error') or 'не открылась'}")
+            continue
+        body = (page.get("text") or "")[:6000]
+        if not body.strip():
+            why.append(f"{_engine_name(engine)}: страница пустая")
+            continue
+        if _looks_like_robot_check(body):
+            why.append(f"{_engine_name(engine)}: проверка на робота")
+            continue
+        text = body
+        break
+    if not text:
+        raise RuntimeError("; ".join(why) or "ни одна выдача не открылась")
 
     data = await _extract(_BROWSER_SYS,
                           f"Запрос: {query}\n\nТекст страницы:\n{text}")
@@ -280,6 +306,45 @@ async def _search_browser(query: str, max_results: int) -> list[dict]:
                         "snippet": str(item.get("snippet", ""))[:400],
                         "url": url, "source": "browser"})
     return out
+
+
+# Источник, который не отвечает с этого хоста, отвечает так каждый раз: с
+# сервера не открываются ни DuckDuckGo, ни Mojeek (замер /netcheck — оба дают
+# ConnectTimeout). Каждый прогон поиска терял на них по 8 секунд — то самое
+# время, которого потом не хватало браузеру, единственному рабочему пути.
+# Поэтому отказ по недоступности или по исчерпанной квоте запоминается, и
+# источник некоторое время не трогаем. Это не «отключить навсегда»: срок
+# выходит — пробуем снова, вдруг сеть изменилась.
+_DEAD: dict[str, tuple[float, str]] = {}
+DEAD_SEC = 900.0            # недоступен с этого хоста
+QUOTA_SEC = 1800.0          # исчерпана дневная квота ключа
+
+
+def _dead_reason(name: str) -> str:
+    """Почему источник пропускается, либо пустая строка."""
+    until, why = _DEAD.get(name, (0.0, ""))
+    now = time.monotonic()
+    if until and until > now:
+        left = int(until - now)
+        return f"{why} (пробуем снова через {left // 60 + 1} мин)"
+    if until:
+        _DEAD.pop(name, None)
+    return ""
+
+
+def _mark_dead(name: str, error: str) -> None:
+    """Запоминаем только те отказы, которые повторятся через секунду."""
+    low = (error or "").lower()
+    if "quota" in low or "429" in low:
+        _DEAD[name] = (time.monotonic() + QUOTA_SEC,
+                       "исчерпана квота ключа")
+        return
+    unreachable = ("connecttimeout", "connecterror", "не ответил",
+                   "readtimeout", "timeout", "name or service not known",
+                   "temporary failure in name resolution")
+    if any(m in low for m in unreachable):
+        _DEAD[name] = (time.monotonic() + DEAD_SEC,
+                       "недоступен с этого сервера")
 
 
 _LAST_SOURCE = "браузер"
@@ -326,6 +391,12 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
         if left <= 0.05:
             tried.append(f"{name}: не пробовали — время вышло")
             continue
+        skip = _dead_reason(name)
+        if skip:
+            # Пропуск экономит секунды для браузера, а причина остаётся видна:
+            # «пропущен» без объяснения — это та же тишина, от которой уходим.
+            tried.append(f"{name}: пропущен — {skip}")
+            continue
         # Не больше половины остатка: иначе первый же зависший источник
         # съедает весь бюджет, и до рабочего очередь не доходит — ровно та
         # болезнь, от которой мы и уходим.
@@ -333,12 +404,14 @@ async def search(query: str, max_results: int = 8, budget: float = 60.0) -> dict
         try:
             items = await asyncio.wait_for(fn(query, max_results), timeout=limit)
         except asyncio.TimeoutError:
+            _mark_dead(name, "не ответил")
             tried.append(f"{name}: не ответил за {limit:.0f} с")
             continue
         except NoKey as e:
             tried.append(f"{name}: {e}")
             continue
         except Exception as e:
+            _mark_dead(name, f"{type(e).__name__}: {e}")
             tried.append(f"{name}: {str(e)[:160] or type(e).__name__}")
             continue
         if items:

@@ -137,6 +137,15 @@ OFFICIAL_MCP_URL = "https://mcp.higgsfield.ai/mcp"
 # «не ответил» здесь так же информативно, как подробная ошибка через минуту.
 MCP_STATUS_TIMEOUT = 8.0
 
+# Сроки частей статуса. Ни одна не имеет права съесть весь ответ: проверка
+# «Higgsfield» падала с «не ответила за 60 секунд», потому что живой запрос к
+# платформе шёл по двум адресам с таймаутом 20 секунд каждый, а сверху
+# добавлялись база, браузер и MCP. Что именно зависло — по такому тексту
+# неизвестно, а это и есть главное.
+API_STATUS_TIMEOUT = 12.0
+BROWSER_STATUS_TIMEOUT = 6.0
+STORE_STATUS_TIMEOUT = 6.0
+
 
 def mcp_configured() -> bool:
     return bool(os.getenv("HIGGSFIELD_MCP_URL"))
@@ -1540,6 +1549,22 @@ async def recent_failures(limit: int = 3, hours: int = 24) -> list[dict]:
              "error": (x.error or "причина не записана")[:200]} for x in rows]
 
 
+async def _within(coro, seconds: float, fallback):
+    """Ждёт часть статуса свой срок и отдаёт запасной ответ вместо зависания.
+
+    Отдельный срок у каждой части — потому что «статус не ответил» не говорит
+    ничего: чинить надо то, что зависло, а не статус.
+    """
+    import asyncio as _a
+    try:
+        return await _a.wait_for(coro, timeout=seconds)
+    except _a.TimeoutError:
+        return fallback
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return fallback
+
+
 async def status() -> dict:
     """Диагностика генеративного слоя — для команды /hixiit в Telegram."""
     from core.higgsfield import credentials as _hf_creds
@@ -1551,14 +1576,17 @@ async def status() -> dict:
     # Откуда приехали ключ и секрет и чем заканчиваются: без этого нельзя
     # понять, почему «в Render всё вписано», а запрос отклонён — значение из
     # дашборда молча перекрывает переменную хостинга.
-    out["key_sources"] = await _key_sources()
+    out["key_sources"] = await _within(_key_sources(), STORE_STATUS_TIMEOUT, [])
 
     # Наличие ключа ничего не доказывает: он бывает от другого аккаунта, без
     # кредитов или просрочен. Поэтому спрашиваем сам Higgsfield.
     if out["api_key"]:
         try:
             from core.higgsfield import check as _hf_check
-            res = await _hf_check()
+            res = await _within(_hf_check(), API_STATUS_TIMEOUT,
+                                {"ok": False,
+                                 "error": f"платформа не ответила за "
+                                          f"{API_STATUS_TIMEOUT:.0f} с"})
             out["api_ok"] = bool(res.get("ok"))
             if not res.get("ok"):
                 out["api_error"] = res.get("error", "")
@@ -1571,9 +1599,11 @@ async def status() -> dict:
     # Статус — быстрый: браузер здесь не поднимаем (это десятки секунд), а
     # читаем уже известный результат. Иначе `/hixiit` и «живая проверка»
     # висели по 45-60 секунд и падали по таймауту.
-    out["browser"] = await browser_available(quick=True)
+    out["browser"] = await _within(
+        browser_available(quick=True), BROWSER_STATUS_TIMEOUT,
+        {"available": False, "why": f"не ответил за {BROWSER_STATUS_TIMEOUT:.0f} с"})
     out["browser_agent"] = out["browser"]["available"]
-    out["mode"] = await execution_mode()
+    out["mode"] = await _within(execution_mode(), STORE_STATUS_TIMEOUT, "auto")
 
     if out["mcp_configured"]:
         # Замер с сервера показал: до mcp.higgsfield.ai соединение доходит за

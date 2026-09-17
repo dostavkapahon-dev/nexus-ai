@@ -583,7 +583,10 @@ async def check() -> dict:
     last = {"ok": False, "error": "Higgsfield не ответил"}
     for base in _bases():
         try:
-            async with httpx.AsyncClient(timeout=20) as c:
+            # Десять секунд на адрес, а не двадцать: адресов два, и вместе они
+            # укладываются в срок, который статусу отведён целиком. При
+            # прежнем значении проверка не успевала ответить вовсе.
+            async with httpx.AsyncClient(timeout=10) as c:
                 r = await c.get(f"{base}/v1/text2image/soul-styles",
                                 headers=_headers())
         except Exception as e:
