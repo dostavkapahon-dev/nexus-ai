@@ -1208,6 +1208,41 @@ async def _dispatch_command(chat_id: str, text: str):
         await send_message(chat_id, "\n".join(lines))
         return
 
+    if cmd in ("routes", "marshrut", "router"):
+        # §6/§14/§36: каким каналом система будет выполнять генерацию и почему.
+        # Порядок считается из режима, настроенности, остывания и истории.
+        from core import exec_router
+        from core.hixiit import (execution_mode, quality_mode, mcp_configured,
+                                 _cold)
+        from core.higgsfield import credentials as _creds
+        mode = await execution_mode()
+        quality = await quality_mode()
+        rows = await exec_router.order(
+            mode, quality,
+            {"mcp": mcp_configured(), "rest": bool(_creds()), "browser": True},
+            {c: _cold(c) for c in ("mcp", "rest", "browser")})
+        text = exec_router.as_text(rows)
+        text += f"\n\nРежим канала: <b>{mode}</b> · режим качества: <b>{quality}</b>"
+        text += "\nСменить: /quality fast|quality|economy|auto"
+        await send_message(chat_id, text)
+        return
+
+    if cmd == "quality":
+        from core.hixiit import set_quality_mode, quality_mode
+        want = (args or "").strip().lower()
+        if not want:
+            await send_message(chat_id,
+                               f"Режим качества: <b>{await quality_mode()}</b>\n"
+                               "Варианты: auto, fast, quality, economy")
+            return
+        if await set_quality_mode(want):
+            await send_message(chat_id, f"✅ Режим качества: <b>{want}</b>")
+        else:
+            await send_message(chat_id,
+                               "Не знаю такого режима. Варианты: auto, fast, "
+                               "quality, economy")
+        return
+
     if cmd in ("netcheck", "net", "set"):
         # Измерение вместо догадок: когда таймаутит всё подряд, надо знать,
         # сеть это, память или занятый событийный цикл.

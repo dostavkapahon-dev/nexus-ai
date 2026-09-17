@@ -1028,6 +1028,7 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     ratio = ratio or detect_ratio(task)
     tried = []
     mode = await execution_mode()
+    quality = await quality_mode()
 
     # Тип генерации и формат определяем по ИСХОДНОМУ тексту — по-русски в нём и
     # написано «ролик» или «вертикально». А в саму модель уходит английское
@@ -1039,109 +1040,96 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
     except Exception:
         pass
 
-    # 1. MCP — основной рабочий путь. В режиме «browser» его пропускаем: человек
-    # выбрал браузер осознанно, обычно чтобы не списывать кредиты.
-    if mode == "browser":
-        tried.append("MCP: пропущен (режим «через браузер»)")
-    elif mcp_configured() and _cold("mcp") and not force:
-        tried.append(f"MCP: пропущен — отказал недавно, повтор через "
-                     f"{_cold('mcp') / 60:.0f} мин")
-    elif mcp_configured():
-        try:
-            await tell("Пробую MCP")
-            res = await _generate_via_mcp(task, kind, ratio, image_url)
-            _warm("mcp")
-            return res
-        except BaseException as e:
-            _reraise_control_flow(e)
-            _chill("mcp")
-            tried.append("MCP: " + _why(e, 300))
-    else:
-        tried.append("MCP: не настроен (нет HIGGSFIELD_MCP_URL)")
-
-    # 2. REST по ключу+секрету из Higgsfield Cloud.
-    # Картинки идут сюда же: Soul умеет text2image, и раньше этот путь просто
-    # отказывался их делать, из-за чего визуал уезжал на бесплатный Pollinations.
+    # Порядок каналов задаёт Execution Router (§6/§14 ТЗ), а не этот файл.
+    # Раньше очередь была зашита — MCP, потом REST, потом браузер, — и она
+    # вела себя одинаково и когда MCP отвечает за секунду, и когда он месяц
+    # подряд требует OAuth, которого на сервере не будет. Теперь порядок
+    # считается из режима, настроенности, остывания и истории успеха.
+    from core import exec_router
     from core.higgsfield import credentials as _hf_credentials
-    if mode == "mcp":
-        tried.append("REST: пропущен (режим «только MCP»)")
-    elif mode == "browser":
-        tried.append("REST: пропущен (режим «через браузер»)")
-    elif _hf_credentials() and _cold("rest") and not force:
-        tried.append(f"REST: пропущен — отказал недавно, повтор через "
-                     f"{_cold('rest') / 60:.0f} мин")
-    elif _hf_credentials():
-        try:
-            await tell("Пробую API по ключу")
-            from core import higgsfield as hf
-            # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
-            # ждёт именно её.
-            chosen = await preferred_model(kind)
-            if kind == "video":
-                model = chosen if chosen in hf.DOP_MODELS else os.getenv(
-                    "HIGGSFIELD_MODEL", "dop-turbo")
-                done = await hf.generate_video(task, image_url=image_url or "",
-                                               ratio=ratio, model=model)
-            else:
-                done = await hf.generate_image(task, ratio=ratio)
-                model = REST_IMAGE_MODEL
-            if done.get("ok") and done.get("url"):
-                _warm("rest")
-                out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
-                       "kind": kind, "model": model}
-                # Человек выбрал одну модель, а сделала другая — молчать нельзя.
-                if chosen and chosen != model:
-                    out["warning"] = (
-                        f"выбрана модель «{chosen}», но кадр сделала «{model}»: "
-                        "по ключу и секрету доступен только этот путь. Полный "
-                        "каталог моделей открывается при подключённом MCP "
-                        "(HIGGSFIELD_MCP_URL).")
-                if done.get("preview_image"):
-                    out["preview_image"] = done["preview_image"]
-                return out
-            _chill("rest")
-            tried.append(f"REST: {done.get('error', 'нет ссылки на результат')}")
-        except BaseException as e:
-            _reraise_control_flow(e)
-            _chill("rest")
-            tried.append("REST: " + _why(e))
-    else:
-        tried.append("REST: не настроен (нужны HIGGSFIELD_API_KEY и HIGGSFIELD_SECRET)")
 
-    # 3. Браузер в залогиненном аккаунте — для картинок тоже, а не только для
-    # видео: на сайте действует безлимит, и это единственный путь, где кадр не
-    # стоит кредитов. Раньше картинки сюда не доходили и уезжали на бесплатный
-    # Pollinations — отсюда и «очень страшные» результаты.
-    if mode != "mcp":
+    async def _try_mcp():
+        await tell("Пробую MCP")
+        return await _generate_via_mcp(task, kind, ratio, image_url)
+
+    async def _try_rest():
+        await tell("Пробую API по ключу")
+        from core import higgsfield as hf
+        # Ручной выбор пользователя важнее умолчаний: он выбрал модель и
+        # ждёт именно её.
+        chosen = await preferred_model(kind)
+        if kind == "video":
+            model = chosen if chosen in hf.DOP_MODELS else os.getenv(
+                "HIGGSFIELD_MODEL", "dop-turbo")
+            done = await hf.generate_video(task, image_url=image_url or "",
+                                           ratio=ratio, model=model)
+        else:
+            done = await hf.generate_image(task, ratio=ratio)
+            model = REST_IMAGE_MODEL
+        if not (done.get("ok") and done.get("url")):
+            raise RuntimeError(done.get("error", "нет ссылки на результат"))
+        out = {"ok": True, "url": done["url"], "provider": "higgsfield_api",
+               "kind": kind, "model": model}
+        # Человек выбрал одну модель, а сделала другая — молчать нельзя.
+        if chosen and chosen != model:
+            out["warning"] = (
+                f"выбрана модель «{chosen}», но кадр сделала «{model}»: "
+                "по ключу и секрету доступен только этот путь. Полный "
+                "каталог моделей открывается при подключённом MCP "
+                "(HIGGSFIELD_MCP_URL).")
+        if done.get("preview_image"):
+            out["preview_image"] = done["preview_image"]
+        return out
+
+    async def _try_browser():
         seen = await browser_available()
+        if not seen["available"]:
+            raise RuntimeError(seen["why"] or "недоступен")
         login = higgsfield_session()
-        if seen["available"] and not login["ok"]:
+        if not login["ok"]:
             # Без входа агент всё равно упрётся в форму логина, потратив
             # десятки шагов и минуты ожидания. Честный отказ дешевле.
-            tried.append(f"Браузер ({seen['where']}): {login['why']}")
-        elif seen["available"]:
-            try:
-                from core.skills import higgsfield_via_browser
-                await tell("Открываю higgsfield.ai в браузере")
+            raise RuntimeError(f"({seen['where']}): {login['why']}")
+        from core.skills import higgsfield_via_browser
+        await tell("Открываю higgsfield.ai в браузере")
 
-                async def _say(number, thought, action):
-                    what = (thought or action or "").strip().replace("\n", " ")
-                    await tell(f"Браузер, шаг {number}: {what[:90] or action}")
+        async def _say(number, thought, action):
+            what = (thought or action or "").strip().replace("\n", " ")
+            await tell(f"Браузер, шаг {number}: {what[:90] or action}")
 
-                res = await higgsfield_via_browser(task, image_url, kind=kind,
-                                                   on_step=_say)
-                if res.get("ok") and res.get("url"):
-                    return {"ok": True, "url": res["url"], "provider": "higgsfield_browser",
-                            "kind": kind, "model": "account", "where": seen["where"]}
-                tried.append(f"Браузер ({seen['where']}): "
-                             f"{str(res.get('detail') or res.get('error'))[:200]}")
-            except BaseException as e:
-                _reraise_control_flow(e)
-                tried.append("Браузер: " + _why(e, 200))
-        else:
-            tried.append(f"Браузер: {seen['why'] or 'недоступен'}")
-    else:
-        tried.append("Браузер: пропущен (режим «только MCP»)")
+        res = await higgsfield_via_browser(task, image_url, kind=kind,
+                                           on_step=_say)
+        if not (res.get("ok") and res.get("url")):
+            raise RuntimeError(f"({seen['where']}): "
+                               f"{str(res.get('detail') or res.get('error'))[:200]}")
+        return {"ok": True, "url": res["url"], "provider": "higgsfield_browser",
+                "kind": kind, "model": "account", "where": seen["where"]}
+
+    runners = {"mcp": _try_mcp, "rest": _try_rest, "browser": _try_browser}
+    configured = {"mcp": mcp_configured(),
+                  "rest": bool(_hf_credentials()),
+                  "browser": True}
+    cooling = {c: (0.0 if force else _cold(c)) for c in ("mcp", "rest", "browser")}
+
+    for step in await exec_router.order(mode, quality, configured, cooling):
+        channel = step["channel"]
+        name = exec_router.HUMAN[channel]
+        if not step["use"]:
+            tried.append(f"{name}: {step['why']}")
+            continue
+        started = time.monotonic()
+        try:
+            res = await runners[channel]()
+        except BaseException as e:
+            _reraise_control_flow(e)
+            _chill(channel)
+            why = _why(e, 300)
+            await exec_router.record(channel, False, error=why)
+            tried.append(f"{name}: {why}")
+            continue
+        _warm(channel)
+        await exec_router.record(channel, True, time.monotonic() - started)
+        return res
 
     # 4. Бесплатная картинка — только если её РАЗРЕШИЛИ явно.
     #
@@ -1169,7 +1157,11 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
 # и не требуют миграции схемы.
 PREF_KEYS = {"image": "hixiit_image_model", "video": "hixiit_video_model"}
 MODE_KEY = "hixiit_execution_mode"
-MODES = ("auto", "mcp", "browser")
+MODES = ("auto", "mcp", "api", "browser")
+
+# Режим качества — отдельная ось от канала (§10/§17 ТЗ). Канал отвечает на
+# вопрос «через что», режим качества — «чем жертвуем при равной пригодности».
+QUALITY_KEY = "hixiit_quality_mode"
 
 
 async def browser_available(quick: bool = False) -> dict:
@@ -1363,6 +1355,45 @@ async def set_execution_mode(value: str) -> bool:
             row.key_value = value
         else:
             db.add(Connection(key_name=MODE_KEY, key_value=value))
+        await db.commit()
+    return True
+
+
+async def quality_mode() -> str:
+    """auto | fast | quality | economy — чем жертвуем при выборе маршрута."""
+    from core.exec_router import QUALITY_MODES
+    try:
+        from sqlalchemy import select
+        from database.db import AsyncSessionLocal
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(
+                Connection.key_name == QUALITY_KEY))
+            row = r.scalar_one_or_none()
+        value = (row.key_value or "").strip().lower() if row else ""
+    except Exception:
+        value = ""
+    if not value:
+        value = os.getenv("NEXUS_QUALITY_MODE", "").strip().lower()
+    return value if value in QUALITY_MODES else "auto"
+
+
+async def set_quality_mode(value: str) -> bool:
+    from core.exec_router import QUALITY_MODES
+    value = (value or "auto").strip().lower()
+    if value not in QUALITY_MODES:
+        return False
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(
+            Connection.key_name == QUALITY_KEY))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=QUALITY_KEY, key_value=value))
         await db.commit()
     return True
 
