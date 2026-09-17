@@ -1210,7 +1210,13 @@ async def browser_available(quick: bool = False) -> dict:
             # тут нельзя. В работе — наоборот, ждём: там важен сам браузер.
             started = browser_start_state() if quick else await _browser_starts()
             if started["ok"]:
-                return {"available": True, "where": "на сервере", "why": ""}
+                # Каким набором флагов поднялся — видно в статусе: экономный
+                # набор роняет Chromium на части образов, и знать, что мы
+                # работаем на запасном, важнее, чем короткая строка.
+                from core.server_browser import launch_profile
+                how = launch_profile()
+                return {"available": True, "where": "на сервере",
+                        "how": how, "why": ""}
             if started.get("pending"):
                 return {"available": False, "where": "на сервере",
                         "pending": True, "why": started["why"]}

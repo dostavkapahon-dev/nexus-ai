@@ -196,6 +196,32 @@ _LAUNCH_ARGS = [
     "--blink-settings=imagesEnabled=false",   # картинки в выдаче нам не нужны
 ]
 
+# Экономные флаги — не бесплатны. `--single-process` вместе с `--no-zygote`
+# на многих образах Linux роняет Chromium сразу после старта: рендерер падает,
+# и наружу это выглядит как «Chromium установлен, но не запускается». Память мы
+# на нём экономим, но неработающий браузер экономит её ещё лучше и без пользы.
+#
+# Поэтому набора два. Сначала экономный; если запуск не удался — безопасный,
+# из флагов, без которых на хостинге нельзя (нет sandbox, нет /dev/shm, нет
+# видеокарты). Сработавший запоминается, чтобы не платить за перебор дважды.
+_SAFE_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--disable-gpu",
+    "--disable-setuid-sandbox",
+    "--no-first-run",
+    "--disable-extensions",
+    "--mute-audio",
+]
+
+_ARG_SETS = (("экономный", _LAUNCH_ARGS), ("безопасный", _SAFE_ARGS))
+_working_args: str = ""          # имя набора, которым браузер поднялся
+
+
+def launch_profile() -> str:
+    """Каким набором флагов удалось запустить браузер (для диагностики)."""
+    return _working_args
+
 # Через сколько секунд простоя закрыть браузер. Он не вызывался никогда, и
 # поднятый однажды Chromium жил до перезапуска сервиса, забирая память у всего
 # остального — отсюда «не ответил за 10 секунд» у поиска и «за 60 секунд» у
@@ -274,12 +300,31 @@ async def ensure_browser():
     # ЛОКАЛЬНЫЙ Chromium (для VPS с запасом памяти).
     os.makedirs(_profile_dir(), exist_ok=True)
     headless = os.getenv("NEXUS_BROWSER_HEADLESS", "1").strip() not in ("0", "false", "no")
-    opts = {"headless": headless, "viewport": {"width": 900, "height": 700},
-            "args": _LAUNCH_ARGS}
+    global _working_args
     exe = os.getenv("BROWSER_PATH")
-    if exe:
-        opts["executable_path"] = exe
-    _context = await _playwright.chromium.launch_persistent_context(_profile_dir(), **opts)
+    sets = _ARG_SETS
+    if _working_args:
+        sets = tuple(x for x in _ARG_SETS if x[0] == _working_args) or _ARG_SETS
+    failures = []
+    _context = None
+    for label, args in sets:
+        opts = {"headless": headless, "viewport": {"width": 900, "height": 700},
+                "args": args}
+        if exe:
+            opts["executable_path"] = exe
+        try:
+            _context = await _playwright.chromium.launch_persistent_context(
+                _profile_dir(), **opts)
+        except Exception as e:
+            # Причина по каждому набору: «не запускается» без указания, чем
+            # именно пробовали, чинить нельзя.
+            failures.append(f"{label}: {type(e).__name__}: {str(e)[:200]}")
+            continue
+        _working_args = label
+        break
+    if _context is None:
+        raise RuntimeError("Chromium не запустился ни одним набором флагов. "
+                           + "; ".join(failures))
 
     state = _storage_state()
     if state and state.get("cookies"):
