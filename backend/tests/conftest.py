@@ -90,9 +90,14 @@ def _forget_failed_paths():
     # То же самое для поиска: недоступный источник запоминается на минуты,
     # и без очистки один тест решал за следующий, какие источники живы.
     websearch._DEAD.clear()
+    # И для каталога моделей: он кэшируется на минуты, а в тестах каталог у
+    # каждого свой — без очистки один тест решал за следующий, какие модели
+    # существуют.
+    hixiit._CATALOG_CACHE.clear()
     yield
     hixiit._COLD.clear()
     websearch._DEAD.clear()
+    hixiit._CATALOG_CACHE.clear()
 
 
 def pytest_sessionfinish(session, exitstatus):

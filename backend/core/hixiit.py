@@ -479,7 +479,7 @@ def _as_model_list(res, has_reference: bool = False) -> list:
 # модель на черновик тратит кредиты впустую, а дешёвая на финал портит результат.
 
 IMAGE_MODELS = [
-    {"value": "z_image", "label": "Z Image — быстрый черновик (дёшево)",
+    {"value": "image_auto", "label": "Auto — платформа выбирает сама",
      "role": "draft"},
     {"value": "soul_2", "label": "Soul 2.0 — портреты, UGC, персонажи",
      "role": "person"},
@@ -489,20 +489,20 @@ IMAGE_MODELS = [
      "role": "cinematic"},
     {"value": "marketing_studio_image", "label": "Marketing Studio — товар, реклама",
      "role": "product"},
-    {"value": "image_auto", "label": "Auto — платформа выбирает сама",
+    {"value": "soul_location", "label": "Soul Location — локация, фон, пейзаж",
      "role": "auto"},
 ]
 
 VIDEO_MODELS = [
-    {"value": "minimax_hailuo", "label": "Minimax Hailuo — живая мимика, физика",
-     "role": "person"},
+    {"value": "cinematic_studio_video_v2",
+     "label": "Cinema Studio Video — кадр в движении, звук", "role": "person"},
     {"value": "cinematic_studio_3_0", "label": "Cinema Studio 3.0 — лучшее качество",
      "role": "cinematic"},
-    {"value": "flux_3_video", "label": "FLUX 3 — видео из текста, со звуком",
+    {"value": "cinematic_studio_3_0", "label": "Cinema Studio 3.0 — видео из текста",
      "role": "text2video"},
     {"value": "marketing_studio_video", "label": "Marketing Studio — реклама товара",
      "role": "product"},
-    {"value": "wan2_6", "label": "Wan 2.6 — стилизованное, экспериментальное",
+    {"value": "cinematic_studio_video", "label": "Cinema Studio — слоумо и звук",
      "role": "stylized"},
 ]
 
@@ -529,25 +529,19 @@ def role_for_task(task: str, kind: str, has_reference: bool = False) -> str:
     return "person" if has_reference else "draft"
 
 
-# Замены под безлимит. Безлимит выдаётся не на все модели, а на конкретные —
-# и почти все наши штатные фото-модели (z_image, cinematic_studio_2_5,
-# marketing_studio_image) в него НЕ входят. Без этой карты система с активным
-# безлимитом всё равно списывала бы кредиты: роль подобрана верно, а модель
-# оплачиваемая.
+# Замены под безлимит. Безлимит выдаётся не на все модели, а на конкретные:
+# в живом каталоге аккаунта признак supports_unlim стоит только у soul_2,
+# soul_v2 и gpt_image_2. Все остальные фото-модели списывают кредиты.
 #
-# Кандидаты и их назначение взяты из живого каталога аккаунта, а не придуманы:
-#   nano_banana      — «realistic images, budget-friendly» → черновик
-#   nano_banana_pro  — «ultimate quality, text and diagrams» → товар, реклама
-#   soul_2           — «realistic UGC, character generation» → человек
-#   gpt_image_2      — «text-rendering, typography, 4k» → текст в кадре
-#   flux_2           — «precise prompt adherence» → сложный кинокадр
-#   seedream_v4_5    — «4K output, precise control» → запасной вариант
+# Кандидаты сверены вызовом models_explore, а не взяты из документации: раньше
+# здесь стояли nano_banana, seedream и flux — таких id у аккаунта нет вовсе,
+# и подмена под безлимит гарантированно заканчивалась отказом.
 _UNLIM_BY_ROLE = {
-    "draft": ("nano_banana", "nano_banana_2", "seedream_v5_lite"),
-    "person": ("soul_2", "soul_v2", "nano_banana_pro"),
-    "text": ("gpt_image_2", "nano_banana_pro"),
-    "cinematic": ("flux_2", "seedream_v4_5", "kling_omni_image"),
-    "product": ("nano_banana_pro", "seedream_v4_5", "nano_banana_2"),
+    "draft": ("gpt_image_2", "soul_2"),
+    "person": ("soul_2", "soul_v2"),
+    "text": ("gpt_image_2",),
+    "cinematic": ("gpt_image_2", "soul_2"),
+    "product": ("gpt_image_2", "soul_2"),
 }
 
 
@@ -593,14 +587,16 @@ _PROMPT_STYLE = {
               "do not re-describe the face.",
     "gpt_image_2": "Spell out any on-image text exactly, name the font style, "
                    "state the layout.",
-    "z_image": "Keep it short and concrete: subject, setting, light.",
+    "image_auto": "Keep it short and concrete: subject, setting, light.",
+    "soul_location": "Describe the place: architecture, time of day, weather, light.",
     "cinematic_studio_2_5": "Describe it as a film still: lens, light direction, "
                             "colour grade, mood.",
     "cinematic_studio_3_0": "Write as a director: camera move, shot length, "
                             "colour grade, pacing.",
-    "minimax_hailuo": "Describe motion and emotion — gestures, tempo; the "
-                      "background comes from the source frame.",
-    "flux_3_video": "Describe the scene, the camera move and the sound source.",
+    "cinematic_studio_video_v2": "Describe motion and emotion — gestures, tempo; "
+                                 "the background comes from the source frame.",
+    "cinematic_studio_video": "Describe the scene, the camera move and the "
+                              "sound source.",
     "marketing_studio_image": "Think in brand terms: hook, setting, product.",
     "marketing_studio_video": "Think in brand terms: hook, setting, product, CTA.",
 }
@@ -689,6 +685,64 @@ async def _wait_job(job_id: str, attempts: int = 40) -> str:
     raise RuntimeError("Higgsfield не отдал результат вовремя")
 
 
+_CATALOG_CACHE: dict = {}
+_CATALOG_TTL = 900.0
+
+# Куда уходить, если выбранной модели в каталоге нет. Это не «любимая модель»,
+# а заведомо существующий вход: для картинки платформа выбирает сама, для
+# видео берём модель, умеющую стартовать без исходного кадра.
+SAFE_MODEL = {"image": "image_auto", "video": "cinematic_studio_3_0"}
+
+
+async def catalog_ids(kind: str) -> set:
+    """Какие id моделей у аккаунта есть на самом деле. Пусто — проверить нечем.
+
+    Каталог у каждого аккаунта свой: он зависит от плана и от того, что
+    платформа успела выкатить. Список в коде — только запасной вариант, и
+    сверять выбор надо с живым ответом, а не с ним.
+    """
+    now = time.time()
+    cached = _CATALOG_CACHE.get(kind)
+    if cached and now - cached[0] < _CATALOG_TTL:
+        return cached[1]
+    try:
+        res = await _mcp_call("models_explore", {"action": "list", "limit": 100},
+                              timeout=60)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return set()
+    items = (res or {}).get("items") if isinstance(res, dict) else None
+    ids = set()
+    for m in items or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        out_type = m.get("output_type") or ""
+        if not out_type or out_type == kind:
+            ids.add(m["id"])
+    if ids:
+        _CATALOG_CACHE[kind] = (now, ids)
+    return ids
+
+
+async def ensure_known_model(model_id: str, kind: str) -> tuple:
+    """Модель, которую платформа действительно знает, и причина подмены.
+
+    Несуществующий id — это не «чуть хуже кадр», а отказ вместо кадра. Раньше
+    такой id уходил как есть: в запасном списке стояли z_image, flux_3_video и
+    minimax_hailuo, которых в каталоге аккаунта нет вовсе.
+    """
+    known = await catalog_ids(kind)
+    if not known or model_id in known:
+        return model_id, ""
+    safe = SAFE_MODEL.get(kind, "image_auto")
+    if safe not in known:
+        # Даже запасной вход не подтверждён — берём первый реальный id, иначе
+        # гарантированно получим отказ.
+        safe = sorted(known)[0]
+    return safe, (f"модели «{model_id}» нет в каталоге аккаунта — "
+                  f"взята {safe}")
+
+
 async def _generate_via_mcp(task: str, kind: str, ratio: str,
                             image_url: str = None) -> dict:
     """Генерация через MCP по фактическому протоколу платформы.
@@ -700,6 +754,10 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     model = await pick_model(task, kind, has_reference=bool(image_url))
     model_id = model.get("id") or pick_by_task(task, kind, bool(image_url))
     tool = "generate_video" if kind == "video" else "generate_image"
+
+    # Сверяем выбор с живым каталогом до отправки: платформа на неизвестный id
+    # отвечает отказом, и человек видит «Higgsfield не работает» вместо кадра.
+    model_id, model_note = await ensure_known_model(model_id, kind)
 
     params = {"model": model_id, "prompt": prompt_for(model_id, task)[:1500],
               "aspect_ratio": ratio, "count": 1}
@@ -751,6 +809,9 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     out = {"ok": True, "url": url, "provider": "higgsfield_mcp",
            "kind": kind, "model": model_id,
            "unlim": bool(params.get("use_unlim"))}
+    if model_note:
+        # Подмену не прячем: человек должен знать, каким входом сделан кадр.
+        out["note"] = model_note
     if swapped_from:
         # Подмену модели не прячем: человек должен видеть, что кадр сделан
         # другой моделью — и почему.
