@@ -175,13 +175,16 @@ async def start() -> dict:
     except Exception as e:
         return {"ok": False, "error": str(e)[:300]}
 
-    # Права просим только те, что сервер выдал ИМЕННО нашему клиенту при
-    # регистрации. Раньше сюда шёл `scopes_supported` из метаданных сервера —
-    # это всё, что он умеет вообще, а не то, что положено нам. Среди них был
-    # `private_metadata`, и вход обрывался отказом «The OAuth 2.0 Client is
-    # not allowed to request scope» ещё до экрана согласия. Нет своего списка
-    # — не шлём `scope` вовсе: сервер выдаст права по умолчанию.
-    granted = str(client.get("scope") or "").strip()
+    # Прав не просим вовсе — и это не упрощение, а единственное, что здесь
+    # верно. Higgsfield отвечал «The OAuth 2.0 Client is not allowed to
+    # request scope 'private_metadata'», когда мы брали список из метаданных
+    # сервера. Ответ регистрации тоже не годится источником: он может нести
+    # тот же широкий список, и отказ повторится. Молчание надёжнее догадки —
+    # сервер авторизации сам выдаёт права по умолчанию.
+    #
+    # Единственный способ задать их явно — переменная окружения: если
+    # платформа однажды потребует конкретное право, его впишут руками.
+    granted = (os.getenv("HIGGSFIELD_MCP_SCOPE", "") or "").strip()
 
     verifier, challenge = _verifier()
     state = secrets.token_urlsafe(24)
@@ -277,6 +280,24 @@ async def refresh() -> dict:
     if body.get("refresh_token"):
         await _kv_set(REFRESH_KEY, body["refresh_token"])
     return {"ok": True}
+
+
+async def reset() -> dict:
+    """Забывает регистрацию клиента и незавершённый вход.
+
+    Нужна, когда на сервере осталась запись от неудачной попытки: следующий
+    `/hfconnect` тогда регистрируется заново, а не тянет прежние данные.
+    Токены не трогает — их убирает только повторный вход.
+    """
+    from core.credentials import delete as _delete
+    gone = []
+    for key in (CLIENT_KEY, FLOW_KEY):
+        try:
+            await _delete(key)
+            gone.append(key)
+        except Exception:
+            pass
+    return {"ok": True, "cleared": gone}
 
 
 async def state() -> dict:
