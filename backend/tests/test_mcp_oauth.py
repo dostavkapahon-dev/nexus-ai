@@ -185,3 +185,49 @@ async def test_server_without_resource_metadata_still_works(monkeypatch, store):
     _http(monkeypatch, partial)
     res = await oa.start()
     assert res["ok"] is True
+
+@pytest.mark.asyncio
+async def test_no_scope_is_requested_at_all(monkeypatch, store):
+    """Живой отказ Higgsfield: клиенту не положен scope 'private_metadata'.
+
+    Ни метаданные сервера, ни ответ регистрации не годятся источником прав:
+    оба могут нести широкий список. Не просим ничего — сервер выдаёт своё.
+    """
+    def wide(method, url, body):
+        if url.endswith("/.well-known/oauth-authorization-server"):
+            return 200, {**META,
+                         "scopes_supported": ["generate", "private_metadata"]}
+        if url.endswith("/register"):
+            return 200, {"client_id": "client-1",
+                         "scope": "generate private_metadata"}
+        return _normal(method, url, body)
+    _http(monkeypatch, wide)
+    res = await oa.start()
+    assert res["ok"] is True
+    assert "private_metadata" not in res["url"]
+    assert "scope=" not in res["url"], "прав не просим вовсе"
+
+
+@pytest.mark.asyncio
+async def test_scope_can_be_set_by_hand(monkeypatch, store):
+    """Если платформа однажды потребует конкретное право — его вписывают."""
+    monkeypatch.setenv("HIGGSFIELD_MCP_SCOPE", "generate")
+    _http(monkeypatch, _normal)
+    res = await oa.start()
+    assert "scope=generate" in res["url"]
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_registration_but_keeps_the_token(monkeypatch, store):
+    store[oa.CLIENT_KEY] = '{"client_id": "старый"}'
+    store[oa.FLOW_KEY] = "{}"
+    store[oa.TOKEN_KEY] = "tok-1"
+
+    async def _delete(key):
+        store.pop(key, None)
+
+    monkeypatch.setattr("core.credentials.delete", _delete)
+    res = await oa.reset()
+    assert res["ok"] is True
+    assert oa.CLIENT_KEY not in store and oa.FLOW_KEY not in store
+    assert store[oa.TOKEN_KEY] == "tok-1", "токен убирает только новый вход"

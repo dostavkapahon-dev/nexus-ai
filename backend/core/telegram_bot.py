@@ -1228,6 +1228,17 @@ async def _dispatch_command(chat_id: str, text: str):
             f"Адрес возврата: <code>{res['redirect']}</code>")
         return
 
+    if cmd in ("hfreset", "mcpreset"):
+        # Чистый лист для входа: убираем регистрацию клиента и незавершённую
+        # попытку. Токены остаются — их меняет только новый вход.
+        from core import mcp_oauth
+        res = await mcp_oauth.reset()
+        await send_message(chat_id,
+                           "🧹 Регистрация клиента и незавершённый вход "
+                           "удалены.\nТеперь можно начинать заново: /hfconnect"
+                           if res.get("ok") else "Не получилось очистить.")
+        return
+
     if cmd in ("hfstate", "mcpstate"):
         from core import mcp_oauth
         st = await mcp_oauth.state()
