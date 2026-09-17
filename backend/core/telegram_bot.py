@@ -212,6 +212,8 @@ async def setup_bot_commands():
     """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
+        {"command": "image", "description": "Сделать кадр: /image шашлык на мангале"},
+        {"command": "video", "description": "Сделать ролик: /video жарка шашлыка"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "can", "description": "Что система умеет подтверждённо"},
@@ -1286,7 +1288,10 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd == "hfgen":
         # Генерация текущими настройками — чтобы проверить выбор сразу, не
         # вспоминая отдельную команду.
-        await _dispatch_command(chat_id, "/image кадр по текущим настройкам")
+        # Тема нужна настоящая: «кадр по текущим настройкам» — это не предмет
+        # съёмки, а название кнопки, и в промпт оно попасть не должно.
+        await _run_single_generation(chat_id, "шашлык на мангале, аппетитный, "
+                                              "реалистичное фото", "image")
         return
 
     if cmd in ("routes", "marshrut", "router"):
@@ -1923,6 +1928,14 @@ async def _dispatch_command(chat_id: str, text: str):
                     source="telegram", ref_id=args[0])
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
+    elif cmd in ("image", "img", "photo", "кадр", "video", "clip"):
+        # Прямая генерация одного файла: человек просит кадр — он получает
+        # кадр, а не запуск полного конвейера с исследованием и монтажом.
+        # Раньше команды не существовало вовсе: кнопка «▶️ Сгенерировать кадр»
+        # в пульте /hf слала «/image ...» и получала в ответ список команд.
+        kind = "image" if cmd in ("image", "img", "photo", "кадр") else "video"
+        await _run_single_generation(chat_id, " ".join(args), kind)
+
     elif cmd in ("factory", "reel", "create_reel"):
         # Полный цикл: анализ → генерация → монтаж → согласование в Telegram.
         # Раньше без аргументов запускался dry-run: конвейер отрабатывал, но шаг
@@ -2001,6 +2014,8 @@ async def _dispatch_command(chat_id: str, text: str):
             "/music [url] [настроение] — добавить трек",
             "/pc       — статус подключённого ПК",
             "/do [задача] — выполнить в браузере на ПК",
+            "/image [что] — один кадр (формат по площадке)",
+            "/video [что] — один ролик",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
@@ -2351,6 +2366,74 @@ def slides_wanted(text: str, default: int = 7) -> int:
     if not m:
         return default
     return max(2, min(int(m.group(1)), 10))
+
+
+async def _run_single_generation(chat_id: str, text: str, kind: str):
+    """Один кадр или один ролик по фразе человека — от разбора до файла в чате.
+
+    Спецификация задачи (§6) разбирается один раз и дальше не переспрашивается:
+    формат, площадка, режим качества и явный выбор канала берутся из неё, а не
+    угадываются на каждом шаге заново.
+    """
+    from core import task_spec, hixiit, exec_router
+    from core.artifacts import mark as mark_artifact
+    from publishers.telegram_pub import send_photo, send_video
+
+    spec = task_spec.parse(text, kind=kind)
+    if not spec["subject"]:
+        await send_message(chat_id,
+                           "🖼 Напишите, что нарисовать: <code>/image шашлык на мангале</code>")
+        return
+
+    await send_message(chat_id, task_spec.as_text(spec) + "\n\nГенерирую...")
+
+    # Режим качества из фразы — только на эту задачу: «подешевле» сказано про
+    # неё, а не про все будущие. Настройку возвращаем обратно в любом случае.
+    previous = None
+    if spec.get("quality"):
+        previous = await hixiit.quality_mode()
+        if spec["quality"] in exec_router.QUALITY_MODES:
+            await hixiit.set_quality_mode(spec["quality"])
+    try:
+        res = await hixiit.generate(spec["subject"], kind=spec["kind"],
+                                    ratio=spec.get("ratio"))
+    finally:
+        if previous is not None:
+            await hixiit.set_quality_mode(previous)
+
+    if not res.get("ok") or not res.get("url"):
+        why = res.get("error") or "причина не названа"
+        tried = ", ".join(res.get("tried") or []) or "—"
+        await send_message(chat_id,
+                           f"🔴 <b>Не получилось</b>\nШаг: генерация {spec['kind']}\n"
+                           f"Причина: {why}\nПробовали: {tried}\n\n"
+                           f"Маршруты: /routes · Настройки: /hf")
+        return
+
+    caption = (f"{res.get('provider', '')} {res.get('model', '')}\n"
+               f"{spec['subject'][:200]}").strip()
+    art_id = res.get("artifact_id") or ""
+    try:
+        if spec["kind"] == "video":
+            await send_video(chat_id, res["url"], caption)
+        else:
+            await send_photo(chat_id, res["url"], caption)
+        if art_id:
+            await mark_artifact(art_id, telegram="доставлено")
+    except Exception as e:
+        # Файл уже сохранён — повторять надо доставку, а не генерацию (§29).
+        if art_id:
+            await mark_artifact(art_id, telegram=f"не доставлено: {str(e)[:120]}")
+        await send_message(chat_id,
+                           f"🔗 {res['url']}\n<i>Файл готов, но чат его не принял: "
+                           f"{str(e)[:100]}</i>"
+                           + (f"\nПовторить отправку: <code>/resend {art_id}</code>"
+                              if art_id else ""))
+        return
+
+    qc = res.get("qc") or {}
+    if qc.get("reason"):
+        await send_message(chat_id, f"🔍 Проверка: {str(qc['reason'])[:300]}")
 
 
 async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):
