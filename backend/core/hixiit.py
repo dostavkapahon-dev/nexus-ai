@@ -22,6 +22,7 @@ import os
 import json
 from contextlib import asynccontextmanager
 import asyncio
+import contextvars
 import time
 
 # Кэш каталога моделей: {(type, input): (timestamp, [models])}
@@ -255,13 +256,57 @@ async def _mcp_session():
             yield session
 
 
+# Открытая сессия текущей задачи. Хранится в контекстной переменной, а не в
+# модуле: параллельные генерации не должны делить одно соединение.
+_SHARED_SESSION: contextvars.ContextVar = contextvars.ContextVar(
+    "hixiit_mcp_session", default=None)
+
+
+@asynccontextmanager
+async def mcp_scope():
+    """Одна сессия MCP на всю задачу вместо новой на каждый вызов.
+
+    Одна генерация — это пять-семь обращений к платформе: подбор модели,
+    каталог безлимита, сам запрос и опросы готовности. Каждое открывало новое
+    соединение и заново проходило `initialize()`, и на рукопожатия уходило
+    больше времени, чем на саму генерацию.
+
+    Если сессию открыть не удалось, работаем как раньше — по соединению на
+    вызов. Ускорение не должно превращаться в отказ.
+    """
+    try:
+        async with _mcp_session() as session:
+            token = _SHARED_SESSION.set(session)
+            try:
+                yield session
+            finally:
+                _SHARED_SESSION.reset(token)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        print(f"[NEXUS] общая сессия MCP не открылась ({_why(e, 120)}), "
+              f"работаем по соединению на вызов", flush=True)
+        yield None
+
+
 async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     """Один вызов инструмента на MCP-сервере Higgsfield.
 
     Возвращает распарсенный результат (dict/list/str) либо бросает исключение.
-    Сессия создаётся на вызов — так проще и безопаснее в долгоживущем процессе.
+    Если открыта общая сессия задачи (`mcp_scope`), вызов идёт по ней; иначе
+    соединение создаётся на вызов.
     """
     async def _run():
+        shared = _SHARED_SESSION.get()
+        if shared is not None:
+            try:
+                return _unwrap(await shared.call_tool(tool, args))
+            except BaseException as e:
+                _reraise_control_flow(e)
+                # Долгая генерация может пережить своё соединение. Это не повод
+                # ронять задачу: снимаем общую сессию и идём обычным путём.
+                _SHARED_SESSION.set(None)
+                print(f"[NEXUS] общая сессия MCP оборвалась ({_why(e, 120)}), "
+                      f"повторяю вызов {tool} отдельным соединением", flush=True)
         async with _mcp_session() as session:
             return _unwrap(await session.call_tool(tool, args))
 
@@ -785,6 +830,13 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     результат приходит заявкой со статусом (её надо дождаться), а картинка-вход
     передаётся как media_id, а не ссылкой.
     """
+    async with mcp_scope():
+        return await _generate_via_mcp_inner(task, kind, ratio, image_url)
+
+
+async def _generate_via_mcp_inner(task: str, kind: str, ratio: str,
+                                  image_url: str = None) -> dict:
+    """Тело генерации. Все вызовы внутри идут по одной открытой сессии."""
     model = await pick_model(task, kind, has_reference=bool(image_url))
     model_id = model.get("id") or pick_by_task(task, kind, bool(image_url))
     tool = "generate_video" if kind == "video" else "generate_image"
