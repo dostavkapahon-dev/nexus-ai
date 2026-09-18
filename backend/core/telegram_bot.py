@@ -1086,12 +1086,20 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd in ("hixiit", "hixit", "higgsfield"):
         from core.hixiit import status as hixiit_status
         st = await hixiit_status()
+        # Первым — вход по OAuth: это и есть основной путь. Он работает от
+        # имени человека, поэтому видит весь каталог аккаунта, его план и его
+        # безлимит. Ключ и секрет ходят по одному адресу и знают одну модель,
+        # поэтому они запасные — раньше порядок был обратный и сбивал с толку.
+        mcp_line = ("✅ вход по OAuth — основной путь"
+                    if st.get("mcp_ok") else
+                    ("⚠️ вход по OAuth — выполнен, но платформа не ответила"
+                     if st["mcp_configured"] else
+                     "❌ вход по OAuth не выполнен — /hfconnect"))
         lines = [
             "🎨 <b>HIXIIT — генеративный слой</b>", "",
-            # Первым — путь по ключу: он основной, потому что ключ и секрет не
-            # протухают. Не «ключ вписан», а «запрос с ним прошёл»: иначе врёт.
+            mcp_line,
             f"{'✅' if st.get('api_ok') else ('⚠️' if st['api_key'] else '❌')} "
-            "API по ключу и секрету — основной путь"
+            "API по ключу и секрету — запасной путь"
             + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
                if st.get("api_error") else ""),
         ]
@@ -1112,9 +1120,8 @@ async def _dispatch_command(chat_id: str, text: str):
         # держится на OAuth-сессии, которая протухает. Поэтому упоминаем его
         # строкой состояния, а не требованием что-то настроить.
         if st["mcp_configured"]:
-            lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
-                         + (f"\n   <i>{st.get('mcp_error','')[:300]}</i>"
-                            if st.get("mcp_error") else ""))
+            if st.get("mcp_error"):
+                lines.append(f"   <i>{st.get('mcp_error', '')[:300]}</i>")
             # Код ошибки не говорит, что чинить: подключение, рукопожатие и сам
             # инструмент отказывают одинаково, а лечатся по-разному.
             if not st.get("mcp_ok"):
