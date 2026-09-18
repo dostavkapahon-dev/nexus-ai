@@ -11,6 +11,12 @@ import pytest
 
 from core import hixiit
 
+# Настоящие сроки снимаем на импорте: ниже автофикстура подменяет их на
+# миллисекунды, чтобы тесты не ждали по-настоящему.
+REAL = {"api": hixiit.API_STATUS_TIMEOUT, "browser": hixiit.BROWSER_STATUS_TIMEOUT,
+        "store": hixiit.STORE_STATUS_TIMEOUT, "mcp": hixiit.MCP_STATUS_TIMEOUT,
+        "poll_sec": hixiit.JOB_POLL_SECONDS, "poll_n": hixiit.JOB_POLL_ATTEMPTS}
+
 
 @pytest.fixture(autouse=True)
 def fast(monkeypatch):
@@ -52,3 +58,43 @@ async def test_status_answers_even_when_every_part_hangs(monkeypatch):
     assert "не ответила" in out["api_error"]
     assert out["browser_agent"] is False
     assert out["key_sources"] == []
+
+
+def test_status_budget_fits_the_selftest_limit():
+    """Сумма сроков должна укладываться в минуту, которую даёт самопроверка.
+
+    «check_hixiit — не ответила за 60 секунд» — это не поломка платформы, а
+    наш собственный бюджет, вылезший за отведённое время.
+    """
+    worst = (REAL["api"] + REAL["browser"] + REAL["mcp"] + 2 * REAL["store"])
+    assert worst <= 55, f"худший случай {worst:.0f} с — не влезет в минуту"
+
+
+def test_mcp_budget_covers_a_handshake():
+    """Каждый вызов MCP заново соединяется и здоровается.
+
+    С восемью секундами статус объявлял MCP сломанным («нужен OAuth-вход»),
+    а подробная проверка тут же отвечала «MCP работает» — при выполненном входе.
+    """
+    assert REAL["mcp"] >= 15
+
+
+def test_job_polling_does_not_reconnect_forty_times():
+    """Опрос задачи длинными шагами: каждый шаг — новое рукопожатие."""
+    assert REAL["poll_n"] <= 20
+    assert REAL["poll_sec"] >= 30
+    # Запас времени на генерацию не должен при этом сократиться.
+    assert REAL["poll_n"] * REAL["poll_sec"] >= 600
+
+
+@pytest.mark.asyncio
+async def test_slow_mcp_with_a_token_is_not_called_a_login_problem(monkeypatch):
+    """Ложная причина хуже отсутствия причины: человек идёт перевходить зря."""
+    monkeypatch.setenv("HIGGSFIELD_MCP_TOKEN", "token-value")
+    monkeypatch.setattr(hixiit, "mcp_configured", lambda: True)
+    monkeypatch.setattr(hixiit, "_mcp_call",
+                        lambda *a, **k: _hangs())
+    out = await asyncio.wait_for(hixiit.status(), timeout=5)
+    assert out["mcp_ok"] is False
+    assert "OAuth" not in out["mcp_error"]
+    assert "медленнее" in out["mcp_error"]

@@ -135,7 +135,12 @@ OFFICIAL_MCP_URL = "https://mcp.higgsfield.ai/mcp"
 
 # Сколько статус ждёт MCP. Коротко намеренно: статус обязан отвечать быстро, а
 # «не ответил» здесь так же информативно, как подробная ошибка через минуту.
-MCP_STATUS_TIMEOUT = 8.0
+# Восемь секунд не хватало: каждый вызов MCP открывает новое соединение и
+# заново проходит рукопожатие, а в бюджет статуса их влезало два подряд
+# (каталог безлимита и баланс). Отчёт писал «вызов не проходит, нужен
+# OAuth-вход», хотя вход был выполнен и подробная проверка тут же отвечала
+# «MCP работает». Теперь бюджет соразмерен одному рукопожатию.
+MCP_STATUS_TIMEOUT = 20.0
 
 # Сроки частей статуса. Ни одна не имеет права съесть весь ответ: проверка
 # «Higgsfield» падала с «не ответила за 60 секунд», потому что живой запрос к
@@ -667,13 +672,22 @@ async def _import_media(image_url: str) -> str | None:
     return None
 
 
-async def _wait_job(job_id: str, attempts: int = 40) -> str:
+# Ждём результат длинными шагами. Каждый вызов MCP открывает новое соединение
+# и заново проходит рукопожатие, поэтому сорок коротких опросов — это сорок
+# рукопожатий подряд: минуты уходят не на генерацию, а на переподключение.
+# Пятнадцать шагов по 45 секунд дают тот же запас времени втрое дешевле.
+JOB_POLL_SECONDS = 45
+JOB_POLL_ATTEMPTS = 15
+
+
+async def _wait_job(job_id: str, attempts: int = JOB_POLL_ATTEMPTS) -> str:
     """Ждёт готовности задачи. Генерация асинхронная: ответ на запрос — это
     заявка со статусом pending, а не готовое медиа."""
     for _ in range(attempts):
         res = await _mcp_call("jobs_wait",
                               {"jobs": [{"index": 0, "job_id": job_id}],
-                               "timeout_seconds": 15}, timeout=60)
+                               "timeout_seconds": JOB_POLL_SECONDS},
+                              timeout=JOB_POLL_SECONDS + 30)
         jobs = (res or {}).get("jobs") or []
         job = jobs[0] if jobs else {}
         status = (job.get("status") or "").lower()
@@ -1888,23 +1902,32 @@ async def status() -> dict:
         import asyncio as _asyncio
 
         async def _mcp_facts():
-            try:
-                out["unlim"] = await unlim_status()
-            except BaseException as e:
-                _reraise_control_flow(e)
+            # Сначала баланс: это самый дешёвый вызов, и он один отвечает на
+            # вопрос «MCP вообще работает». Каталог безлимита тяжелее и раньше
+            # шёл первым — съедал бюджет, и статус объявлял MCP сломанным,
+            # ни разу его не спросив.
             bal = await _mcp_call("balance", {}, timeout=MCP_STATUS_TIMEOUT)
             out["mcp_ok"] = True
             if isinstance(bal, dict):
                 out["credits"] = bal.get("credits")
                 out["plan"] = bal.get("subscription_plan_type")
+            try:
+                out["unlim"] = await unlim_status()
+            except BaseException as e:
+                _reraise_control_flow(e)
 
         try:
             await _asyncio.wait_for(_mcp_facts(), timeout=MCP_STATUS_TIMEOUT)
         except _asyncio.TimeoutError:
             out["mcp_ok"] = False
-            out["mcp_error"] = (f"не ответил за {MCP_STATUS_TIMEOUT:.0f} с — "
-                                "соединение есть, но вызов не проходит "
-                                "(нужен OAuth-вход пользователя)")
+            # Про OAuth здесь не говорим: когда токен есть, это ложная
+            # причина — человек идёт перевходить, а дело в скорости.
+            out["mcp_error"] = (
+                f"не ответил за {MCP_STATUS_TIMEOUT:.0f} с — "
+                + ("вход выполнен, платформа отвечает медленнее этого срока; "
+                   "на саму генерацию срок больше"
+                   if os.getenv("HIGGSFIELD_MCP_TOKEN", "") else
+                   "вход не выполнен — /hfconnect"))
         except BaseException as e:
             _reraise_control_flow(e)
             out["mcp_ok"] = False
