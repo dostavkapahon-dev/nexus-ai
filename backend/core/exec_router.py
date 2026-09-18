@@ -175,7 +175,8 @@ async def order(mode: str = "auto", quality: str = "auto",
         row = data[channel]
         item = {"channel": channel, "use": True, "why": "",
                 "score": _score(channel, row, quality),
-                "rate": success_rate(row), "sec": row.get("sec", 0.0)}
+                "rate": success_rate(row), "sec": row.get("sec", 0.0),
+                "last_error": str(row.get("last_error") or "")}
         if allowed is not None and channel not in allowed:
             item.update(use=False,
                         why=f"пропущен (режим «{MODE_LABEL.get(mode, mode)}»)",
@@ -187,7 +188,11 @@ async def order(mode: str = "auto", quality: str = "auto",
             # Причина отказа важнее срока: «повтор через 9 мин» не говорит,
             # что чинить, а «вход не выполнен» или «400 Unavailable model» —
             # говорит.
-            was = (reasons.get(channel) or "").strip()
+            # Причина из памяти процесса, а если её нет — из истории в базе.
+            # История переживает перезапуск, а память — нет: после деплоя
+            # оставалось только «отказал недавно», и это ничего не объясняло.
+            was = ((reasons.get(channel) or "").strip()
+                   or item["last_error"].strip())
             why = (f"пропущен — отказал недавно ({was[:200]}), повтор через "
                    f"{cooling[channel] / 60:.0f} мин" if was else
                    f"пропущен — отказал недавно, повтор через "
@@ -215,6 +220,10 @@ def as_text(rows: list[dict]) -> str:
         if r["sec"]:
             part += f", в среднем {r['sec']:.0f} с"
         lines.append(part)
+        # Канал доступен, но в прошлый раз отказал — это стоит видеть до того,
+        # как он отказал снова.
+        if r.get("last_error"):
+            lines.append(f"   прошлый отказ: {r['last_error'][:150]}")
     if not live:
         lines.append("")
         lines.append("Ни одного доступного канала: генерация сейчас невозможна.")

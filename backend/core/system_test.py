@@ -127,8 +127,13 @@ async def check_hixiit(deep: bool = False) -> dict:
             # Причина здесь — это список из трёх путей с их отказами, и обрезка
             # съедала ровно хвост: «Браузер: Chromium установлен, но не з…».
             # Именно он и нужен, чтобы чинить. В сообщение Telegram влезает.
+            # К сохранённой причине добавляем последние отказы каналов из
+            # истории маршрутов. Записанная причина могла состоять из одних
+            # «пропущен — отказал недавно» (все каналы остывали), и тогда в
+            # ней нет ничего, по чему можно чинить, — а в истории есть.
             return _fail(name, f"{route}, но последняя генерация не удалась: "
-                               f"{proof['why'][:900]}", "", t)
+                               f"{proof['why'][:900]}"
+                               f"{await _channel_errors()}", "", t)
         res = _ok(name, route, "доступ подтверждён; генерация ни разу не "
                                "проверялась — запустите /system_test deep", t)
         res["warn"] = True
@@ -262,3 +267,22 @@ def as_text(report: dict) -> str:
         lines.append("\nГенерация не запускалась, чтобы не тратить кредиты: "
                      "полная проверка — <code>/system_test deep</code>")
     return "\n".join(lines)
+
+
+async def _channel_errors() -> str:
+    """Последний отказ каждого канала по истории маршрутов.
+
+    История лежит в базе и переживает перезапуск, поэтому она отвечает на
+    вопрос «а что именно ответила платформа» даже тогда, когда в отчёте одни
+    остывания.
+    """
+    try:
+        from core import exec_router
+        data = await exec_router.stats()
+    except Exception:
+        return ""
+    lines = [f"• {exec_router.HUMAN[c]}: {row['last_error'][:200]}"
+             for c, row in data.items() if row.get("last_error")]
+    if not lines:
+        return ""
+    return "\n\nПоследние отказы каналов:\n" + "\n".join(lines)
