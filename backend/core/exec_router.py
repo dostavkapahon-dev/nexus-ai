@@ -170,7 +170,8 @@ def _score(channel: str, row: dict, quality: str) -> float:
 async def order(mode: str = "auto", quality: str = "auto",
                 configured: dict | None = None,
                 cooling: dict | None = None,
-                reasons: dict | None = None) -> list[dict]:
+                reasons: dict | None = None,
+                missing: dict | None = None) -> list[dict]:
     """Порядок каналов с объяснением по каждому.
 
     `configured` — {канал: bool}, есть ли доступ вообще.
@@ -183,6 +184,10 @@ async def order(mode: str = "auto", quality: str = "auto",
     configured = configured or {}
     cooling = cooling or {}
     reasons = reasons or {}
+    # Чего не хватает каналу — словами вызывающего, если он знает точнее нашего
+    # общего описания. «Браузер не настроен» и «браузеру не хватит памяти» —
+    # разные вещи и чинятся по-разному.
+    missing = missing or {}
     data = await stats()
     allowed = MODE_ONLY.get(mode)
     quality = quality if quality in QUALITY_MODES else "auto"
@@ -199,7 +204,9 @@ async def order(mode: str = "auto", quality: str = "auto",
                         why=f"пропущен (режим «{MODE_LABEL.get(mode, mode)}»)",
                         score=-1)
         elif not configured.get(channel, False):
-            item.update(use=False, why=MISSING.get(channel, "не настроен"),
+            item.update(use=False,
+                        why=(missing.get(channel)
+                             or MISSING.get(channel, "не настроен")),
                         score=-1)
         elif cooling.get(channel, 0) > 0:
             # Причина отказа важнее срока: «повтор через 9 мин» не говорит,

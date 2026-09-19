@@ -1315,14 +1315,20 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                 "kind": kind, "model": "account", "where": seen["where"]}
 
     runners = {"mcp": _try_mcp, "rest": _try_rest, "browser": _try_browser}
+    # Браузер больше не «доступен всегда». Заведомо нерабочий канал в списке —
+    # это не запасной вариант, а ловушка: задача доходит до него последним
+    # шагом и роняет сервис вместо отказа.
+    from core.server_browser import usable_now as _browser_usable
+    browser_ok, browser_why = _browser_usable()
     configured = {"mcp": mcp_configured(),
                   "rest": bool(_hf_credentials()),
-                  "browser": True}
+                  "browser": browser_ok}
     cooling = {c: (0.0 if force else _cold(c)) for c in ("mcp", "rest", "browser")}
     reasons = {c: cold_reason(c) for c in ("mcp", "rest", "browser")}
 
+    missing = {"browser": browser_why} if browser_why else None
     for step in await exec_router.order(mode, quality, configured, cooling,
-                                        reasons):
+                                        reasons, missing):
         channel = step["channel"]
         name = exec_router.HUMAN[channel]
         if not step["use"]:

@@ -169,6 +169,30 @@ def enabled() -> bool:
     return os.getenv("NEXUS_SERVER_BROWSER", "1").strip() not in ("0", "false", "no", "")
 
 
+def usable_now() -> tuple[bool, str]:
+    """Можно ли вообще пользоваться браузером прямо сейчас — и если нет, почему.
+
+    Раньше браузер считался доступным всегда. Задача честно доходила до него
+    последним каналом, пыталась поднять Chromium — и на маленьком инстансе
+    ядро убивало весь сервис. То есть «доступный» канал не просто не работал,
+    он ронял остальные.
+
+    Ответ здесь дешёвый: ни одного запуска, только флаг, адрес облачного
+    браузера и свободная память.
+    """
+    if not enabled():
+        return False, "выключен флагом NEXUS_SERVER_BROWSER"
+    if _cdp_endpoint():
+        # Облачный браузер работает у провайдера — нашей памяти он не занимает.
+        return True, ""
+    free = available_mb()
+    if free is not None and free < MIN_FREE_MB:
+        return False, (f"нет облачного браузера, а локальному не хватит памяти "
+                       f"(свободно {free:.0f} МБ из нужных {MIN_FREE_MB:.0f}) — "
+                       f"задайте NEXUS_BROWSER_CDP")
+    return True, ""
+
+
 def _profile_dir() -> str:
     return os.getenv("NEXUS_BROWSER_PROFILE",
                      os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
