@@ -13,16 +13,27 @@ _bearer = HTTPBearer(auto_error=False)
 def _secret() -> bytes:
     return os.getenv("ADMIN_PASSWORD", "nexus-change-me").encode()
 
+# Сколько живёт вход. Раньше метка считалась по часу и принималась только
+# текущая и предыдущая — то есть через час-два работы дашборд выкидывал на
+# экран пароля посреди дела, и это выглядело как «панель не грузится».
+# Владелец у системы один, вход только по его паролю, поэтому сутки как шаг и
+# неделя как срок — разумная плата за то, чтобы не вводить пароль каждый час.
+_BUCKET = 86400
+_DAYS_VALID = 7
+
+
 def make_token() -> str:
-    payload = f"nexus:{int(time.time() // 3600)}"  # rotates every hour
+    payload = f"nexus:{int(time.time() // _BUCKET)}"
     sig = hmac.new(_secret(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 def verify_token(token: str) -> bool:
     try:
         prefix, sig = token.rsplit(".", 1)
-        # accept current hour and previous hour
-        for ts in [int(time.time() // 3600), int(time.time() // 3600) - 1]:
+        # Принимаем сегодняшнюю метку и несколько предыдущих: смена пароля
+        # по-прежнему обрывает все входы сразу, потому что подпись считается им.
+        now = int(time.time() // _BUCKET)
+        for ts in range(now, now - _DAYS_VALID, -1):
             expected_payload = f"nexus:{ts}"
             expected_sig = hmac.new(_secret(), expected_payload.encode(), hashlib.sha256).hexdigest()
             if hmac.compare_digest(sig, expected_sig) and prefix == expected_payload:

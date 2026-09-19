@@ -59,8 +59,13 @@ async def test_timeout_message_names_the_real_cause(monkeypatch):
     monkeypatch.setattr(hixiit, "execution_mode", mode)
     monkeypatch.setattr("core.higgsfield.credentials", lambda: None)
 
+    # Без токена причина медленного ответа — именно вход. С токеном та же
+    # формулировка была бы ложной: человек пошёл бы перевходить, а дело в
+    # скорости ответа платформы.
+    monkeypatch.delenv("HIGGSFIELD_MCP_TOKEN", raising=False)
+
     st = await hixiit.status()
-    assert "OAuth" in st["mcp_error"]
+    assert "вход не выполнен" in st["mcp_error"]
 
 
 @pytest.mark.asyncio

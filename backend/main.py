@@ -126,6 +126,12 @@ async def lifespan(app: FastAPI):
     # «работает, только пока открыт сайт».
     from core import keepalive
     keepalive.start()
+    # Вход в Higgsfield — по OAuth, и он основной путь генерации. Токен доступа
+    # живёт часами, а деплой случается чаще: после перезапуска первая же задача
+    # упиралась в протухший доступ и выглядела как «Higgsfield не работает».
+    # Продлеваем молча на старте — ради этого и хранится refresh-токен.
+    from core.mcp_oauth import refresh_on_start
+    asyncio.create_task(refresh_on_start())
     # Сервер сам делает разбор аккаунта и шлёт в Telegram (раз в сутки).
     from core.auto_report import auto_analyze_on_start
     asyncio.create_task(auto_analyze_on_start())

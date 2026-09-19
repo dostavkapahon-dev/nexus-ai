@@ -22,6 +22,7 @@ import os
 import json
 from contextlib import asynccontextmanager
 import asyncio
+import contextvars
 import time
 
 # Кэш каталога моделей: {(type, input): (timestamp, [models])}
@@ -135,7 +136,12 @@ OFFICIAL_MCP_URL = "https://mcp.higgsfield.ai/mcp"
 
 # Сколько статус ждёт MCP. Коротко намеренно: статус обязан отвечать быстро, а
 # «не ответил» здесь так же информативно, как подробная ошибка через минуту.
-MCP_STATUS_TIMEOUT = 8.0
+# Восемь секунд не хватало: каждый вызов MCP открывает новое соединение и
+# заново проходит рукопожатие, а в бюджет статуса их влезало два подряд
+# (каталог безлимита и баланс). Отчёт писал «вызов не проходит, нужен
+# OAuth-вход», хотя вход был выполнен и подробная проверка тут же отвечала
+# «MCP работает». Теперь бюджет соразмерен одному рукопожатию.
+MCP_STATUS_TIMEOUT = 20.0
 
 # Сроки частей статуса. Ни одна не имеет права съесть весь ответ: проверка
 # «Higgsfield» падала с «не ответила за 60 секунд», потому что живой запрос к
@@ -250,13 +256,57 @@ async def _mcp_session():
             yield session
 
 
+# Открытая сессия текущей задачи. Хранится в контекстной переменной, а не в
+# модуле: параллельные генерации не должны делить одно соединение.
+_SHARED_SESSION: contextvars.ContextVar = contextvars.ContextVar(
+    "hixiit_mcp_session", default=None)
+
+
+@asynccontextmanager
+async def mcp_scope():
+    """Одна сессия MCP на всю задачу вместо новой на каждый вызов.
+
+    Одна генерация — это пять-семь обращений к платформе: подбор модели,
+    каталог безлимита, сам запрос и опросы готовности. Каждое открывало новое
+    соединение и заново проходило `initialize()`, и на рукопожатия уходило
+    больше времени, чем на саму генерацию.
+
+    Если сессию открыть не удалось, работаем как раньше — по соединению на
+    вызов. Ускорение не должно превращаться в отказ.
+    """
+    try:
+        async with _mcp_session() as session:
+            token = _SHARED_SESSION.set(session)
+            try:
+                yield session
+            finally:
+                _SHARED_SESSION.reset(token)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        print(f"[NEXUS] общая сессия MCP не открылась ({_why(e, 120)}), "
+              f"работаем по соединению на вызов", flush=True)
+        yield None
+
+
 async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
     """Один вызов инструмента на MCP-сервере Higgsfield.
 
     Возвращает распарсенный результат (dict/list/str) либо бросает исключение.
-    Сессия создаётся на вызов — так проще и безопаснее в долгоживущем процессе.
+    Если открыта общая сессия задачи (`mcp_scope`), вызов идёт по ней; иначе
+    соединение создаётся на вызов.
     """
     async def _run():
+        shared = _SHARED_SESSION.get()
+        if shared is not None:
+            try:
+                return _unwrap(await shared.call_tool(tool, args))
+            except BaseException as e:
+                _reraise_control_flow(e)
+                # Долгая генерация может пережить своё соединение. Это не повод
+                # ронять задачу: снимаем общую сессию и идём обычным путём.
+                _SHARED_SESSION.set(None)
+                print(f"[NEXUS] общая сессия MCP оборвалась ({_why(e, 120)}), "
+                      f"повторяю вызов {tool} отдельным соединением", flush=True)
         async with _mcp_session() as session:
             return _unwrap(await session.call_tool(tool, args))
 
@@ -667,13 +717,22 @@ async def _import_media(image_url: str) -> str | None:
     return None
 
 
-async def _wait_job(job_id: str, attempts: int = 40) -> str:
+# Ждём результат длинными шагами. Каждый вызов MCP открывает новое соединение
+# и заново проходит рукопожатие, поэтому сорок коротких опросов — это сорок
+# рукопожатий подряд: минуты уходят не на генерацию, а на переподключение.
+# Пятнадцать шагов по 45 секунд дают тот же запас времени втрое дешевле.
+JOB_POLL_SECONDS = 45
+JOB_POLL_ATTEMPTS = 15
+
+
+async def _wait_job(job_id: str, attempts: int = JOB_POLL_ATTEMPTS) -> str:
     """Ждёт готовности задачи. Генерация асинхронная: ответ на запрос — это
     заявка со статусом pending, а не готовое медиа."""
     for _ in range(attempts):
         res = await _mcp_call("jobs_wait",
                               {"jobs": [{"index": 0, "job_id": job_id}],
-                               "timeout_seconds": 15}, timeout=60)
+                               "timeout_seconds": JOB_POLL_SECONDS},
+                              timeout=JOB_POLL_SECONDS + 30)
         jobs = (res or {}).get("jobs") or []
         job = jobs[0] if jobs else {}
         status = (job.get("status") or "").lower()
@@ -689,6 +748,80 @@ async def _wait_job(job_id: str, attempts: int = 40) -> str:
     raise RuntimeError("Higgsfield не отдал результат вовремя")
 
 
+_CATALOG_CACHE: dict = {}
+_CATALOG_TTL = 900.0
+
+# Куда уходить, если выбранной модели в каталоге нет. Это не «любимая модель»,
+# а заведомо существующий вход: для картинки платформа выбирает сама, для
+# видео берём модель, умеющую стартовать без исходного кадра.
+SAFE_MODEL = {"image": "image_auto", "video": "cinematic_studio_3_0"}
+
+
+async def catalog_full(kind: str) -> list[dict]:
+    """Весь каталог аккаунта по виду генерации — как его называет платформа.
+
+    Спрашиваем ИМЕННО с фильтром по типу: общий список платформа отдаёт
+    страницами и на первой странице возвращает лишь часть моделей, а её
+    постраничная навигация повторяет ту же страницу. Запрос по типу приходит
+    целиком (`has_more: false`), и только он годится, чтобы решать, существует
+    модель или нет.
+    """
+    now = time.time()
+    cached = _CATALOG_CACHE.get(kind)
+    if cached and now - cached[0] < _CATALOG_TTL:
+        return cached[1]
+    if not mcp_configured():
+        return []
+    try:
+        res = await _mcp_call("models_explore",
+                              {"action": "list", "type": kind, "limit": 100},
+                              timeout=60)
+    except BaseException as e:
+        _reraise_control_flow(e)
+        return []
+    items = (res or {}).get("items") if isinstance(res, dict) else None
+    rows = []
+    for m in items or []:
+        if not isinstance(m, dict) or not m.get("id"):
+            continue
+        rows.append({
+            "value": m["id"],
+            "label": m.get("name") or m["id"],
+            "provider": m.get("provider_name") or "",
+            "about": (m.get("description") or "")[:120],
+            "unlim": bool(m.get("supports_unlim")),
+            # Модель, которой нужен вход, которого у нас нет (стиль, ссылка,
+            # размеры), выбирать можно — но она обязана быть помечена, иначе
+            # выбор закончится отказом, а человек будет думать, что сломалась
+            # генерация.
+            "usable": _model_is_usable(m, has_reference=True),
+        })
+    if rows:
+        _CATALOG_CACHE[kind] = (now, rows)
+    return rows
+
+
+async def catalog_ids(kind: str) -> set:
+    """Какие id моделей у аккаунта есть на самом деле. Пусто — проверить нечем."""
+    return {m["value"] for m in await catalog_full(kind)}
+
+
+async def ensure_known_model(model_id: str, kind: str) -> tuple:
+    """Модель, которую платформа действительно знает, и причина подмены.
+
+    Несуществующий id — это не «чуть хуже кадр», а отказ вместо кадра. Сверка
+    идёт только с полным каталогом по типу: неполный список привёл бы к обратной
+    беде — подмене исправной модели на другую без всякой причины.
+    """
+    known = await catalog_ids(kind)
+    if not known or model_id in known:
+        return model_id, ""
+    safe = SAFE_MODEL.get(kind, "image_auto")
+    if safe not in known:
+        safe = sorted(known)[0]
+    return safe, f"модели «{model_id}» нет в каталоге аккаунта — взята {safe}"
+
+
 async def _generate_via_mcp(task: str, kind: str, ratio: str,
                             image_url: str = None) -> dict:
     """Генерация через MCP по фактическому протоколу платформы.
@@ -697,16 +830,36 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     результат приходит заявкой со статусом (её надо дождаться), а картинка-вход
     передаётся как media_id, а не ссылкой.
     """
+    async with mcp_scope():
+        return await _generate_via_mcp_inner(task, kind, ratio, image_url)
+
+
+async def _generate_via_mcp_inner(task: str, kind: str, ratio: str,
+                                  image_url: str = None) -> dict:
+    """Тело генерации. Все вызовы внутри идут по одной открытой сессии."""
     model = await pick_model(task, kind, has_reference=bool(image_url))
     model_id = model.get("id") or pick_by_task(task, kind, bool(image_url))
     tool = "generate_video" if kind == "video" else "generate_image"
 
+    # Сверяем выбор с живым каталогом до отправки: платформа на неизвестный id
+    # отвечает отказом, и человек видит «Higgsfield не работает» вместо кадра.
+    model_id, model_note = await ensure_known_model(model_id, kind)
+
     params = {"model": model_id, "prompt": prompt_for(model_id, task)[:1500],
               "aspect_ratio": ratio, "count": 1}
 
-    # Безлимит тратим, только когда он есть и покрывает выбранную модель:
-    # иначе платформа вернёт отказ вместо генерации.
-    unlim = await unlim_status()
+    # Качество отправляем, только если человек выбрал его руками. При «auto»
+    # своё умолчание у платформы точнее нашего: у разных моделей разные шкалы
+    # (720p/1080p у одних, 1.5k/2k у других), и навязанное значение — это отказ
+    # вместо кадра.
+    want_quality = await frame_quality()
+    if want_quality != "auto":
+        params["quality"] = want_quality
+
+    # Безлимит тратим, только когда он есть, покрывает выбранную модель и его
+    # не выключили руками: иначе платформа вернёт отказ вместо генерации.
+    allow_unlim = await use_unlim()
+    unlim = await unlim_status() if allow_unlim else {"available": False}
     swapped_from = ""
     if unlim.get("available"):
         covered = unlim.get("models") or []
@@ -742,6 +895,9 @@ async def _generate_via_mcp(task: str, kind: str, ratio: str,
     out = {"ok": True, "url": url, "provider": "higgsfield_mcp",
            "kind": kind, "model": model_id,
            "unlim": bool(params.get("use_unlim"))}
+    if model_note:
+        # Подмену не прячем: человек должен знать, каким входом сделан кадр.
+        out["note"] = model_note
     if swapped_from:
         # Подмену модели не прячем: человек должен видеть, что кадр сделан
         # другой моделью — и почему.
@@ -970,6 +1126,8 @@ async def tell(text: str) -> None:
 # COOLDOWN путь проверяется заново — отказ мог быть временным.
 COOLDOWN_SEC = 600
 _COLD: dict[str, float] = {}
+# Причина последнего отказа по каждому пути — рядом со сроком остывания.
+_COLD_WHY: dict[str, str] = {}
 
 
 # Черновик чужим бесплатным генератором. По умолчанию ВЫКЛЮЧЕН: подделка,
@@ -989,13 +1147,28 @@ def _cold(path: str) -> float:
 
 
 def _chill(path: str, why: str = "") -> None:
+    """Путь отказал — не трогаем его несколько минут. Причину ЗАПОМИНАЕМ.
+
+    Раньше `why` принимался и выбрасывался. Из-за этого в отчётах стояло
+    «пропущен — отказал недавно, повтор через 9 мин» по всем трём каналам, и
+    настоящая причина — чего именно не хватило — не доходила до человека
+    вообще. Чинить по такому тексту нечего.
+    """
     import time
     _COLD[path] = time.monotonic() + COOLDOWN_SEC
+    if why:
+        _COLD_WHY[path] = str(why)[:300]
 
 
 def _warm(path: str) -> None:
     """Путь сработал — снимаем остывание немедленно."""
     _COLD.pop(path, None)
+    _COLD_WHY.pop(path, None)
+
+
+def cold_reason(path: str) -> str:
+    """Из-за чего путь остывает. Пусто — причина не сохранилась."""
+    return _COLD_WHY.get(path, "") if _cold(path) else ""
 
 
 async def _generate_once(task: str, kind: str = "auto", ratio: str = None,
@@ -1054,7 +1227,14 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                              force: bool = False) -> dict:
     """Одна попытка генерации по цепочке путей. Никогда не бросает."""
     kind = detect_kind(task, kind)
-    ratio = ratio or detect_ratio(task)
+    # Порядок неслучаен. Явный аргумент — это «сделай для YouTube», он главнее
+    # всего. Дальше настройка, выбранная руками в /hf. И только потом догадка
+    # по словам задачи: она самая слабая, потому что «вертикально» в тексте
+    # может и не быть.
+    if not ratio:
+        chosen_format = await frame_format()
+        ratio = (chosen_format if chosen_format != "auto"
+                 else detect_ratio(task))
     tried = []
     mode = await execution_mode()
     quality = await quality_mode()
@@ -1135,12 +1315,20 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
                 "kind": kind, "model": "account", "where": seen["where"]}
 
     runners = {"mcp": _try_mcp, "rest": _try_rest, "browser": _try_browser}
+    # Браузер больше не «доступен всегда». Заведомо нерабочий канал в списке —
+    # это не запасной вариант, а ловушка: задача доходит до него последним
+    # шагом и роняет сервис вместо отказа.
+    from core.server_browser import usable_now as _browser_usable
+    browser_ok, browser_why = _browser_usable()
     configured = {"mcp": mcp_configured(),
                   "rest": bool(_hf_credentials()),
-                  "browser": True}
+                  "browser": browser_ok}
     cooling = {c: (0.0 if force else _cold(c)) for c in ("mcp", "rest", "browser")}
+    reasons = {c: cold_reason(c) for c in ("mcp", "rest", "browser")}
 
-    for step in await exec_router.order(mode, quality, configured, cooling):
+    missing = {"browser": browser_why} if browser_why else None
+    for step in await exec_router.order(mode, quality, configured, cooling,
+                                        reasons, missing):
         channel = step["channel"]
         name = exec_router.HUMAN[channel]
         if not step["use"]:
@@ -1151,8 +1339,8 @@ async def _generate_once_raw(task: str, kind: str = "auto", ratio: str = None,
             res = await runners[channel]()
         except BaseException as e:
             _reraise_control_flow(e)
-            _chill(channel)
             why = _why(e, 300)
+            _chill(channel, why)
             await exec_router.record(channel, False, error=why)
             tried.append(f"{name}: {why}")
             continue
@@ -1191,6 +1379,16 @@ MODES = ("auto", "mcp", "api", "browser")
 # Режим качества — отдельная ось от канала (§10/§17 ТЗ). Канал отвечает на
 # вопрос «через что», режим качества — «чем жертвуем при равной пригодности».
 QUALITY_KEY = "hixiit_quality_mode"
+
+# Настройки кадра, выбранные человеком. Хранятся тем же способом, что режимы:
+# KV в таблице Connection — переживает перезапуск и не требует миграции схемы.
+FORMAT_KEY = "hixiit_frame_format"
+FRAME_QUALITY_KEY = "hixiit_frame_quality"
+UNLIM_KEY = "hixiit_use_unlim"
+
+# Соотношения берём из core.formats, чтобы список был один на всю систему:
+# второй перечень рано или поздно разойдётся с первым.
+FRAME_QUALITIES = ("auto", "720p", "1080p", "2k")
 
 
 async def browser_available(quick: bool = False) -> dict:
@@ -1385,6 +1583,87 @@ async def set_execution_mode(value: str) -> bool:
         else:
             db.add(Connection(key_name=MODE_KEY, key_value=value))
         await db.commit()
+    return True
+
+
+async def _kv(key: str, env: str = "") -> str:
+    """Значение настройки: база важнее окружения, пусто — значит не задано."""
+    try:
+        from sqlalchemy import select
+        from database.db import AsyncSessionLocal
+        from database.models import Connection
+        async with AsyncSessionLocal() as db:
+            r = await db.execute(select(Connection).where(
+                Connection.key_name == key))
+            row = r.scalar_one_or_none()
+        value = (row.key_value or "").strip() if row else ""
+    except Exception:
+        value = ""
+    if not value and env:
+        value = os.getenv(env, "").strip()
+    return value
+
+
+async def _kv_put(key: str, value: str) -> None:
+    from sqlalchemy import select
+    from database.db import AsyncSessionLocal
+    from database.models import Connection
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(Connection).where(Connection.key_name == key))
+        row = r.scalar_one_or_none()
+        if row:
+            row.key_value = value
+        else:
+            db.add(Connection(key_name=key, key_value=value))
+        await db.commit()
+
+
+def frame_formats() -> tuple:
+    """Соотношения, из которых можно выбирать. Список один на всю систему."""
+    from core.formats import PIXELS
+    return ("auto",) + tuple(PIXELS.keys())
+
+
+async def frame_format() -> str:
+    """Соотношение сторон, выбранное руками. `auto` — решает площадка/задача."""
+    value = (await _kv(FORMAT_KEY, "NEXUS_FRAME_FORMAT")).lower()
+    return value if value in frame_formats() else "auto"
+
+
+async def set_frame_format(value: str) -> bool:
+    value = (value or "auto").strip().lower()
+    if value not in frame_formats():
+        return False
+    await _kv_put(FORMAT_KEY, value)
+    return True
+
+
+async def frame_quality() -> str:
+    """Качество кадра. `auto` — не отправляем вовсе, платформа берёт своё."""
+    value = (await _kv(FRAME_QUALITY_KEY, "NEXUS_FRAME_QUALITY")).lower()
+    return value if value in FRAME_QUALITIES else "auto"
+
+
+async def set_frame_quality(value: str) -> bool:
+    value = (value or "auto").strip().lower()
+    if value not in FRAME_QUALITIES:
+        return False
+    await _kv_put(FRAME_QUALITY_KEY, value)
+    return True
+
+
+async def use_unlim() -> bool:
+    """Тратить ли безлимит. По умолчанию да.
+
+    Не использовать выданный безлимит — значит зря списывать кредиты, поэтому
+    выключение должно быть осознанным действием, а не умолчанием.
+    """
+    value = (await _kv(UNLIM_KEY, "NEXUS_USE_UNLIM")).lower()
+    return value not in ("0", "off", "no", "false", "нет")
+
+
+async def set_use_unlim(on: bool) -> bool:
+    await _kv_put(UNLIM_KEY, "1" if on else "0")
     return True
 
 
@@ -1681,23 +1960,32 @@ async def status() -> dict:
         import asyncio as _asyncio
 
         async def _mcp_facts():
-            try:
-                out["unlim"] = await unlim_status()
-            except BaseException as e:
-                _reraise_control_flow(e)
+            # Сначала баланс: это самый дешёвый вызов, и он один отвечает на
+            # вопрос «MCP вообще работает». Каталог безлимита тяжелее и раньше
+            # шёл первым — съедал бюджет, и статус объявлял MCP сломанным,
+            # ни разу его не спросив.
             bal = await _mcp_call("balance", {}, timeout=MCP_STATUS_TIMEOUT)
             out["mcp_ok"] = True
             if isinstance(bal, dict):
                 out["credits"] = bal.get("credits")
                 out["plan"] = bal.get("subscription_plan_type")
+            try:
+                out["unlim"] = await unlim_status()
+            except BaseException as e:
+                _reraise_control_flow(e)
 
         try:
             await _asyncio.wait_for(_mcp_facts(), timeout=MCP_STATUS_TIMEOUT)
         except _asyncio.TimeoutError:
             out["mcp_ok"] = False
-            out["mcp_error"] = (f"не ответил за {MCP_STATUS_TIMEOUT:.0f} с — "
-                                "соединение есть, но вызов не проходит "
-                                "(нужен OAuth-вход пользователя)")
+            # Про OAuth здесь не говорим: когда токен есть, это ложная
+            # причина — человек идёт перевходить, а дело в скорости.
+            out["mcp_error"] = (
+                f"не ответил за {MCP_STATUS_TIMEOUT:.0f} с — "
+                + ("вход выполнен, платформа отвечает медленнее этого срока; "
+                   "на саму генерацию срок больше"
+                   if os.getenv("HIGGSFIELD_MCP_TOKEN", "") else
+                   "вход не выполнен — /hfconnect"))
         except BaseException as e:
             _reraise_control_flow(e)
             out["mcp_ok"] = False

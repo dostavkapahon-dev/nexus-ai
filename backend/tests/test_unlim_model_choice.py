@@ -18,6 +18,11 @@ from core import hixiit
 COVERED = ["soul_2", "soul_v2", "gpt_image_2", "nano_banana",
            "nano_banana_pro", "nano_banana_2", "seedream_v4_5", "flux_2"]
 
+# Весь каталог аккаунта шире списка покрытых безлимитом моделей: платные тоже
+# в нём есть. Это разные вопросы к models_explore и разные ответы.
+CATALOG = COVERED + ["z_image", "cinematic_studio_2_5", "marketing_studio_image",
+                     "image_auto"]
+
 
 def test_draft_goes_to_the_budget_unlim_model():
     assert hixiit.unlim_swap("z_image", "draft", COVERED) == "nano_banana"
@@ -56,7 +61,8 @@ async def test_generation_uses_unlim_model_when_unlim_is_available(monkeypatch):
 
     async def fake_call(tool, args, timeout=600.0):
         if tool == "models_explore":
-            return {"items": [{"id": m} for m in COVERED],
+            items = CATALOG if args.get("type") else COVERED
+            return {"items": [{"id": m} for m in items],
                     "unlim": {"available": True, "remaining": 100}}
         sent.update(args.get("params") or {})
         return {"results": [{"id": "job-1", "status": "pending"}]}
@@ -86,7 +92,8 @@ async def test_no_unlim_means_no_swap(monkeypatch):
 
     async def fake_call(tool, args, timeout=600.0):
         if tool == "models_explore":
-            return {"items": [{"id": m} for m in COVERED],
+            items = CATALOG if args.get("type") else COVERED
+            return {"items": [{"id": m} for m in items],
                     "unlim": {"available": False}}
         sent.update(args.get("params") or {})
         return {"results": [{"id": "job-1", "status": "pending"}]}
@@ -116,7 +123,8 @@ async def test_prompt_is_rewritten_for_the_new_model(monkeypatch):
 
     async def fake_call(tool, args, timeout=600.0):
         if tool == "models_explore":
-            return {"items": [{"id": m} for m in COVERED],
+            items = CATALOG if args.get("type") else COVERED
+            return {"items": [{"id": m} for m in items],
                     "unlim": {"available": True}}
         sent.update(args.get("params") or {})
         return {"results": [{"id": "job-1", "status": "pending"}]}

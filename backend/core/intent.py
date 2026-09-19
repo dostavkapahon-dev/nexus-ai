@@ -69,6 +69,18 @@ def quick_route(text: str) -> str | None:
         if any(w in low for w in words):
             return cmd
 
+    # «Сделай фото шашлыка» → один кадр, а не полный конвейер. Раньше слово
+    # «фото» не значило ничего: запрос уходил в модель и возвращался чем угодно.
+    from core import task_spec
+    if task_spec._kind(low) in ("image", "video") and any(
+            w in low for w in ("сделай", "создай", "сгенерируй", "нарисуй",
+                               "нужн", "хочу", "покажи")):
+        spec = task_spec.parse(t)
+        if spec["kind"] == "image" and spec["subject"]:
+            # Передаём фразу целиком: площадка, формат и режим качества нужны
+            # обработчику, а из одной темы их уже не восстановить.
+            return f"/image {t}"
+
     # «Сделай ролик про X» / «нужен рилс о X» → фабрика с темой
     m = re.search(r"(?:сделай|создай|сгенерируй|нужен|хочу)\s+(?:рилс\w*|reels|ролик|видео)\s*(?:про|о|об)?\s*(.*)",
                   t, re.IGNORECASE)

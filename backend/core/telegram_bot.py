@@ -212,6 +212,9 @@ async def setup_bot_commands():
     """Регистрирует список команд (кнопка «Меню» в клиенте Telegram)."""
     cmds = [
         {"command": "menu", "description": "Пульт управления (кнопки)"},
+        {"command": "image", "description": "Сделать кадр: /image шашлык на мангале"},
+        {"command": "hfmodels", "description": "Все модели Higgsfield и выбор"},
+        {"command": "video", "description": "Сделать ролик: /video жарка шашлыка"},
         {"command": "diag", "description": "Диагностика: что подключено"},
         {"command": "system_test", "description": "Самопроверка: что реально работает"},
         {"command": "can", "description": "Что система умеет подтверждённо"},
@@ -380,6 +383,7 @@ async def _provider_lines() -> list:
 # Человеческие имена режимов Higgsfield — в одном месте, чтобы подпись в статусе
 # и подтверждение при переключении не разъезжались.
 MODE_NAMES = {"auto": "автоматически", "mcp": "только MCP",
+              "api": "только API по ключу",
               "browser": "через браузер в аккаунте"}
 
 
@@ -506,15 +510,18 @@ async def _dispatch_command(chat_id: str, text: str):
 
     if cmd == "errors":
         # Всё сломанное за сутки в одном месте: провалы задач и ошибки моделей.
-        from core.notify import recent_errors
+        from core.notify import recent_errors, error_digest, digest_text
         hours = 24
         if args and args[0].isdigit():
             hours = max(1, min(int(args[0]), 168))
+        # Сначала сводка по причинам: сотня ошибок почти всегда оказывается
+        # одной поломкой, повторившейся сто раз. Без группировки это не видно.
+        await send_message(chat_id, digest_text(await error_digest(hours)))
         data = await recent_errors(hours)
         if not data["total"]:
             await send_message(chat_id, f"✅ За последние {hours} ч ошибок нет.")
             return
-        lines = [f"🚨 <b>Ошибки за {hours} ч</b>", ""]
+        lines = [f"🕘 <b>Последние по времени</b>", ""]
         if data["tasks"]:
             lines.append("<b>Задачи:</b>")
             for t in data["tasks"]:
@@ -1013,6 +1020,14 @@ async def _dispatch_command(chat_id: str, text: str):
             await send_message(chat_id, "Не знаю такой режим. Доступны: auto, mcp, browser.")
         return
 
+    if cmd.startswith("mdl_"):
+        parts = cmd.split("_")
+        kind = parts[1] if len(parts) > 1 else "image"
+        page = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+        await _show_catalog(chat_id, kind if kind in ("image", "video") else "image",
+                            page)
+        return
+
     if cmd.startswith(("setimg_", "setvid_")):
         kind = "image" if cmd.startswith("setimg_") else "video"
         value = cmd.split("_", 1)[1]
@@ -1021,6 +1036,8 @@ async def _dispatch_command(chat_id: str, text: str):
         human = "изображений" if kind == "image" else "видео"
         await send_message(chat_id, f"💾 Модель {human}: <b>{value}</b>\nСохранено — "
                                     "используется и после перезапуска.")
+        # Экран перерисовываем: без этого не видно, что выбор применился.
+        await _show_catalog(chat_id, kind)
         return
 
     # Автоматика: расписание видно, а выключатель — управляемый. Раньше он был
@@ -1069,12 +1086,20 @@ async def _dispatch_command(chat_id: str, text: str):
     if cmd in ("hixiit", "hixit", "higgsfield"):
         from core.hixiit import status as hixiit_status
         st = await hixiit_status()
+        # Первым — вход по OAuth: это и есть основной путь. Он работает от
+        # имени человека, поэтому видит весь каталог аккаунта, его план и его
+        # безлимит. Ключ и секрет ходят по одному адресу и знают одну модель,
+        # поэтому они запасные — раньше порядок был обратный и сбивал с толку.
+        mcp_line = ("✅ вход по OAuth — основной путь"
+                    if st.get("mcp_ok") else
+                    ("⚠️ вход по OAuth — выполнен, но платформа не ответила"
+                     if st["mcp_configured"] else
+                     "❌ вход по OAuth не выполнен — /hfconnect"))
         lines = [
             "🎨 <b>HIXIIT — генеративный слой</b>", "",
-            # Первым — путь по ключу: он основной, потому что ключ и секрет не
-            # протухают. Не «ключ вписан», а «запрос с ним прошёл»: иначе врёт.
+            mcp_line,
             f"{'✅' if st.get('api_ok') else ('⚠️' if st['api_key'] else '❌')} "
-            "API по ключу и секрету — основной путь"
+            "API по ключу и секрету — запасной путь"
             + (f"\n   <i>{str(st.get('api_error',''))[:150]}</i>"
                if st.get("api_error") else ""),
         ]
@@ -1095,9 +1120,8 @@ async def _dispatch_command(chat_id: str, text: str):
         # держится на OAuth-сессии, которая протухает. Поэтому упоминаем его
         # строкой состояния, а не требованием что-то настроить.
         if st["mcp_configured"]:
-            lines.append(("✅" if st.get("mcp_ok") else "⚠️") + " MCP — расширенный каталог"
-                         + (f"\n   <i>{st.get('mcp_error','')[:300]}</i>"
-                            if st.get("mcp_error") else ""))
+            if st.get("mcp_error"):
+                lines.append(f"   <i>{st.get('mcp_error', '')[:300]}</i>")
             # Код ошибки не говорит, что чинить: подключение, рукопожатие и сам
             # инструмент отказывают одинаково, а лечатся по-разному.
             if not st.get("mcp_ok"):
@@ -1252,6 +1276,43 @@ async def _dispatch_command(chat_id: str, text: str):
         if not st["connected"]:
             lines.append("\nВойти: /hfconnect")
         await send_message(chat_id, "\n".join(lines))
+        return
+
+    if cmd in ("hf", "higgs", "хигсфилд"):
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd.startswith("hffmt_"):
+        from core.hixiit import set_frame_format
+        value = cmd[len("hffmt_"):]
+        if not await set_frame_format(value):
+            await send_message(chat_id, "Такого формата нет.")
+            return
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd.startswith("hfq_"):
+        from core.hixiit import set_frame_quality
+        value = cmd[len("hfq_"):]
+        if not await set_frame_quality(value):
+            await send_message(chat_id, "Такого качества нет.")
+            return
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd in ("hfunlim_on", "hfunlim_off"):
+        from core.hixiit import set_use_unlim
+        await set_use_unlim(cmd.endswith("_on"))
+        await _show_hf_panel(chat_id)
+        return
+
+    if cmd == "hfgen":
+        # Генерация текущими настройками — чтобы проверить выбор сразу, не
+        # вспоминая отдельную команду.
+        # Тема нужна настоящая: «кадр по текущим настройкам» — это не предмет
+        # съёмки, а название кнопки, и в промпт оно попасть не должно.
+        await _run_single_generation(chat_id, "шашлык на мангале, аппетитный, "
+                                              "реалистичное фото", "image")
         return
 
     if cmd in ("routes", "marshrut", "router"):
@@ -1888,6 +1949,20 @@ async def _dispatch_command(chat_id: str, text: str):
                     source="telegram", ref_id=args[0])
         await send_message(chat_id, f"⚙️ Генерация запущена для {args[0][:8]}...")
 
+    elif cmd in ("hfmodels", "allmodels", "модели"):
+        # Весь каталог аккаунта, а не срез из шести зашитых моделей.
+        want = (args[0].lower() if args else "image")
+        await _show_catalog(chat_id, "video" if want.startswith(("vid", "вид", "рол"))
+                            else "image")
+
+    elif cmd in ("image", "img", "photo", "кадр", "video", "clip"):
+        # Прямая генерация одного файла: человек просит кадр — он получает
+        # кадр, а не запуск полного конвейера с исследованием и монтажом.
+        # Раньше команды не существовало вовсе: кнопка «▶️ Сгенерировать кадр»
+        # в пульте /hf слала «/image ...» и получала в ответ список команд.
+        kind = "image" if cmd in ("image", "img", "photo", "кадр") else "video"
+        await _run_single_generation(chat_id, " ".join(args), kind)
+
     elif cmd in ("factory", "reel", "create_reel"):
         # Полный цикл: анализ → генерация → монтаж → согласование в Telegram.
         # Раньше без аргументов запускался dry-run: конвейер отрабатывал, но шаг
@@ -1966,6 +2041,9 @@ async def _dispatch_command(chat_id: str, text: str):
             "/music [url] [настроение] — добавить трек",
             "/pc       — статус подключённого ПК",
             "/do [задача] — выполнить в браузере на ПК",
+            "/hfmodels [image|video] — весь каталог моделей, выбор кнопкой",
+            "/image [что] — один кадр (формат по площадке)",
+            "/video [что] — один ролик",
             "/factory [тема] — ВЕСЬ цикл: анализ→генерация→превью",
             "/factory [тема] post — то же + публикация",
             "/analyze [ниша] — запустить анализ",
@@ -2123,6 +2201,143 @@ def _model_rows(models: list, prefix: str, current: str) -> list:
     return rows
 
 
+async def _show_hf_panel(chat_id: str):
+    """Один экран Higgsfield: что выбрано сейчас и чем это переключить.
+
+    До него управление было размазано: модели в /model, канал в /hixiit,
+    качество текстовой командой, а формат вообще не выбирался. Человек не мог
+    ответить на простой вопрос «чем и в каком виде сейчас будет сделан кадр».
+    """
+    from core.hixiit import (execution_mode, preferred_model, frame_format,
+                             frame_quality, use_unlim, unlim_status,
+                             frame_formats, FRAME_QUALITIES, mcp_configured)
+
+    mode = await execution_mode()
+    fmt = await frame_format()
+    quality = await frame_quality()
+    unlim_on = await use_unlim()
+    cur_img = await preferred_model("image")
+    cur_vid = await preferred_model("video")
+
+    lines = ["🔥 <b>Higgsfield</b>", "",
+             f"🔌 Канал: <b>{MODE_NAMES.get(mode, mode)}</b>",
+             f"🎨 Модель фото: <b>{cur_img or 'AUTO'}</b>",
+             f"🎬 Модель видео: <b>{cur_vid or 'AUTO'}</b>",
+             f"📐 Формат: <b>{fmt}</b>"
+             + (" (решает площадка или задача)" if fmt == "auto" else ""),
+             f"⚙️ Качество: <b>{quality}</b>"
+             + (" (умолчание платформы)" if quality == "auto" else "")]
+
+    # Безлимит спрашиваем у платформы, а не показываем настройку как факт:
+    # включённый переключатель и выданное платформой право — разные вещи.
+    if not unlim_on:
+        lines.append("♾ Безлимит: <b>выключен вами</b> — генерации спишут кредиты")
+    elif not mcp_configured():
+        lines.append("♾ Безлимит: неизвестно — нужен вход, /hfconnect")
+    else:
+        st = await unlim_status()
+        if st.get("available"):
+            left = st.get("remaining")
+            lines.append(f"♾ Безлимит: <b>есть</b>"
+                         + (f", осталось {left}" if left is not None else ""))
+        else:
+            lines.append(f"♾ Безлимит: нет — {st.get('reason', 'причина неизвестна')}")
+
+    fmt_row = [{"text": ("• " + f if f == fmt else f),
+                "callback_data": f"hffmt_{f}"} for f in frame_formats()]
+    q_row = [{"text": ("• " + q if q == quality else q),
+              "callback_data": f"hfq_{q}"} for q in FRAME_QUALITIES]
+    kb = {"inline_keyboard": [
+        [{"text": "🎨 Модель фото", "callback_data": "model"},
+         {"text": "🎬 Модель видео", "callback_data": "model"}],
+        fmt_row[:3], fmt_row[3:],
+        q_row,
+        [{"text": ("♾ Безлимит: вкл" if unlim_on else "♾ Безлимит: выкл"),
+          "callback_data": "hfunlim_off" if unlim_on else "hfunlim_on"}],
+        [{"text": "🔌 Авто", "callback_data": "hfmode_auto"},
+         {"text": "MCP", "callback_data": "hfmode_mcp"},
+         {"text": "Браузер", "callback_data": "hfmode_browser"}],
+        [{"text": "🧠 Все модели картинок", "callback_data": "mdl_image_0"},
+         {"text": "🎬 Видео", "callback_data": "mdl_video_0"}],
+        [{"text": "▶️ Сгенерировать кадр", "callback_data": "hfgen"}],
+    ]}
+    kb["inline_keyboard"] = [row for row in kb["inline_keyboard"] if row]
+    await send_message(chat_id, "\n".join(lines), reply_markup=kb)
+
+
+PAGE_SIZE = 8
+
+
+async def _show_catalog(chat_id: str, kind: str = "image", page: int = 0):
+    """Весь каталог Higgsfield постранично — и выбор прямо отсюда.
+
+    В /model список обрезался двенадцатью строками: у аккаунта моделей втрое
+    больше, и остальные просто не показывались. «Открыть все ИИ» — это и значит
+    показать каталог целиком, а не решить за человека, какие шесть ему нужны.
+    """
+    from core.hixiit import catalog_full, preferred_model, mcp_configured
+
+    human = "изображений" if kind == "image" else "видео"
+    if not mcp_configured():
+        await send_message(chat_id,
+                           f"🧠 <b>Модели {human}</b>\n\nКаталог открывается "
+                           f"через MCP, а вход не выполнен: /hfconnect.\n"
+                           f"Без него доступен только путь по ключу с одной "
+                           f"картиночной моделью.")
+        return
+
+    rows = await catalog_full(kind)
+    if not rows:
+        await send_message(chat_id,
+                           f"🧠 <b>Модели {human}</b>\n\nПлатформа не отдала "
+                           f"каталог. Что именно ответило — в /hixiit.")
+        return
+
+    current = await preferred_model(kind)
+    pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
+    page = max(0, min(page, pages - 1))
+    chunk = rows[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
+
+    lines = [f"🧠 <b>Модели {human}</b> — всего {len(rows)}",
+             f"Сейчас: <b>{current or 'AUTO — систему решает сама'}</b>", ""]
+    for m in chunk:
+        marks = " ✅" if m["value"] == current else ""
+        if m["unlim"]:
+            marks += " ♾"
+        if not m["usable"]:
+            # Честнее показать и пометить, чем спрятать: человек видит модель на
+            # сайте и не понимает, куда она делась из бота.
+            marks += " ⚠️"
+        who = f" · {m['provider']}" if m["provider"] else ""
+        lines.append(f"<b>{m['label']}</b>{marks}{who}")
+        if m["about"]:
+            lines.append(f"<i>{m['about']}</i>")
+        lines.append(f"<code>{m['value']}</code>")
+        lines.append("")
+    lines.append("♾ — покрывается безлимитом · ⚠️ — нужен вход, которого бот "
+                 "сам не даёт (стиль, ссылка, размеры)")
+
+    prefix = "setimg_" if kind == "image" else "setvid_"
+    keyboard = [[{"text": f"{'✅ ' if m['value'] == current else ''}{m['label']}"[:60],
+                  "callback_data": f"{prefix}{m['value']}"}] for m in chunk]
+
+    nav = []
+    if page > 0:
+        nav.append({"text": "◀️ Назад", "callback_data": f"mdl_{kind}_{page - 1}"})
+    nav.append({"text": f"{page + 1}/{pages}", "callback_data": f"mdl_{kind}_{page}"})
+    if page < pages - 1:
+        nav.append({"text": "Вперёд ▶️", "callback_data": f"mdl_{kind}_{page + 1}"})
+    keyboard.append(nav)
+    keyboard.append([
+        {"text": "🎨 Картинки", "callback_data": "mdl_image_0"},
+        {"text": "🎬 Видео", "callback_data": "mdl_video_0"},
+    ])
+    keyboard.append([{"text": "↩️ AUTO — решает система",
+                      "callback_data": f"{prefix}auto"}])
+    await send_message(chat_id, "\n".join(lines)[:3800],
+                       reply_markup={"inline_keyboard": keyboard})
+
+
 async def _show_model_menu(chat_id: str):
     """Три уровня выбора: мозг, изображения, видео — это разные модели."""
     from core.ai_router import catalog, chosen_model
@@ -2254,6 +2469,74 @@ def slides_wanted(text: str, default: int = 7) -> int:
     if not m:
         return default
     return max(2, min(int(m.group(1)), 10))
+
+
+async def _run_single_generation(chat_id: str, text: str, kind: str):
+    """Один кадр или один ролик по фразе человека — от разбора до файла в чате.
+
+    Спецификация задачи (§6) разбирается один раз и дальше не переспрашивается:
+    формат, площадка, режим качества и явный выбор канала берутся из неё, а не
+    угадываются на каждом шаге заново.
+    """
+    from core import task_spec, hixiit, exec_router
+    from core.artifacts import mark as mark_artifact
+    from publishers.telegram_pub import send_photo, send_video
+
+    spec = task_spec.parse(text, kind=kind)
+    if not spec["subject"]:
+        await send_message(chat_id,
+                           "🖼 Напишите, что нарисовать: <code>/image шашлык на мангале</code>")
+        return
+
+    await send_message(chat_id, task_spec.as_text(spec) + "\n\nГенерирую...")
+
+    # Режим качества из фразы — только на эту задачу: «подешевле» сказано про
+    # неё, а не про все будущие. Настройку возвращаем обратно в любом случае.
+    previous = None
+    if spec.get("quality"):
+        previous = await hixiit.quality_mode()
+        if spec["quality"] in exec_router.QUALITY_MODES:
+            await hixiit.set_quality_mode(spec["quality"])
+    try:
+        res = await hixiit.generate(spec["subject"], kind=spec["kind"],
+                                    ratio=spec.get("ratio"))
+    finally:
+        if previous is not None:
+            await hixiit.set_quality_mode(previous)
+
+    if not res.get("ok") or not res.get("url"):
+        why = res.get("error") or "причина не названа"
+        tried = ", ".join(res.get("tried") or []) or "—"
+        await send_message(chat_id,
+                           f"🔴 <b>Не получилось</b>\nШаг: генерация {spec['kind']}\n"
+                           f"Причина: {why}\nПробовали: {tried}\n\n"
+                           f"Маршруты: /routes · Настройки: /hf")
+        return
+
+    caption = (f"{res.get('provider', '')} {res.get('model', '')}\n"
+               f"{spec['subject'][:200]}").strip()
+    art_id = res.get("artifact_id") or ""
+    try:
+        if spec["kind"] == "video":
+            await send_video(chat_id, res["url"], caption)
+        else:
+            await send_photo(chat_id, res["url"], caption)
+        if art_id:
+            await mark_artifact(art_id, telegram="доставлено")
+    except Exception as e:
+        # Файл уже сохранён — повторять надо доставку, а не генерацию (§29).
+        if art_id:
+            await mark_artifact(art_id, telegram=f"не доставлено: {str(e)[:120]}")
+        await send_message(chat_id,
+                           f"🔗 {res['url']}\n<i>Файл готов, но чат его не принял: "
+                           f"{str(e)[:100]}</i>"
+                           + (f"\nПовторить отправку: <code>/resend {art_id}</code>"
+                              if art_id else ""))
+        return
+
+    qc = res.get("qc") or {}
+    if qc.get("reason"):
+        await send_message(chat_id, f"🔍 Проверка: {str(qc['reason'])[:300]}")
 
 
 async def _start_creation(chat_id: str, kind: str, platform: str, topic: str):

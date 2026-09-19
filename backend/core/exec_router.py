@@ -129,6 +129,18 @@ def success_rate(row: dict) -> float:
     return row["ok"] / total
 
 
+# Канал, которым система работает от имени человека: вход по OAuth, весь
+# каталог аккаунта, его план и его безлимит. Ключ и секрет (REST) — запасной
+# путь: он ходит по одному адресу, знает одну модель и не видит каталога.
+PRIMARY = "mcp"
+
+# Насколько основной путь опережает остальные при прочих равных. Значение
+# больше любой прибавки за скорость, цену или качество (они не больше трёх) и
+# меньше разницы в доле успеха (она до десяти). То есть OAuth идёт первым
+# всегда, кроме случая, когда он на деле подводит чаще запасных.
+PRIMARY_BONUS = 4.0
+
+
 def _score(channel: str, row: dict, quality: str) -> float:
     """Чем больше, тем раньше пробуем.
 
@@ -147,12 +159,19 @@ def _score(channel: str, row: dict, quality: str) -> float:
         score += traits.get("cost", 0)
     elif quality == "quality":
         score += traits.get("quality", 0)
+    elif channel == PRIMARY:
+        # Прибавка действует только в режиме «авто». Когда человек явно
+        # попросил дешевле, быстрее или качественнее — решает его выбор, а не
+        # наше представление об основном пути.
+        score += PRIMARY_BONUS
     return score
 
 
 async def order(mode: str = "auto", quality: str = "auto",
                 configured: dict | None = None,
-                cooling: dict | None = None) -> list[dict]:
+                cooling: dict | None = None,
+                reasons: dict | None = None,
+                missing: dict | None = None) -> list[dict]:
     """Порядок каналов с объяснением по каждому.
 
     `configured` — {канал: bool}, есть ли доступ вообще.
@@ -164,6 +183,11 @@ async def order(mode: str = "auto", quality: str = "auto",
     """
     configured = configured or {}
     cooling = cooling or {}
+    reasons = reasons or {}
+    # Чего не хватает каналу — словами вызывающего, если он знает точнее нашего
+    # общего описания. «Браузер не настроен» и «браузеру не хватит памяти» —
+    # разные вещи и чинятся по-разному.
+    missing = missing or {}
     data = await stats()
     allowed = MODE_ONLY.get(mode)
     quality = quality if quality in QUALITY_MODES else "auto"
@@ -173,19 +197,31 @@ async def order(mode: str = "auto", quality: str = "auto",
         row = data[channel]
         item = {"channel": channel, "use": True, "why": "",
                 "score": _score(channel, row, quality),
-                "rate": success_rate(row), "sec": row.get("sec", 0.0)}
+                "rate": success_rate(row), "sec": row.get("sec", 0.0),
+                "last_error": str(row.get("last_error") or "")}
         if allowed is not None and channel not in allowed:
             item.update(use=False,
                         why=f"пропущен (режим «{MODE_LABEL.get(mode, mode)}»)",
                         score=-1)
         elif not configured.get(channel, False):
-            item.update(use=False, why=MISSING.get(channel, "не настроен"),
+            item.update(use=False,
+                        why=(missing.get(channel)
+                             or MISSING.get(channel, "не настроен")),
                         score=-1)
         elif cooling.get(channel, 0) > 0:
-            item.update(use=False,
-                        why=f"пропущен — отказал недавно, повтор через "
-                            f"{cooling[channel] / 60:.0f} мин",
-                        score=-1)
+            # Причина отказа важнее срока: «повтор через 9 мин» не говорит,
+            # что чинить, а «вход не выполнен» или «400 Unavailable model» —
+            # говорит.
+            # Причина из памяти процесса, а если её нет — из истории в базе.
+            # История переживает перезапуск, а память — нет: после деплоя
+            # оставалось только «отказал недавно», и это ничего не объясняло.
+            was = ((reasons.get(channel) or "").strip()
+                   or item["last_error"].strip())
+            why = (f"пропущен — отказал недавно ({was[:200]}), повтор через "
+                   f"{cooling[channel] / 60:.0f} мин" if was else
+                   f"пропущен — отказал недавно, повтор через "
+                   f"{cooling[channel] / 60:.0f} мин")
+            item.update(use=False, why=why, score=-1)
         rows.append(item)
 
     rows.sort(key=lambda r: (-r["score"], CHANNELS.index(r["channel"])))
@@ -208,6 +244,10 @@ def as_text(rows: list[dict]) -> str:
         if r["sec"]:
             part += f", в среднем {r['sec']:.0f} с"
         lines.append(part)
+        # Канал доступен, но в прошлый раз отказал — это стоит видеть до того,
+        # как он отказал снова.
+        if r.get("last_error"):
+            lines.append(f"   прошлый отказ: {r['last_error'][:150]}")
     if not live:
         lines.append("")
         lines.append("Ни одного доступного канала: генерация сейчас невозможна.")

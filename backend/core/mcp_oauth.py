@@ -307,3 +307,25 @@ async def state() -> dict:
             "refreshable": bool(await _kv_get(REFRESH_KEY)),
             "redirect": redirect_uri(),
             "server": server_url()}
+
+async def refresh_on_start() -> dict:
+    """Продлить доступ при запуске сервиса. Никогда не роняет старт.
+
+    Токен доступа живёт часами, деплой случается чаще. Без этого первая задача
+    после перезапуска упиралась в протухший доступ, канал уходил в остывание, и
+    человек видел «Higgsfield не работает» — хотя вход был выполнен и продлить
+    его можно молча.
+    """
+    try:
+        if not await _kv_get(REFRESH_KEY):
+            return {"ok": False, "error": "вход не выполнен"}
+        res = await refresh()
+        print(f"[NEXUS] доступ Higgsfield "
+              + ("продлён при запуске" if res.get("ok")
+                 else f"продлить не удалось: {str(res.get('error'))[:120]}"),
+              flush=True)
+        return res
+    except BaseException as e:
+        print(f"[NEXUS] продление доступа Higgsfield не выполнено: "
+              f"{type(e).__name__}: {str(e)[:120]}", flush=True)
+        return {"ok": False, "error": str(e)[:200]}

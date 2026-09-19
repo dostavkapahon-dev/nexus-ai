@@ -187,7 +187,12 @@ def _fake_openai(monkeypatch, seen):
 
             return R()
 
-    monkeypatch.setattr(ar.openai, "AsyncOpenAI", FakeClient)
+    # SDK грузится лениво, поэтому подменяем не атрибут модуля, а сам
+    # загрузчик: на старте пакета openai в ai_router уже нет.
+    class FakeModule:
+        AsyncOpenAI = FakeClient
+
+    monkeypatch.setattr(ar, "_openai", lambda: FakeModule)
 
 
 @pytest.mark.parametrize("provider", ALL)

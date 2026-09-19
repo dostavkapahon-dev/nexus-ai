@@ -1,9 +1,26 @@
 import os
 import time
 import asyncio
-import anthropic
-import openai
-import google.generativeai as genai
+
+# SDK провайдеров грузятся ЛЕНИВО, в момент первого вызова этого провайдера.
+# Вместе они занимают около 110 МБ (google.generativeai — 64, anthropic — 24,
+# openai — 20) из 512 МБ всего инстанса. При загрузке на старте эта память
+# держалась всегда: и когда провайдер не нужен, и когда ключа к нему нет. А не
+# хватало её потом браузеру — и ядро убивало весь сервис.
+def _anthropic():
+    import anthropic
+    return anthropic
+
+
+def _openai():
+    import openai
+    return openai
+
+
+def _genai():
+    import google.generativeai as genai
+    return genai
+
 
 AI_ROUTING = {
     # Anthropic
@@ -446,7 +463,7 @@ async def _track(model: str, tokens: int, cost: float, status: str,
 
 class AIRouter:
     async def _call_claude(self, model, system, prompt):
-        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        client = _anthropic().AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         msg = await client.messages.create(model=model, max_tokens=4096, system=system,
                                             messages=[{"role": "user", "content": prompt}])
         text = msg.content[0].text
@@ -454,7 +471,7 @@ class AIRouter:
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.003), "model_used": model}
 
     async def _call_openai(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        client = _openai().AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         resp = await client.chat.completions.create(model=model, max_tokens=4096,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
         text = resp.choices[0].message.content
@@ -462,6 +479,7 @@ class AIRouter:
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.005), "model_used": model}
 
     async def _call_gemini(self, model, system, prompt):
+        genai = _genai()
         genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
         try:
             m = genai.GenerativeModel(model, system_instruction=system)
@@ -494,7 +512,7 @@ class AIRouter:
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.0001), "model_used": model}
 
     async def _call_perplexity(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("PERPLEXITY_API_KEY"), base_url="https://api.perplexity.ai")
+        client = _openai().AsyncOpenAI(api_key=os.getenv("PERPLEXITY_API_KEY"), base_url="https://api.perplexity.ai")
         resp = await client.chat.completions.create(model=model, max_tokens=4096,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
         text = resp.choices[0].message.content
@@ -511,7 +529,7 @@ class AIRouter:
         if not real:
             raise RuntimeError(f"{spec['title']}: не удалось получить список моделей "
                                f"(проверьте {spec['key_env']})")
-        client = openai.AsyncOpenAI(api_key=os.getenv(spec["key_env"]), base_url=spec["base_url"])
+        client = _openai().AsyncOpenAI(api_key=os.getenv(spec["key_env"]), base_url=spec["base_url"])
         resp = await client.chat.completions.create(model=real, max_tokens=4096,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
         text = resp.choices[0].message.content
@@ -524,7 +542,7 @@ class AIRouter:
         return await self._call_free(model, system, prompt)
 
     async def _call_deepseek(self, model, system, prompt):
-        client = openai.AsyncOpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
+        client = _openai().AsyncOpenAI(api_key=os.getenv("DEEPSEEK_API_KEY"), base_url="https://api.deepseek.com")
         resp = await client.chat.completions.create(model=model, max_tokens=4096,
             messages=[{"role": "system", "content": system}, {"role": "user", "content": prompt}])
         text = resp.choices[0].message.content

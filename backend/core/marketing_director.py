@@ -13,7 +13,17 @@ import os
 import json
 import asyncio
 
-import anthropic
+def _anthropic():
+    """SDK грузим в момент вызова, а не на старте.
+
+    Пакет занимает около 24 МБ и держал их всегда — в том числе когда ключа
+    Anthropic нет вовсе. На инстансе с 512 МБ эта память нужнее другим.
+    """
+    import anthropic
+    return anthropic
+
+
+
 
 # Дирижёр планирует и раздаёт задачи — это самая сложная работа в системе, и
 # экономить на ней нельзя: дешёвая модель здесь портит весь конвейер, а не
@@ -394,7 +404,7 @@ async def _exec_tool(name: str, inp: dict) -> dict:
 async def _run_director_anthropic(goal: str, context: str = "", max_steps: int = 12,
                                   on_step=None) -> dict:
     """Главный цикл дирижёра. Возвращает {'status', 'summary', 'steps'}."""
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    client = _anthropic().AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
     messages = [{
         "role": "user",
         "content": f"ЦЕЛЬ: {goal}\n\nКОНТЕКСТ: {context or '—'}\n\n"

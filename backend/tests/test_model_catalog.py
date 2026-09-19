@@ -1,69 +1,115 @@
-"""Каталог моделей для интерфейса.
+"""Каталог моделей: весь, постранично, с выбором прямо из Telegram.
 
-Список моделей жил отдельной копией в React и отставал: бесплатных провайдеров
-в нём не было вовсе, поэтому выбрать Groq или Cerebras в настройках агента было
-нельзя, хотя роутер их поддерживает.
+Сверено живым вызовом платформы 17.09.2026. Важная деталь протокола: общий
+список (`action=list` без типа) приходит страницами и его постраничная
+навигация возвращает ту же страницу — полный каталог отдаёт только запрос
+с фильтром по типу. Из-за этого неполного списка легко сделать обратную
+ошибку: решить, что исправной модели «нет», и подменить её без причины.
 """
 import pytest
 
+from core import hixiit, telegram_bot as tb
 
-@pytest.mark.asyncio
-async def test_catalog_endpoint_lists_models(auth_client):
-    r = await auth_client.get("/api/prompts/models")
-    assert r.status_code == 200
-
-    models = r.json()["models"]
-    values = {m["value"] for m in models}
-
-    assert "claude-sonnet-4-6" in values
-    assert "groq-free" in values, "бесплатные провайдеры должны быть доступны для выбора"
-    assert all({"value", "label", "group", "connected"} <= set(m) for m in models)
-
-
-@pytest.mark.asyncio
-async def test_connected_flag_follows_the_keys(auth_client, monkeypatch):
-    """Человек должен видеть, какая модель реально заработает."""
-    monkeypatch.setenv("GROQ_API_KEY", "test")
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-
-    r = await auth_client.get("/api/prompts/models")
-    by_value = {m["value"]: m for m in r.json()["models"]}
-
-    assert by_value["groq-free"]["connected"] is True
-    assert by_value["claude-sonnet-4-6"]["connected"] is False
+IMAGE_ITEMS = [
+    {"id": "z_image", "name": "Z Image", "provider_name": "Tongyi-MAI",
+     "description": "Super fast, stylized text-to-image", "output_type": "image"},
+    {"id": "soul_2", "name": "Soul 2.0", "provider_name": "Higgsfield",
+     "output_type": "image", "supports_unlim": True},
+    {"id": "nano_banana", "name": "Nano Banana", "provider_name": "Google",
+     "output_type": "image", "supports_unlim": True},
+    {"id": "ms_image", "name": "DTC Ads", "provider_name": "Higgsfield",
+     "output_type": "image",
+     "parameters": [{"name": "style_id", "required": "required"}]},
+] + [{"id": f"img_{i}", "name": f"Model {i}", "output_type": "image"}
+     for i in range(10)]
 
 
-@pytest.mark.asyncio
-async def test_models_route_is_not_swallowed_by_agent_route(auth_client):
-    """`/prompts/models` не должен попасть в обработчик `/prompts/{agent_name}`."""
-    r = await auth_client.get("/api/prompts/models")
-    assert "models" in r.json(), "маршрут перехвачен обработчиком агента"
+@pytest.fixture(autouse=True)
+def _clean():
+    hixiit._CATALOG_CACHE.clear()
+    yield
+    hixiit._CATALOG_CACHE.clear()
 
 
-@pytest.mark.asyncio
-async def test_hixiit_models_appear_when_account_is_connected(auth_client, monkeypatch):
-    """Модели изображений и видео берутся у аккаунта HIXIIT, а не из зашитого списка."""
-    async def fake_models(kind="image"):
-        return [{"value": f"model-{kind}", "label": f"Модель {kind}",
-                 "group": "HIXIIT", "connected": True}]
+@pytest.fixture
+def live(monkeypatch):
+    asked = []
 
-    monkeypatch.setattr("core.hixiit.available_models", fake_models)
+    async def fake_call(tool, args, timeout=600.0):
+        asked.append(args)
+        return {"items": IMAGE_ITEMS if args.get("type") == "image" else [],
+                "has_more": False}
 
-    r = await auth_client.get("/api/prompts/models")
-    groups = {m["group"] for m in r.json()["models"]}
-
-    assert "HIXIIT · изображения" in groups
-    assert "HIXIIT · видео" in groups
+    monkeypatch.setattr(hixiit, "mcp_configured", lambda: True)
+    monkeypatch.setattr(hixiit, "_mcp_call", fake_call)
+    return asked
 
 
 @pytest.mark.asyncio
-async def test_catalog_survives_hixiit_being_down(auth_client, monkeypatch):
-    """Недоступный HIXIIT не должен ломать весь список моделей."""
-    async def boom(kind="image"):
-        raise RuntimeError("MCP недоступен")
+async def test_catalog_is_requested_by_type(live):
+    await hixiit.catalog_full("image")
+    assert live[0]["type"] == "image", "без фильтра платформа отдаёт список частями"
+    assert live[0]["limit"] >= 100
 
-    monkeypatch.setattr("core.hixiit.available_models", boom)
 
-    r = await auth_client.get("/api/prompts/models")
-    assert r.status_code == 200
-    assert any(m["value"] == "claude-sonnet-4-6" for m in r.json()["models"])
+@pytest.mark.asyncio
+async def test_catalog_keeps_real_models(live):
+    ids = await hixiit.catalog_ids("image")
+    # Эти модели у аккаунта есть — подменять их нельзя.
+    assert {"z_image", "soul_2", "nano_banana"} <= ids
+    model, note = await hixiit.ensure_known_model("z_image", "image")
+    assert model == "z_image" and note == ""
+
+
+@pytest.mark.asyncio
+async def test_unknown_model_is_replaced_and_explained(live):
+    model, note = await hixiit.ensure_known_model("выдуманная_модель", "image")
+    assert model == "image_auto" or model in await hixiit.catalog_ids("image")
+    assert "выдуманная_модель" in note
+
+
+@pytest.mark.asyncio
+async def test_model_needing_input_we_cannot_give_is_marked(live):
+    rows = {m["value"]: m for m in await hixiit.catalog_full("image")}
+    assert rows["ms_image"]["usable"] is False   # требует style_id
+    assert rows["soul_2"]["usable"] is True
+    assert rows["soul_2"]["unlim"] is True
+
+
+@pytest.mark.asyncio
+async def test_panel_shows_every_model_across_pages(live, monkeypatch):
+    sent = []
+
+    async def fake_send(chat_id, text, *a, **k):
+        sent.append((text, k.get("reply_markup") or {}))
+
+    async def no_pref(kind):
+        return ""
+
+    monkeypatch.setattr(tb, "send_message", fake_send)
+    monkeypatch.setattr(hixiit, "preferred_model", no_pref)
+
+    seen = set()
+    pages = (len(IMAGE_ITEMS) + tb.PAGE_SIZE - 1) // tb.PAGE_SIZE
+    for page in range(pages):
+        await tb._show_catalog("1", "image", page)
+        for row in sent[-1][1].get("inline_keyboard", []):
+            for btn in row:
+                if btn["callback_data"].startswith("setimg_"):
+                    seen.add(btn["callback_data"][len("setimg_"):])
+
+    assert {m["id"] for m in IMAGE_ITEMS} <= seen, "каталог показан не целиком"
+    assert f"всего {len(IMAGE_ITEMS)}" in sent[0][0]
+
+
+@pytest.mark.asyncio
+async def test_panel_without_mcp_says_what_to_do(monkeypatch):
+    sent = []
+
+    async def fake_send(chat_id, text, *a, **k):
+        sent.append(text)
+
+    monkeypatch.setattr(tb, "send_message", fake_send)
+    monkeypatch.setattr(hixiit, "mcp_configured", lambda: False)
+    await tb._show_catalog("1", "image")
+    assert "/hfconnect" in sent[0]
