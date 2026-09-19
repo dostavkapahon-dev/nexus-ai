@@ -5,16 +5,21 @@ services:
     rootDir: backend
     # Фронт уже собран и закоммичен (frontend/dist) — npm не нужен.
     #
-    # Chromium нужен браузерному пути публикации (без API-ключей). Но его установка
-    # НЕ ДОЛЖНА ронять сборку: Chromium ~150 МБ, и на бесплатном тарифе он может
-    # не скачаться. Раньше такая неудача обрушивала весь деплой — исправления
-    # переставали доезжать, а снаружи это выглядело как «ошибка не чинится».
-    # Поэтому `|| echo`: не поставился браузер — сборка идёт дальше, а браузерный
-    # путь честно скажет об этом при первом обращении.
+    # Chromium по умолчанию НЕ ставим. На инстансе с 512 МБ он всё равно не
+    # запустится: ядро убивает процесс целиком, и сервис падает по кругу вместе
+    # с ботом. Занимать ~150 МБ сборки ради заведомо нерабочего пути незачем.
+    #
+    # Браузер нужен — два пути, оба без нагрузки на этот сервис:
+    #   • облачный браузер: задать NEXUS_BROWSER_CDP (см. docs/BROWSER.md);
+    #   • отдельный сервис с большей памятью: там NEXUS_INSTALL_CHROMIUM=1.
     buildCommand: |
       pip install -r requirements.txt
-      mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
-      python -m playwright install chromium > /tmp/pw_install.log 2>&1 || (echo "ВНИМАНИЕ: Chromium не установлен"; tail -20 /tmp/pw_install.log; tail -20 /tmp/pw_install.log > "$PLAYWRIGHT_BROWSERS_PATH/.install_error")
+      if [ "$NEXUS_INSTALL_CHROMIUM" = "1" ]; then
+        mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+        python -m playwright install chromium > /tmp/pw_install.log 2>&1 || (echo "ВНИМАНИЕ: Chromium не установлен"; tail -20 /tmp/pw_install.log; tail -20 /tmp/pw_install.log > "$PLAYWRIGHT_BROWSERS_PATH/.install_error")
+      else
+        echo "Chromium не ставится: NEXUS_INSTALL_CHROMIUM не равен 1 (см. docs/BROWSER.md)"
+      fi
     #
     # Миграции тоже не должны быть единой точкой отказа: при `&&` любая неудача
     # означала, что сервис не поднимется вовсе и причину видно только в логах
@@ -116,6 +121,17 @@ services:
         value: auto
       # Эндпоинт облачного браузера (Bright Data Scraping Browser: wss://...@...:9222)
       - key: NEXUS_BROWSER_CDP
+        sync: false
+      # Ставить ли Chromium в этот сервис. На 512 МБ он не запустится — держите
+      # пустым и пользуйтесь облачным браузером или отдельным сервисом.
+      - key: NEXUS_INSTALL_CHROMIUM
+        sync: false
+      # Сколько памяти должно быть свободно, чтобы вообще пробовать запуск.
+      # Ниже порога канал честно откажет, а не уронит сервис.
+      - key: NEXUS_BROWSER_MIN_MB
+        value: "300"
+      # Поиск, не зависящий от квоты Gemini (бесплатный тариф brave.com/search/api)
+      - key: BRAVE_API_KEY
         sync: false
       # Cookies для входа в аккаунты. Обычно задаются НЕ здесь, а в дашборде:
       # Ключи API → Браузерная сессия (принимается экспорт расширения как есть).

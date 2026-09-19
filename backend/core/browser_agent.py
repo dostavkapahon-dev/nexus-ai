@@ -15,7 +15,17 @@ etc.). Keys live on the server; only browser commands cross the WebSocket.
 import os
 import json
 
-import anthropic
+def _anthropic():
+    """SDK грузим в момент вызова, а не на старте.
+
+    Пакет занимает около 24 МБ и держал их всегда — в том числе когда ключа
+    Anthropic нет вовсе. На инстансе с 512 МБ эта память нужнее другим.
+    """
+    import anthropic
+    return anthropic
+
+
+
 
 from api.routes_desktop import send_to_desktop
 
@@ -189,7 +199,7 @@ def _strip_old_images(messages: list) -> None:
 async def _run_anthropic(task: str, start_url: str | None = None, max_steps: int = 25,
                          on_step=None) -> dict:
     """Run the vision loop until the task is done, blocked, or steps run out."""
-    client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    client = _anthropic().AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
     if start_url:
         await send_to_desktop({"action": "navigate", "url": start_url}, timeout=40.0)

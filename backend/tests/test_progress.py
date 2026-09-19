@@ -83,7 +83,11 @@ async def test_director_reports_steps_it_runs(monkeypatch):
     class _Client:
         messages = _Messages()
 
-    monkeypatch.setattr(md.anthropic, "AsyncAnthropic", lambda api_key=None: _Client())
+    # SDK грузится лениво — подменяем загрузчик, а не атрибут модуля.
+    class _Sdk:
+        AsyncAnthropic = staticmethod(lambda api_key=None: _Client())
+
+    monkeypatch.setattr(md, "_anthropic", lambda: _Sdk)
     monkeypatch.setattr(md, "_full_system", _system)
 
     res = await md._run_director_anthropic("сделай картинку", on_step=seen.append)
