@@ -212,6 +212,16 @@ async def add_cost(task_id: str, model: str = "", tokens: int = 0, cost: float =
         pass
 
 
+async def _attempts_of(task_id: str) -> int:
+    """Сколько попыток уже было. Ошибка чтения не должна мешать работе."""
+    try:
+        async with AsyncSessionLocal() as db:
+            t = await db.get(Task, task_id)
+            return int(t.attempts or 0) if t else 0
+    except Exception:
+        return 0
+
+
 async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
     """Выполняет работу под учётом задачи.
 
@@ -234,8 +244,15 @@ async def run(task_id: str, coro_factory, max_attempts: int = 1) -> dict:
     ai_escrow.reset()
 
     last_error = ""
+    # Счётчик попыток должен расти, а не начинаться заново на каждом запуске.
+    # Раньше здесь стояло `attempts=attempt`, то есть после перезапуска сервера
+    # счётчик возвращался к единице — и защита от бесконечного цикла («хватит
+    # после двух») не срабатывала НИКОГДА. Задача, роняющая процесс, поднимала
+    # его снова и снова: каждые четыре минуты «Сервер перезапустился. Продолжаю
+    # задачи».
+    done_before = await _attempts_of(task_id)
     for attempt in range(1, max(1, max_attempts) + 1):
-        await _patch(task_id, attempts=attempt)
+        await _patch(task_id, attempts=done_before + attempt)
         try:
             result = await coro_factory()
             finished = datetime.utcnow()
@@ -373,7 +390,11 @@ async def recover_stuck() -> int:
                 t = await db.get(Task, item["id"])
                 if t:
                     t.status = FAILED
-                    t.error = "Задача потеряна при перезапуске сервера."
+                    t.error = ("Задача потеряна при перезапуске сервера."
+                       if (item.get("attempts") or 0) < 2 else
+                       "Задача дважды не пережила перезапуск сервера — похоже, "
+                       "она его и роняет. Продолжать автоматически не буду: "
+                       "иначе сервис будет падать по кругу.")
                     t.finished_at = datetime.utcnow()
             await db.commit()
     except Exception:
@@ -381,8 +402,10 @@ async def recover_stuck() -> int:
 
     for item, recipe, handler in resumable:
         args = (recipe or {}).get("args") or {}
-        await _patch(item["id"], status=CREATED, error=None,
-                     attempts=item["attempts"] + 1)
+        # Счётчик ведёт `run()`: он теперь прибавляет к уже сделанным попыткам,
+        # а не переписывает их. Прибавлять здесь второй раз — значит считать
+        # одну попытку за две.
+        await _patch(item["id"], status=CREATED, error=None)
         await add_step(item["id"], "продолжена после перезапуска сервера", ok=True)
         asyncio.create_task(run(item["id"], lambda h=handler, a=args: h(**a)))
 

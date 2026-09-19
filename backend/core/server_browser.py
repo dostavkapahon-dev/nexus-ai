@@ -179,6 +179,50 @@ def _profile_dir() -> str:
 # Флаги подобраны под маленький инстанс: Chromium по умолчанию поднимает
 # процесс на вкладку и заранее греет сеть, а на 512 МБ это выдавливает из
 # памяти сам сервер — и тогда таймаутит ВСЁ, включая обычные http-запросы.
+# Сколько памяти должно оставаться свободным, чтобы Chromium вообще стоило
+# запускать. Значение с запасом: сам браузер на пустой странице занимает около
+# 150 МБ, плюс вкладка и профиль. На Render free (512 МБ всего) столько обычно
+# не остаётся — и это нормально, просто канал недоступен.
+MIN_FREE_MB = float(os.getenv("NEXUS_BROWSER_MIN_MB", "300"))
+
+
+def available_mb() -> float | None:
+    """Свободная память в мегабайтах. None — измерить нечем, не мешаем работе.
+
+    Читаем MemAvailable: он учитывает и кэш, который ядро отдаст под запрос, в
+    отличие от MemFree. В контейнере с лимитом cgroup смотрим ещё и лимит —
+    хост может быть просторным, а контейнеру отведено 512 МБ.
+    """
+    values = []
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    values.append(float(line.split()[1]) / 1024)
+                    break
+    except Exception:
+        pass
+    for limit_path, used_path in (
+            ("/sys/fs/cgroup/memory.max", "/sys/fs/cgroup/memory.current"),
+            ("/sys/fs/cgroup/memory/memory.limit_in_bytes",
+             "/sys/fs/cgroup/memory/memory.usage_in_bytes")):
+        try:
+            with open(limit_path) as f:
+                raw = f.read().strip()
+            if raw == "max":
+                continue
+            limit = float(raw)
+            with open(used_path) as f:
+                used = float(f.read().strip())
+            # Абсурдно большой лимит означает «без ограничения».
+            if limit < 1 << 50:
+                values.append((limit - used) / (1024 * 1024))
+            break
+        except Exception:
+            continue
+    return min(values) if values else None
+
+
 _LAUNCH_ARGS = [
     "--no-sandbox",
     "--disable-dev-shm-usage",
@@ -298,6 +342,19 @@ async def ensure_browser():
         return _page
 
     # ЛОКАЛЬНЫЙ Chromium (для VPS с запасом памяти).
+    #
+    # Сначала смотрим, есть ли эта память. Chromium, которому её не хватает, не
+    # падает с ошибкой — ядро убивает ВЕСЬ процесс, вместе с ботом и задачами.
+    # Снаружи это выглядит как «сервер перезапустился», задача возобновляется,
+    # снова доходит до браузера — и сервис падает по кругу. Честный отказ
+    # канала лучше падения сервиса.
+    free = available_mb()
+    if free is not None and free < MIN_FREE_MB:
+        raise RuntimeError(
+            f"браузеру не хватит памяти: свободно {free:.0f} МБ, нужно хотя бы "
+            f"{MIN_FREE_MB:.0f}. Запуск отменён, чтобы не уронить сервис. "
+            f"Варианты: облачный браузер через NEXUS_BROWSER_CDP или тариф "
+            f"с большей памятью")
     os.makedirs(_profile_dir(), exist_ok=True)
     headless = os.getenv("NEXUS_BROWSER_HEADLESS", "1").strip() not in ("0", "false", "no")
     global _working_args
