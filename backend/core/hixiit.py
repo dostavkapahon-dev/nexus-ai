@@ -419,6 +419,34 @@ def probe_verdict(probe: dict) -> str:
     return "MCP не отвечает"
 
 
+def _as_dict(res) -> dict:
+    """Ответ инструмента как словарь. Не словарь — пустой, но НЕ падение.
+
+    MCP отдаёт результат по-разному: структурой, строкой с JSON внутри или
+    просто текстом. Код читал его как словарь безусловно — `(res or {}).get(...)`
+    — и на строке падал с `AttributeError: 'str' object has no attribute 'get'`.
+    Эта ошибка приходила из середины генерации и не говорила ничего: ни какой
+    инструмент ответил, ни что именно он сказал.
+
+    Разворачиваем и однослойную обёртку `{"result": "<json>"}`: платформа
+    иногда кладёт полезную нагрузку строкой внутрь неё.
+    """
+    for _ in range(3):
+        if isinstance(res, str):
+            try:
+                res = json.loads(res)
+            except Exception:
+                return {}
+        if isinstance(res, dict):
+            inner = res.get("result")
+            if isinstance(inner, (str, dict)) and len(res) == 1:
+                res = inner
+                continue
+            return res
+        return {}
+    return res if isinstance(res, dict) else {}
+
+
 def _unwrap(res):
     """Достаёт полезную нагрузку из ответа MCP-инструмента."""
     if getattr(res, "isError", False):
@@ -520,6 +548,10 @@ def _as_model_list(res, has_reference: bool = False) -> list:
     Ответ приходит как {"items": [...]}; отбрасываем модели, которым нужен
     вход, которого у нас нет.
     """
+    # Строка с JSON — тоже ответ: разворачиваем её тем же способом, что и
+    # остальные вызовы, иначе список моделей молча оказывается пустым.
+    if isinstance(res, str):
+        res = _as_dict(res) or res
     if isinstance(res, dict):
         for field in ("models", "items", "results", "data", "recommendations"):
             val = res.get(field)
@@ -705,7 +737,8 @@ async def unlim_status() -> dict:
     except BaseException as e:
         _reraise_control_flow(e)
         return {"available": False, "reason": _why(e, 300)}
-    block = (res or {}).get("unlim") or {}
+    data = _as_dict(res)
+    block = data.get("unlim") or {}
     models = [m.get("id") for m in _as_model_list(res) if m.get("id")]
     out = {"available": bool(block.get("available")),
            "remaining": block.get("remaining"),
@@ -754,7 +787,7 @@ async def _wait_job(job_id: str, attempts: int = JOB_POLL_ATTEMPTS) -> str:
                               {"jobs": [{"index": 0, "job_id": job_id}],
                                "timeout_seconds": JOB_POLL_SECONDS},
                               timeout=JOB_POLL_SECONDS + 30)
-        jobs = (res or {}).get("jobs") or []
+        jobs = _as_dict(res).get("jobs") or []
         job = jobs[0] if jobs else {}
         status = (job.get("status") or "").lower()
         if status == "completed":
@@ -764,7 +797,7 @@ async def _wait_job(job_id: str, attempts: int = JOB_POLL_ATTEMPTS) -> str:
             raise RuntimeError("задача готова, но без ссылки на результат")
         if status in ("failed", "canceled", "nsfw"):
             raise RuntimeError(f"Higgsfield: задача завершилась статусом {status}")
-        if (res or {}).get("all_terminal"):
+        if _as_dict(res).get("all_terminal"):
             break
     raise RuntimeError("Higgsfield не отдал результат вовремя")
 
@@ -800,7 +833,7 @@ async def catalog_full(kind: str) -> list[dict]:
     except BaseException as e:
         _reraise_control_flow(e)
         return []
-    items = (res or {}).get("items") if isinstance(res, dict) else None
+    items = _as_dict(res).get("items")
     rows = []
     for m in items or []:
         if not isinstance(m, dict) or not m.get("id"):
@@ -907,7 +940,14 @@ async def _generate_via_mcp_inner(task: str, kind: str, ratio: str,
     # но обычно это заявка, и её надо дождаться.
     url = _find_media_url(res)
     if not url:
-        results = (res or {}).get("results") or []
+        answer = _as_dict(res)
+        if not answer:
+            # Платформа ответила не структурой, а текстом. Раньше здесь
+            # падало `AttributeError` из середины генерации; текст ответа при
+            # этом терялся, а он и есть причина отказа.
+            raise RuntimeError(
+                f"Higgsfield ответил не задачей: {str(res)[:300]}")
+        results = answer.get("results") or []
         job_id = results[0].get("id") if results and isinstance(results[0], dict) else None
         if not job_id:
             raise RuntimeError(f"MCP не вернул задачу: {str(res)[:300]}")
@@ -1985,11 +2025,11 @@ async def status() -> dict:
             # вопрос «MCP вообще работает». Каталог безлимита тяжелее и раньше
             # шёл первым — съедал бюджет, и статус объявлял MCP сломанным,
             # ни разу его не спросив.
-            bal = await _mcp_call("balance", {}, timeout=MCP_STATUS_TIMEOUT)
+            bal = _as_dict(await _mcp_call("balance", {},
+                                           timeout=MCP_STATUS_TIMEOUT))
             out["mcp_ok"] = True
-            if isinstance(bal, dict):
-                out["credits"] = bal.get("credits")
-                out["plan"] = bal.get("subscription_plan_type")
+            out["credits"] = bal.get("credits")
+            out["plan"] = bal.get("subscription_plan_type")
             try:
                 out["unlim"] = await unlim_status()
             except BaseException as e:
