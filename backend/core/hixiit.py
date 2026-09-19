@@ -271,21 +271,42 @@ async def mcp_scope():
     соединение и заново проходило `initialize()`, и на рукопожатия уходило
     больше времени, чем на саму генерацию.
 
-    Если сессию открыть не удалось, работаем как раньше — по соединению на
-    вызов. Ускорение не должно превращаться в отказ.
+    Ловим ТОЛЬКО неудачу открытия сессии. Первая версия оборачивала в `try` и
+    тело тоже — а значит любая ошибка генерации влетала в тот же `except`,
+    после которого генератор отдавал значение второй раз. Python на это
+    отвечает «generator didn't stop after athrow()», и настоящая причина
+    отказа терялась: канал OAuth падал на ровном месте и задача уходила
+    запасным путём. Поэтому открытие и тело разнесены явно.
     """
     try:
-        async with _mcp_session() as session:
-            token = _SHARED_SESSION.set(session)
-            try:
-                yield session
-            finally:
-                _SHARED_SESSION.reset(token)
+        session_cm = _mcp_session()
+        session = await session_cm.__aenter__()
     except BaseException as e:
         _reraise_control_flow(e)
         print(f"[NEXUS] общая сессия MCP не открылась ({_why(e, 120)}), "
               f"работаем по соединению на вызов", flush=True)
         yield None
+        return
+
+    token = _SHARED_SESSION.set(session)
+    try:
+        yield session
+    except BaseException as e:
+        # Ошибка задачи — её же и отдаём наружу, закрыв сессию по-честному.
+        _SHARED_SESSION.reset(token)
+        try:
+            await session_cm.__aexit__(type(e), e, e.__traceback__)
+        except BaseException:
+            pass
+        raise
+    else:
+        _SHARED_SESSION.reset(token)
+        try:
+            await session_cm.__aexit__(None, None, None)
+        except BaseException as e:
+            # Закрытие соединения не должно отменять уже полученный результат.
+            print(f"[NEXUS] сессия MCP закрылась с ошибкой: {_why(e, 120)}",
+                  flush=True)
 
 
 async def _mcp_call(tool: str, args: dict, timeout: float = 600.0):
