@@ -1471,8 +1471,19 @@ async def _dispatch_command(chat_id: str, text: str):
         any_ai = any(ai_keys.values())
         # Режим работы важнее списка галочек: без ИИ система не «сломана»,
         # она работает как пульт — публикация, очередь и отчёты на месте.
-        from core.ai_router import available_providers
+        from core.ai_router import available_providers, exhausted_providers
         providers = available_providers()
+        # Исчерпанные квоты показываем отдельной строкой: провайдер подключён,
+        # но сейчас пропускается — без этого «ключ есть, а не используется»
+        # выглядит поломкой.
+        tired = exhausted_providers()
+        if tired:
+            names = ", ".join(f"{p} (ещё {v['seconds'] / 60:.0f} мин)"
+                              for p, v in tired.items())
+            providers = [p for p in providers if p not in tired]
+            await send_message(chat_id,
+                               f"⏳ Квота исчерпана, пропускаются: {names}\n"
+                               f"Задачи идут другими провайдерами.")
         mode = (f"✅ Режим: полный (ИИ: {', '.join(providers)})" if providers
                 else "⚙️ Режим: только управление — ИИ не подключён.\n"
                      "Работают: /queue /tasks /errors /cost /rivals, публикация и отчёты.\n"

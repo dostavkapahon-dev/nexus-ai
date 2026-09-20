@@ -4,6 +4,8 @@
 На одну генерацию приходится подбор модели, каталог безлимита, сам запрос и
 опросы готовности — на рукопожатия уходило больше времени, чем на генерацию.
 """
+import asyncio
+
 import pytest
 
 from core import hixiit
@@ -97,3 +99,54 @@ async def test_scope_that_cannot_open_does_not_break_generation(monkeypatch):
     monkeypatch.setattr(hixiit, "_mcp_session", refuses)
     async with hixiit.mcp_scope() as session:
         assert session is None
+
+
+@pytest.mark.asyncio
+async def test_error_inside_the_task_reaches_the_caller_unchanged(sessions):
+    """Ошибка генерации обязана выйти наружу как есть.
+
+    Первая версия обёртки ловила в один `except` и открытие сессии, и тело.
+    Любая ошибка задачи влетала туда же, генератор отдавал значение второй
+    раз, и Python подменял причину на «generator didn't stop after athrow()».
+    Настоящая причина терялась, канал OAuth падал на ровном месте, а задача
+    уходила запасным путём — снаружи это выглядело как «Higgsfield через
+    OAuth не используется».
+    """
+    with pytest.raises(ValueError, match="платформа отказала"):
+        async with hixiit.mcp_scope():
+            raise ValueError("платформа отказала")
+
+
+@pytest.mark.asyncio
+async def test_cancellation_is_not_swallowed(sessions):
+    """Отмена задачи — не ошибка канала: она должна проходить насквозь."""
+    with pytest.raises(asyncio.CancelledError):
+        async with hixiit.mcp_scope():
+            raise asyncio.CancelledError()
+
+
+@pytest.mark.asyncio
+async def test_session_is_closed_after_a_failure(monkeypatch):
+    closed = []
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def fake_session():
+        try:
+            yield _Session()
+        finally:
+            closed.append(True)
+
+    monkeypatch.setattr(hixiit, "_mcp_session", fake_session)
+    with pytest.raises(ValueError):
+        async with hixiit.mcp_scope():
+            raise ValueError("отказ")
+    assert closed, "соединение должно закрываться и после ошибки"
+
+
+@pytest.mark.asyncio
+async def test_shared_session_is_released_after_a_failure(monkeypatch, sessions):
+    with pytest.raises(ValueError):
+        async with hixiit.mcp_scope():
+            raise ValueError("отказ")
+    assert hixiit._SHARED_SESSION.get() is None
