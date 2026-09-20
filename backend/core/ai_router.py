@@ -461,6 +461,65 @@ async def _track(model: str, tokens: int, cost: float, status: str,
         pass
 
 
+
+# ── исчерпанные провайдеры ────────────────────────────────────────────────────
+#
+# Квота кончается не у модели, а у ПРОВАЙДЕРА: у всех моделей Gemini она общая.
+# Фолбэк на другого провайдера работал и раньше, но дохлый пробовался заново на
+# каждом вызове: запрос, сетевое ожидание, 429 — и только потом переход. В
+# конвейере из десятка шагов это десяток потерянных ожиданий подряд.
+#
+# Поэтому исчерпанный провайдер запоминается и пропускается сразу. Срок
+# небольшой: квоты восстанавливаются, и держать провайдера мёртвым дольше, чем
+# нужно, — значит зря платить другому.
+QUOTA_COOLDOWN_SEC = float(os.getenv("NEXUS_QUOTA_COOLDOWN_SEC", "900"))
+
+# Признаки в тексте ошибки, по которым видно: повторять этому провайдеру нечем.
+_QUOTA_MARKS = ("insufficient_quota", "resource_exhausted", "quota", "429",
+                "rate limit", "rate_limit", "too many requests")
+
+# Признаки «эта модель не годится» — провайдер при этом жив, дохнет только модель.
+_MODEL_MARKS = ("not found", "unsupported", "deprecat", "does not exist",
+                "invalid model")
+
+_EXHAUSTED: dict[str, tuple[float, str]] = {}
+
+
+def _is_quota(error) -> bool:
+    return any(m in str(error or "").lower() for m in _QUOTA_MARKS)
+
+
+def _is_dead_model(error) -> bool:
+    return any(m in str(error or "").lower() for m in _MODEL_MARKS)
+
+
+def mark_exhausted(provider: str, why: str = "") -> None:
+    """Провайдер исчерпан — не трогаем его, пока квота не восстановится."""
+    if provider:
+        _EXHAUSTED[provider] = (time.time() + QUOTA_COOLDOWN_SEC,
+                                str(why or "")[:200])
+
+
+def exhausted_for(provider: str) -> float:
+    """Сколько секунд провайдеру ещё остывать. 0 — можно пробовать."""
+    until, _ = _EXHAUSTED.get(provider, (0.0, ""))
+    left = until - time.time()
+    if left <= 0:
+        _EXHAUSTED.pop(provider, None)
+        return 0.0
+    return left
+
+
+def exhausted_providers() -> dict:
+    """Кто сейчас исчерпан и почему — для диагностики."""
+    out = {}
+    for provider in list(_EXHAUSTED):
+        left = exhausted_for(provider)
+        if left:
+            out[provider] = {"seconds": left, "why": _EXHAUSTED[provider][1]}
+    return out
+
+
 class AIRouter:
     async def _call_claude(self, model, system, prompt):
         client = _anthropic().AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -562,7 +621,12 @@ class AIRouter:
         if not with_keys:
             raise RuntimeError("Нет ни одного ключа ИИ. " + FREE_SIGNUP_HINT)
 
-        models_to_try = with_keys
+        # Исчерпанных пропускаем сразу, не тратя на них сетевое ожидание. Но
+        # если исчерпаны ВСЕ — пробуем как есть: отказ лучше отдать от живого
+        # запроса, чем от нашей памяти, которая могла устареть.
+        alive = [m for m in with_keys
+                 if not exhausted_for(AI_ROUTING.get(m, "openai"))]
+        models_to_try = alive or with_keys
         last_error = None
         errors = {}
         for m in models_to_try:
@@ -592,9 +656,13 @@ class AIRouter:
                     last_error = e
                     errors[m] = f"{type(e).__name__}: {str(e)[:180]}"
                     await _track(m, 0, 0.0, "error", 0.0, error=str(e)[:300])
-                    # Квота/недоступная модель — повторять бессмысленно, идём к следующей.
-                    if any(s in str(e).lower() for s in
-                           ("insufficient_quota", "resource_exhausted", "429", "not found", "unsupported", "deprecat")):
+                    # Квота — повторять бессмысленно ни этой моделью, ни
+                    # соседней того же провайдера: квота у них общая.
+                    if _is_quota(e):
+                        mark_exhausted(provider, str(e)[:200])
+                        break
+                    # Модель не та — провайдер жив, дохнет только она.
+                    if _is_dead_model(e):
                         break
                     if attempt < 2:
                         await asyncio.sleep(2 ** attempt)

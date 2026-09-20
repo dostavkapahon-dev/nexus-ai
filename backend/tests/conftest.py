@@ -95,11 +95,16 @@ def _forget_failed_paths():
     # каждого свой — без очистки один тест решал за следующий, какие модели
     # существуют.
     hixiit._CATALOG_CACHE.clear()
+    # И для исчерпанных провайдеров: отметка живёт минутами, и без очистки
+    # один тест решал за следующий, кому квоты не хватило.
+    from core import ai_router
+    ai_router._EXHAUSTED.clear()
     yield
     hixiit._COLD.clear()
     hixiit._COLD_WHY.clear()
     websearch._DEAD.clear()
     hixiit._CATALOG_CACHE.clear()
+    ai_router._EXHAUSTED.clear()
 
 
 def pytest_sessionfinish(session, exitstatus):
