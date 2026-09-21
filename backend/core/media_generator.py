@@ -145,7 +145,9 @@ async def generate_image_ex(prompt: str, provider: str = "auto",
             # Провайдер выбран явно — молча подменять его другим нельзя.
             raise RuntimeError(f"HIXIIT недоступен: {res.get('error')}")
 
-    # Порядок: платные по наличию ключа → бесплатный Pollinations как гарантия.
+    # Причина по каждому провайдеру: «картинки нет» без объяснения чинить
+    # нельзя, а провайдеры отказывают по-разному — ключ, квота, формат.
+    errors: dict[str, str] = {}
     chain = []
     if provider == "imagen" or (provider == "auto" and os.getenv("GEMINI_API_KEY")):
         chain.append(("imagen", lambda: _gemini_imagen(prompt, size)))
@@ -159,6 +161,7 @@ async def generate_image_ex(prompt: str, provider: str = "auto",
         try:
             url = await call()
         except Exception as e:
+            errors[name] = str(e)[:200]
             await _track_media(name, "image", False, time.time() - t0, str(e)[:200])
             continue
         if url:
@@ -166,9 +169,26 @@ async def generate_image_ex(prompt: str, provider: str = "auto",
             return {"url": url, "provider": name, "model": "", "prompt": prompt,
                     "asked": asked, "fallback": True, "why": why}
         # Провайдер вернул пусто — платить не за что, но знать об этом полезно.
+        errors[name] = "пустой ответ провайдера"
         await _track_media(name, "image", False, time.time() - t0, "пустой ответ провайдера")
 
-    # Бесплатный путь работает всегда — картинка будет в любом случае.
+    # Бесплатный генератор — ТОЛЬКО с разрешения, той же настройкой, что и у
+    # HIXIIT. Раньше он подставлялся безусловно: человек просил кадр Higgsfield,
+    # Higgsfield отказывал, и приходила картинка чужого сервиса с водяным
+    # знаком — а шаг конвейера светился зелёным. При этом в статусе честно
+    # стояло «черновик бесплатным генератором: выключен»: настройка была, а
+    # этот путь её не смотрел.
+    from core.hixiit import free_draft_allowed
+    if not free_draft_allowed():
+        tried = "; ".join(f"{name}: {err}" for name, err in errors.items())
+        raise RuntimeError(
+            "Картинку не сделал ни один настроенный генератор. "
+            + (f"Причины — {tried}. " if tried else "")
+            + (f"Higgsfield: {why}. " if why else "")
+            + "Подставлять бесплатный генератор не стал: он рисует не то, что "
+              "просили, и ставит чужой водяной знак. Разрешить — переменная "
+              "NEXUS_FREE_DRAFT=1 на хостинге.")
+
     url = _pollinations(prompt, size)
     await _track_media("pollinations", "image", True)
     return {"url": url, "provider": "pollinations", "model": "free",

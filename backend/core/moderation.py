@@ -43,15 +43,30 @@ async def _save(db, key: str, value):
 
 
 async def _tg(method: str, payload: dict):
+    """Вызов Telegram. Неудача поднимается наверх, а не проглатывается.
+
+    Раньше здесь стоял `except Exception: pass`, и ответ Telegram даже не
+    читался. Поэтому «✅ ролик отправлен в Telegram на согласование» писалось и
+    тогда, когда Telegram отказался: не та ссылка на картинку, не тот чат,
+    слишком большой файл. Человек видел зелёную галочку и пустой чат — ровно
+    та ложь, от которой уходим.
+    """
     import httpx
     token = os.getenv("TELEGRAM_BOT_TOKEN", "")
     if not token:
-        return
+        raise RuntimeError("TELEGRAM_BOT_TOKEN не задан — отправлять нечем")
+    async with httpx.AsyncClient(timeout=20) as c:
+        r = await c.post(f"https://api.telegram.org/bot{token}/{method}",
+                         json=payload)
     try:
-        async with httpx.AsyncClient(timeout=20) as c:
-            await c.post(f"https://api.telegram.org/bot{token}/{method}", json=payload)
+        data = r.json()
     except Exception:
-        pass
+        data = {}
+    if r.status_code >= 400 or not data.get("ok", r.status_code < 400):
+        raise RuntimeError(
+            f"Telegram отклонил {method}: "
+            f"{data.get('description') or r.text[:200] or r.status_code}")
+    return data
 
 
 def _kb(pid: str) -> dict:
@@ -82,9 +97,18 @@ async def analyze_media_for(pid: str) -> str:
 async def send_for_approval(text: str, media_url: str = None, platforms: list = None,
                             kind: str = "plan", ref: str = None) -> str | None:
     """Кладёт контент в очередь и шлёт админу превью с кнопками. Возвращает pid."""
+    # Владельца берём и из закрепления первым /start: без TELEGRAM_CHAT_ID
+    # согласование молча уходило в никуда, а шаг оставался зелёным.
     admin = os.getenv("TELEGRAM_CHAT_ID", "")
-    if not admin or not os.getenv("TELEGRAM_BOT_TOKEN"):
-        return None
+    if not admin:
+        try:
+            from core.telegram_owner import owner_id
+            admin = await owner_id()
+        except Exception:
+            admin = ""
+    if not admin:
+        raise RuntimeError("некому отправлять согласование: не задан "
+                           "TELEGRAM_CHAT_ID и бот не знает владельца")
 
     pid = uuid.uuid4().hex[:8]
     async with AsyncSessionLocal() as db:
@@ -93,14 +117,31 @@ async def send_for_approval(text: str, media_url: str = None, platforms: list = 
                       "platforms": platforms or ["instagram"], "kind": kind, "ref": ref}
         await _save(db, QUEUE_KEY, queue)
 
-    caption = ("🆕 <b>На согласование</b>\n\n" + (text or ""))[:1024]
+    # Называем, ЧТО именно отправлено. «Ролик» при отправленной картинке —
+    # это обещание, которого в чате не окажется, и человек ищет несуществующее.
+    is_video = bool(media_url) and str(media_url).lower().endswith(
+        (".mp4", ".mov", ".webm"))
+    head = ("🆕 <b>На согласование — ролик</b>" if is_video else
+            "🆕 <b>На согласование — кадр</b>" if media_url else
+            "🆕 <b>На согласование — только текст</b>")
+    caption = (head + "\n\n" + (text or ""))[:1024]
     kb = _kb(pid)
-    if media_url and str(media_url).lower().endswith((".mp4", ".mov", ".webm")):
+    if is_video:
         await _tg("sendVideo", {"chat_id": admin, "video": media_url,
                                 "caption": caption, "parse_mode": "HTML", "reply_markup": kb})
     elif media_url:
-        await _tg("sendPhoto", {"chat_id": admin, "photo": media_url,
-                                "caption": caption, "parse_mode": "HTML", "reply_markup": kb})
+        try:
+            await _tg("sendPhoto", {"chat_id": admin, "photo": media_url,
+                                    "caption": caption, "parse_mode": "HTML",
+                                    "reply_markup": kb})
+        except Exception as e:
+            # Файл создан и сохранён — терять его из-за отказа доставки нельзя
+            # (§29). Отдаём ссылкой и честно говорим, что картинка не прошла.
+            await _tg("sendMessage", {
+                "chat_id": admin,
+                "text": f"{caption}\n\n🔗 {media_url}\n"
+                        f"<i>Картинку чат не принял: {str(e)[:150]}</i>",
+                "parse_mode": "HTML", "reply_markup": kb})
     else:
         await _tg("sendMessage", {"chat_id": admin, "text": caption,
                                   "parse_mode": "HTML", "reply_markup": kb})

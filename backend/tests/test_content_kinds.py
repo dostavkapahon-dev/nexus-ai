@@ -54,6 +54,15 @@ def factory(monkeypatch):
     monkeypatch.setattr("core.creative_director.build_brief", brief)
     monkeypatch.setattr("core.creative_director.wow_review", wow)
     monkeypatch.setattr("core.media_generator.generate_image", image)
+
+    # Обложку фабрика берёт расширенным вызовом: ей нужен ИСПОЛНИТЕЛЬ, иначе
+    # кадр Higgsfield и картинка бесплатного сервиса неотличимы в отчёте.
+    async def image_ex(prompt, provider="auto", platform="telegram"):
+        return {"url": await image(prompt, platform=platform),
+                "provider": "higgsfield_mcp", "model": "soul_2",
+                "prompt": prompt, "asked": prompt, "fallback": False, "why": ""}
+
+    monkeypatch.setattr("core.media_generator.generate_image_ex", image_ex)
     monkeypatch.setattr("core.media_generator.generate_clip", clip)
     # Без ключей видеосервисов конвейер выбирает бесплатное слайд-шоу — подменяем
     # и его, иначе проверка «ролик уходит видео» зависела бы от наличия ffmpeg.

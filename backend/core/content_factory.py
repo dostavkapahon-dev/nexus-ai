@@ -143,11 +143,42 @@ async def _flush_steps(report: dict) -> None:
         sent = int(report.get("_journaled") or 0)
         steps = report.get("steps") or []
         for s in steps[sent:]:
-            await add_step(task_id, agent="factory", action=s.get("step", "step"),
+            action = s.get("step", "step")
+            # Исполнителя пишем прямо в название шага: «cover» и «cover ·
+            # pollinations» — это разный результат, и человек должен видеть
+            # разницу в журнале, а не искать её в отчёте.
+            if s.get("provider"):
+                action = f"{action} · {s['provider']}"
+            await add_step(task_id, agent="factory", action=action,
                            ok=bool(s.get("ok")), error=str(s.get("error") or "")[:300])
         report["_journaled"] = len(steps)
     except Exception:
         pass
+
+
+async def _send_frames(frames: list) -> None:
+    """Отправляет готовые кадры владельцу. Никогда не роняет конвейер."""
+    if not frames:
+        return
+    try:
+        import os
+        from publishers.telegram_pub import send_photo
+        chat = os.getenv("TELEGRAM_CHAT_ID", "")
+        if not chat:
+            from core.telegram_owner import owner_id
+            chat = await owner_id()
+        if not chat:
+            return
+        for i, f in enumerate(frames, 1):
+            caption = f"Кадр {i}/{len(frames)}"
+            if f.get("t"):
+                caption += f" · {f['t']}"
+            if f.get("overlay"):
+                caption += f"\n{str(f['overlay'])[:150]}"
+            await send_photo(chat, f["image"], caption)
+    except Exception as e:
+        print(f"[NEXUS] кадры не доставлены: {type(e).__name__}: {str(e)[:120]}",
+              flush=True)
 
 
 async def run_factory(topic: str | None = None, platforms: list | None = None,
@@ -244,10 +275,19 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
 
     # 3a. Обложка
     try:
-        cover = await generate_image(brief.get("cover_prompt") or plan.get("image_prompt")
-                                     or cover_prompt(plan.get("hook_text", "")), platform=target)
+        # Просим расширенный ответ: нужен исполнитель. «✅ cover» без имени
+        # того, кто нарисовал, скрывало подмену — кадр Higgsfield и картинка
+        # чужого бесплатного сервиса выглядели одинаково.
+        from core.media_generator import generate_image_ex
+        made = await generate_image_ex(
+            brief.get("cover_prompt") or plan.get("image_prompt")
+            or cover_prompt(plan.get("hook_text", "")), platform=target)
+        cover = made.get("url", "")
         report["assets"]["cover"] = cover
-        report["steps"].append({"step": "cover", "ok": bool(cover)})
+        report["assets"]["cover_provider"] = made.get("provider", "")
+        report["steps"].append({"step": "cover", "ok": bool(cover),
+                                "provider": made.get("provider", ""),
+                                "note": made.get("why", "")})
     except Exception as e:
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})
@@ -298,9 +338,17 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
             frames.append({"t": shot.get("t"), "overlay": shot.get("overlay"),
                            "image": img})
     report["assets"]["frames"] = frames
-    # Нет раскадровки → нет кадров: это не «успешный» шаг, а следствие сбоя брифа.
-    report["steps"].append({"step": "storyboard_frames", "ok": bool(frames),
-                            "count": len(frames)})
+    # Считаем кадры, у которых ЕСТЬ картинка. Раньше шаг зеленел по длине
+    # списка: четыре записи с пустой ссылкой давали «✅ storyboard_frames x4»
+    # при нуле нарисованного — и человек шёл искать кадры, которых нет.
+    drawn = [f for f in frames if str(f.get("image") or "").startswith("http")]
+    report["steps"].append({"step": "storyboard_frames", "ok": bool(drawn),
+                            "count": len(drawn), "planned": len(frames),
+                            "error": ("ни один кадр не нарисован"
+                                      if frames and not drawn else "")})
+    # Нарисованное показываем человеку сразу: до сих пор кадры оставались
+    # внутри отчёта, и на вопрос «где изображение» ответить было нечем.
+    await _send_frames(drawn)
 
     await _flush_steps(report)   # обложка и кадры
 
@@ -408,8 +456,14 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         try:
             from core.moderation import send_for_approval
             pid = await send_for_approval(caption, media_url=media, platforms=platforms, kind="factory")
+            # Говорим, ЧТО ушло. «Ролик» при отправленной обложке — обещание,
+            # которого в чате не окажется: человек идёт искать несуществующее.
+            what = ("ролик" if (vid_url and str(vid_url).startswith("http"))
+                    else "кадр-обложка" if media else "только текст")
             report["published"] = {"status": "awaiting_approval", "pid": pid,
-                                   "note": "ролик отправлен в Telegram на согласование"}
+                                   "sent": what,
+                                   "note": f"{what} — отправлено в Telegram "
+                                           f"на согласование"}
             # Точка согласования — это не «шаг провалился», а ожидание человека.
             report["steps"].append({"step": "approval_requested", "ok": True, "pid": pid})
             report["awaiting_approval"] = True
