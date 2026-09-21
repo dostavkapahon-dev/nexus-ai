@@ -143,7 +143,13 @@ async def _flush_steps(report: dict) -> None:
         sent = int(report.get("_journaled") or 0)
         steps = report.get("steps") or []
         for s in steps[sent:]:
-            await add_step(task_id, agent="factory", action=s.get("step", "step"),
+            action = s.get("step", "step")
+            # Исполнителя пишем прямо в название шага: «cover» и «cover ·
+            # pollinations» — это разный результат, и человек должен видеть
+            # разницу в журнале, а не искать её в отчёте.
+            if s.get("provider"):
+                action = f"{action} · {s['provider']}"
+            await add_step(task_id, agent="factory", action=action,
                            ok=bool(s.get("ok")), error=str(s.get("error") or "")[:300])
         report["_journaled"] = len(steps)
     except Exception:
@@ -269,10 +275,19 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
 
     # 3a. Обложка
     try:
-        cover = await generate_image(brief.get("cover_prompt") or plan.get("image_prompt")
-                                     or cover_prompt(plan.get("hook_text", "")), platform=target)
+        # Просим расширенный ответ: нужен исполнитель. «✅ cover» без имени
+        # того, кто нарисовал, скрывало подмену — кадр Higgsfield и картинка
+        # чужого бесплатного сервиса выглядели одинаково.
+        from core.media_generator import generate_image_ex
+        made = await generate_image_ex(
+            brief.get("cover_prompt") or plan.get("image_prompt")
+            or cover_prompt(plan.get("hook_text", "")), platform=target)
+        cover = made.get("url", "")
         report["assets"]["cover"] = cover
-        report["steps"].append({"step": "cover", "ok": bool(cover)})
+        report["assets"]["cover_provider"] = made.get("provider", "")
+        report["steps"].append({"step": "cover", "ok": bool(cover),
+                                "provider": made.get("provider", ""),
+                                "note": made.get("why", "")})
     except Exception as e:
         cover = ""
         report["steps"].append({"step": "cover", "ok": False, "error": str(e)[:160]})

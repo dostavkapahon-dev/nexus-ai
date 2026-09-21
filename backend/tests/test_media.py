@@ -6,8 +6,13 @@ from core import cost_tracker as ct
 
 
 @pytest.mark.asyncio
-async def test_free_provider_is_always_last_resort(client, monkeypatch):
-    """Картинка должна получиться всегда — Pollinations бесплатен и без лимитов."""
+async def test_free_provider_is_the_last_resort_when_allowed(client, monkeypatch):
+    """Бесплатный генератор — последний рубеж, но только с разрешения.
+
+    Без разрешения подставлять его нельзя: человек просил кадр Higgsfield, а
+    получал картинку чужого сервиса с водяным знаком — и не знал об этом.
+    """
+    monkeypatch.setenv("NEXUS_FREE_DRAFT", "1")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("STABILITY_API_KEY", raising=False)
@@ -38,6 +43,7 @@ async def test_image_generation_is_charged(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_failed_provider_falls_through_without_charge(client, monkeypatch):
+    monkeypatch.setenv("NEXUS_FREE_DRAFT", "1")
     """За неудачную генерацию платить не за что, но след в журнале остаться должен."""
     monkeypatch.setenv("OPENAI_API_KEY", "test")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)

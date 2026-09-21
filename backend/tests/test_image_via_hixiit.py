@@ -38,7 +38,10 @@ async def _same(p):
 
 @pytest.mark.asyncio
 async def test_falls_back_when_hixiit_unavailable(client, monkeypatch):
-    """HIXIIT не настроен — картинка всё равно должна получиться."""
+    """HIXIIT не настроен — картинка получится бесплатным путём, но только
+    если бесплатный путь разрешён явно."""
+    monkeypatch.setenv("NEXUS_FREE_DRAFT", "1")
+
     async def fake_hixiit(prompt, **kw):
         return {"ok": False, "error": "не настроен"}
 
@@ -176,3 +179,22 @@ async def test_video_prompt_in_russian_is_translated_too(client, monkeypatch):
 
 def hixiit_has_cyrillic(text: str) -> bool:
     return any("Ѐ" <= c <= "ӿ" for c in text or "")
+
+
+@pytest.mark.asyncio
+async def test_without_permission_the_refusal_names_the_reason(client, monkeypatch):
+    """Молчаливой подмены быть не должно: отказ честнее чужой картинки."""
+    monkeypatch.delenv("NEXUS_FREE_DRAFT", raising=False)
+
+    async def fake_hixiit(prompt, **kw):
+        return {"ok": False, "error": "400 Unavailable model"}
+
+    monkeypatch.setattr("core.hixiit.generate", fake_hixiit)
+    monkeypatch.setattr(mg, "enrich_image_prompt", _same)
+    for var in ("GEMINI_API_KEY", "OPENAI_API_KEY", "STABILITY_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
+    with pytest.raises(RuntimeError) as e:
+        await mg.generate_image("кофе")
+    assert "Unavailable model" in str(e.value)
+    assert "NEXUS_FREE_DRAFT" in str(e.value)
