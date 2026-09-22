@@ -125,6 +125,24 @@ async def upload_bytes(data: bytes, name: str, kind: str = "image",
         return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
 
 
+async def download(file_id: str) -> dict:
+    """Забрать файл из архива байтами. {'ok', 'data'} либо причина.
+
+    Архив нужен не для отчёта, а чтобы результат можно было отдать снова, когда
+    ссылка провайдера истекла. `webViewLink` для этого не годится: это страница
+    просмотра, а не файл, и Telegram по ней ничего не заберёт.
+    """
+    try:
+        service = await _service()
+        data = await asyncio.to_thread(
+            lambda: service.files().get_media(fileId=file_id).execute())
+        if not data:
+            return {"ok": False, "error": "архив вернул пустой файл"}
+        return {"ok": True, "data": data}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
+
+
 async def upload_url(url: str, name: str, kind: str = "image") -> dict:
     """Скачать результат по ссылке провайдера и положить в архив.
 

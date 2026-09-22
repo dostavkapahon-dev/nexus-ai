@@ -771,22 +771,34 @@ async def _import_media(image_url: str) -> str | None:
     return None
 
 
-# Ждём результат длинными шагами. Каждый вызов MCP открывает новое соединение
-# и заново проходит рукопожатие, поэтому сорок коротких опросов — это сорок
-# рукопожатий подряд: минуты уходят не на генерацию, а на переподключение.
-# Пятнадцать шагов по 45 секунд дают тот же запас времени втрое дешевле.
-JOB_POLL_SECONDS = 45
-JOB_POLL_ATTEMPTS = 15
+# Сколько ждёт ОДИН вызов jobs_wait. Это не наш выбор: инструмент объявляет
+# `timeout_seconds` с максимумом 15 («Waits up to timeout_seconds (default 15,
+# max 15)»), и значение выше платформа отклоняет проверкой аргументов. Стояло
+# 45 — то есть заявка отправлялась (кредиты списывались), а ожидание падало
+# на каждом опросе, и задача сообщала «Higgsfield не отдал результат», хотя
+# кадр был готов. Ограничение держим константой, чтобы его нельзя было
+# «подправить» вверх, не заметив, что оно не наше.
+MCP_WAIT_MAX_SECONDS = 15
+JOB_POLL_SECONDS = MCP_WAIT_MAX_SECONDS
+
+# Общий запас времени на ожидание результата. Считаем его в секундах, а не в
+# числе опросов: длина одного опроса задана платформой, и привязывать к ней
+# запас — значит терять его при каждом изменении протокола. Видео делается
+# дольше кадра, поэтому запас у него свой.
+JOB_BUDGET_SECONDS = 675
+VIDEO_BUDGET_SECONDS = 1800
+JOB_POLL_ATTEMPTS = JOB_BUDGET_SECONDS // MCP_WAIT_MAX_SECONDS
 
 
 async def _wait_job(job_id: str, attempts: int = JOB_POLL_ATTEMPTS) -> str:
     """Ждёт готовности задачи. Генерация асинхронная: ответ на запрос — это
     заявка со статусом pending, а не готовое медиа."""
+    wait = min(JOB_POLL_SECONDS, MCP_WAIT_MAX_SECONDS)
     for _ in range(attempts):
         res = await _mcp_call("jobs_wait",
                               {"jobs": [{"index": 0, "job_id": job_id}],
-                               "timeout_seconds": JOB_POLL_SECONDS},
-                              timeout=JOB_POLL_SECONDS + 30)
+                               "timeout_seconds": wait},
+                              timeout=wait + 30)
         jobs = _as_dict(res).get("jobs") or []
         job = jobs[0] if jobs else {}
         status = (job.get("status") or "").lower()
@@ -951,7 +963,10 @@ async def _generate_via_mcp_inner(task: str, kind: str, ratio: str,
         job_id = results[0].get("id") if results and isinstance(results[0], dict) else None
         if not job_id:
             raise RuntimeError(f"MCP не вернул задачу: {str(res)[:300]}")
-        url = await _wait_job(job_id)
+        # Видео делается в разы дольше кадра: общий запас у него свой,
+        # иначе готовый ролик объявляется «не отданным вовремя».
+        budget = VIDEO_BUDGET_SECONDS if kind == "video" else JOB_BUDGET_SECONDS
+        url = await _wait_job(job_id, attempts=budget // MCP_WAIT_MAX_SECONDS)
 
     out = {"ok": True, "url": url, "provider": "higgsfield_mcp",
            "kind": kind, "model": model_id,
@@ -1150,8 +1165,12 @@ async def _archive(res: dict) -> None:
         if put.get("ok"):
             res["drive_link"] = put.get("link", "")
             from core import artifacts
+            # Ссылку — человеку, id — системе. Раньше писалось «одно из», и
+            # при наличии ссылки id терялся; а повторная отправка результата
+            # может забрать файл только по id.
             await artifacts.mark(res.get("artifact_id", ""),
-                                 storage=put.get("link") or put.get("id", ""))
+                                 storage=put.get("link") or put.get("id", ""),
+                                 storage_id=put.get("id", ""))
         else:
             print(f"[NEXUS] архив Drive не принял файл: {put.get('error', '')[:150]}",
                   flush=True)
