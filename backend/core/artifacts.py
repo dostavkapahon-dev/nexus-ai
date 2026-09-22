@@ -153,22 +153,51 @@ async def redeliver(art_id: str, chat_id: str) -> dict:
     if not row:
         return {"ok": False, "error": f"артефакт {art_id} не найден"}
     url = row.get("url") or ""
-    if not url:
-        return {"ok": False, "error": "у артефакта нет ссылки на файл"}
+    stored = row.get("storage_id") or ""
+    if not url and not stored:
+        return {"ok": False, "error": "у артефакта нет ни ссылки, ни копии файла"}
 
-    from publishers.telegram_pub import send_photo, send_video
+    from publishers.telegram_pub import send_photo, send_video, send_file
+    kind = row.get("kind", "")
     caption = (f"{row.get('provider', '')} {row.get('model', '')}\n"
                f"{row.get('prompt', '')[:200]}").strip()
+    first = ""
+    if url:
+        try:
+            if kind == "video":
+                res = await send_video(chat_id, url, caption)
+            else:
+                res = await send_photo(chat_id, url, caption)
+            if res.get("ok"):
+                await mark(art_id, telegram="доставлено повторно")
+                return {"ok": True, "kind": kind, "url": url}
+            first = str(res.get("error") or "")[:200]
+        except Exception as e:
+            first = f"{type(e).__name__}: {str(e)[:150]}"
+
+    # Ссылка провайдера живёт недолго, и именно повторная отправка приходится
+    # на время, когда её уже нет. Копия в архиве для этого и делалась: пока она
+    # есть, «результат сохранён» — правда, а не обещание. Генерировать заново
+    # нельзя ни в каком случае: это чужие деньги (§50).
+    if not stored:
+        return {"ok": False,
+                "error": (first or "нет ссылки на файл")
+                         + "; копии в архиве нет — повторить отправку нечем"}
+    from core import drive_store
+    got = await drive_store.download(stored)
+    if not got.get("ok"):
+        return {"ok": False,
+                "error": f"{first or 'ссылки нет'}; архив не отдал копию: "
+                         f"{got.get('error', '')[:150]}"}
     try:
-        if row.get("kind") == "video":
-            await send_video(chat_id, url, caption)
-        else:
-            await send_photo(chat_id, url, caption)
+        res = await send_file(chat_id, got["data"], kind or "image", caption)
     except Exception as e:
-        await mark(art_id, telegram=f"не доставлено: {str(e)[:120]}")
-        return {"ok": False, "error": str(e)[:200]}
-    await mark(art_id, telegram="доставлено повторно")
-    return {"ok": True, "kind": row.get("kind", ""), "url": url}
+        res = {"ok": False, "error": f"{type(e).__name__}: {str(e)[:150]}"}
+    if not res.get("ok"):
+        await mark(art_id, telegram=f"не доставлено: {str(res.get('error'))[:120]}")
+        return {"ok": False, "error": str(res.get("error"))[:200]}
+    await mark(art_id, telegram="доставлено повторно из архива")
+    return {"ok": True, "kind": kind, "url": row.get("storage") or "", "from_archive": True}
 
 
 def as_text(rows: list[dict]) -> str:

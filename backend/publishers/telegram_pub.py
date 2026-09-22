@@ -37,7 +37,7 @@ def _is_permanent(description: str, code: int | None) -> bool:
 
 
 async def call(method: str, payload: dict, *, token: str = "", timeout: float = 30,
-               retries: int = 2) -> dict:
+               retries: int = 2, files: dict | None = None) -> dict:
     """Один вызов Bot API. Возвращает распакованный ответ Telegram.
 
     Телеграм и на ошибке отвечает 200 с `ok: false`, поэтому статус HTTP здесь
@@ -46,6 +46,11 @@ async def call(method: str, payload: dict, *, token: str = "", timeout: float = 
         повторяем, вместо того чтобы отдавать наверх «не получилось»;
       * 403 и «нет прав» — повторять нечего, помечаем отказ окончательным,
         иначе очередь пять раз долбится в канал, откуда бота выгнали.
+
+    `files` — готовый файл вместо ссылки (multipart). Нужен, когда ссылки
+    провайдера уже нет, а копия файла есть: отправка байтами — единственный
+    способ отдать результат, не генерируя его заново. Логика повторов и
+    разбора ответа общая: вторая копия разошлась бы с первой.
     """
     tok = (token or bot_token()).strip()
     if not tok:
@@ -55,7 +60,14 @@ async def call(method: str, payload: dict, *, token: str = "", timeout: float = 
     while True:
         try:
             async with httpx.AsyncClient(timeout=timeout) as c:
-                r = await c.post(API.format(token=tok, method=method), json=payload)
+                url = API.format(token=tok, method=method)
+                if files:
+                    # multipart: подписи и флаги идут полями формы, а не JSON.
+                    form = {k: ("" if v is None else str(v))
+                            for k, v in payload.items()}
+                    r = await c.post(url, data=form, files=files)
+                else:
+                    r = await c.post(url, json=payload)
                 data = r.json()
         except Exception as e:
             return {"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}
@@ -177,6 +189,30 @@ async def send_video(chat_id: str, video: str, caption: str = "", *, token: str 
         # и без пояснения она выглядит как «Telegram сломался».
         res["hint"] = ("Telegram принимает по ссылке видео до 50 МБ — "
                        "сожмите ролик или дайте прямую ссылку меньшего размера")
+    return _msg(res, chat_id, truncated=cut)
+
+
+async def send_file(chat_id: str, data: bytes, kind: str = "image",
+                    caption: str = "", *, token: str = "",
+                    filename: str = "") -> dict:
+    """Отправить готовый файл байтами, а не ссылкой.
+
+    Ссылка провайдера живёт недолго. Через сутки повторная отправка результата
+    по ней получает 400 от Telegram, и «файл сохранён» оказывается неправдой —
+    хотя копия файла у нас есть. §50 ТЗ: Telegram не хранилище, но и потеря
+    результата из-за истёкшей ссылки — не повод генерировать заново.
+    """
+    video = kind == "video"
+    field = "video" if video else "photo"
+    name = filename or ("result.mp4" if video else "result.png")
+    mime = "video/mp4" if video else "image/png"
+    body, cut = fit(caption, CAPTION_LIMIT)
+    payload = {"chat_id": chat_id, "caption": body, "parse_mode": "HTML"}
+    if video:
+        payload["supports_streaming"] = "true"
+    res = await call("sendVideo" if video else "sendPhoto", payload, token=token,
+                     timeout=180 if video else 60,
+                     files={field: (name, data, mime)})
     return _msg(res, chat_id, truncated=cut)
 
 
