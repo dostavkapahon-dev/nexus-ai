@@ -152,7 +152,7 @@ async def learn_from(text: str, source: str = "") -> list[dict]:
     prompt = (f"Источник: {source or 'без источника'}\n\nТекст:\n{text[:4000]}\n\n"
               'JSON: {"skills":[{"kind":"hook|format|visual|audience|mistake|rule",'
               '"title":"суть одной строкой","body":"деталь, как применять"}]}')
-    model = ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash-lite")
+    model = ECONOMY_MODELS.get("reviewer", "gemini-flash-lite-latest")
     try:
         res = await ai_router.call(model, system, prompt)
         t = res.get("text", "")

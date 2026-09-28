@@ -49,7 +49,7 @@ async def check_ai() -> dict:
     t = time.monotonic()
     name = "Модель ИИ"
     from core.ai_router import ai_router, ECONOMY_MODELS
-    model = ECONOMY_MODELS.get("copywriter", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("copywriter", "gemini-flash-latest")
     try:
         res = await ai_router.call(
             model, "Отвечай одним словом, без пояснений.",

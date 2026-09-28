@@ -14,9 +14,9 @@ from urllib.parse import quote
 # Какой провайдер дешевле для какой задачи (берётся первый доступный по ключу).
 TEXT_TASK_MODELS = {
     # критический креатив (хук, концепция) — лучший доступный «мозг»
-    "creative": ["claude-sonnet-4-6", "gemini-2.0-flash", "deepseek-chat"],
+    "creative": ["claude-sonnet-4-6", "gemini-flash-latest", "deepseek-chat"],
     # массовый текст (подписи, хэштеги, описания) — самый дешёвый/бесплатный
-    "bulk": ["gemini-2.0-flash", "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"],
+    "bulk": ["gemini-flash-latest", "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"],
 }
 
 
@@ -35,7 +35,7 @@ def pick_text_model(task: str = "bulk") -> str:
     for m in TEXT_TASK_MODELS.get(task, TEXT_TASK_MODELS["bulk"]):
         if _has_key_for(m):
             return m
-    return "gemini-2.0-flash"  # ai_router сам уйдёт в фолбэк, если ключа нет
+    return "gemini-flash-latest"  # ai_router сам уйдёт в фолбэк, если ключа нет
 
 
 async def smart_text(task: str, system: str, prompt: str) -> str:

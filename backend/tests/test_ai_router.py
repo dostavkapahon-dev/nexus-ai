@@ -57,18 +57,18 @@ async def test_requested_model_used_first(router, monkeypatch):
 async def test_429_switches_to_next_model_without_retries(router, monkeypatch):
     """Квота исчерпана — повторять ту же модель бессмысленно, идём дальше."""
     seen = _stub_calls(monkeypatch, {
-        "gemini-2.0-flash-lite": Exception("429 RESOURCE_EXHAUSTED quota"),
-        "gemini-2.0-flash": "fallback ok",
+        "gemini-flash-lite-latest": Exception("429 RESOURCE_EXHAUSTED quota"),
+        "gemini-flash-latest": "fallback ok",
     })
-    r = await router.call("gemini-2.0-flash-lite", "sys", "hi")
+    r = await router.call("gemini-flash-lite-latest", "sys", "hi")
     assert r["text"] == "fallback ok"
-    assert seen.count("gemini-2.0-flash-lite") == 1  # без трёх попыток
+    assert seen.count("gemini-flash-lite-latest") == 1  # без трёх попыток
 
 
 async def test_deprecated_model_skipped(router, monkeypatch):
     seen = _stub_calls(monkeypatch, {
         "gpt-4o": Exception("model not found"),
-        "gemini-2.0-flash-lite": "ok",
+        "gemini-flash-lite-latest": "ok",
     })
     r = await router.call("gpt-4o", "sys", "hi")
     assert r["text"] == "ok"
@@ -107,10 +107,10 @@ async def test_models_without_key_are_skipped(router, monkeypatch):
         if env:
             monkeypatch.delenv(env, raising=False)
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    seen = _stub_calls(monkeypatch, {"gemini-2.0-flash-lite": "ok"})
+    seen = _stub_calls(monkeypatch, {"gemini-flash-lite-latest": "ok"})
     await router.call("gpt-4o", "sys", "hi")
     assert "gpt-4o" not in seen  # нет OPENAI_API_KEY — не тратим время
-    assert seen == ["gemini-2.0-flash-lite"]
+    assert seen == ["gemini-flash-lite-latest"]
 
 
 def test_fallback_chain_is_cheap_first():
@@ -160,14 +160,14 @@ def test_resolve_gemini_prefers_lite_and_caches(monkeypatch):
             calls["n"] += 1
             return {"models": [
                 {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
-                {"name": "models/gemini-2.0-flash-lite", "supportedGenerationMethods": ["generateContent"]},
-                {"name": "models/gemini-2.0-flash-exp", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-flash-lite-latest", "supportedGenerationMethods": ["generateContent"]},
+                {"name": "models/gemini-flash-latest-exp", "supportedGenerationMethods": ["generateContent"]},
                 {"name": "models/embedding-001", "supportedGenerationMethods": ["embedContent"]},
             ]}
 
     monkeypatch.setattr(ar.httpx if hasattr(ar, "httpx") else __import__("httpx"),
                         "get", lambda *a, **k: Resp())
-    assert ar.resolve_gemini_model() == "gemini-2.0-flash-lite"
+    assert ar.resolve_gemini_model() == "gemini-flash-lite-latest"
     ar.resolve_gemini_model()
     assert calls["n"] == 1  # закэшировано
 
@@ -181,3 +181,12 @@ def test_resolve_gemini_survives_network_error(monkeypatch):
 
     monkeypatch.setattr(__import__("httpx"), "get", boom)
     assert ar.resolve_gemini_model() is None
+
+
+def test_retired_models_are_translated():
+    """Старые имена из базы переводятся в живые, а не бьются в 404."""
+    import core.ai_router as ar
+    for old, new in ar.LEGACY_MODELS.items():
+        assert old not in ar.AI_ROUTING
+        assert new in ar.AI_ROUTING
+        assert ar.current_model(old) == new

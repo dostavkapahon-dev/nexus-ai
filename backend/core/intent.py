@@ -115,7 +115,7 @@ async def route(text: str, history: str = "") -> str:
         return "/chat"
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
-        model = ECONOMY_MODELS.get("adapter", "gemini-2.0-flash")
+        model = ECONOMY_MODELS.get("adapter", "gemini-flash-latest")
         prompt = (f"Предыдущий разговор:\n{history}\n\nНовое сообщение: {text[:800]}"
                   if history else text[:800])
         res = await ai_router.call(model, INTENT_SYSTEM, prompt)
@@ -216,7 +216,7 @@ async def chat_reply(text: str, history: str = "") -> str:
 
     try:
         from core.ai_router import ai_router, ECONOMY_MODELS
-        model = ECONOMY_MODELS.get("copywriter", "gemini-2.0-flash")
+        model = ECONOMY_MODELS.get("copywriter", "gemini-flash-latest")
         system = CHAT_SYSTEM + await memory_block()
         prompt = (f"Предыдущий разговор:\n{history}\n\nНовое сообщение: {text[:1500]}"
                   if history else text[:1500])

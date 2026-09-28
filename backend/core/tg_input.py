@@ -55,7 +55,7 @@ async def transcribe(audio_path: str) -> str:
             import google.generativeai as genai
             from core.ai_router import resolve_gemini_model
             genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-            model_name = resolve_gemini_model() or "gemini-2.0-flash"
+            model_name = resolve_gemini_model() or "gemini-flash-latest"
             model = genai.GenerativeModel(model_name)
             with open(audio_path, "rb") as f:
                 data = f.read()

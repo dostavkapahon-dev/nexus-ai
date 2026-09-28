@@ -25,16 +25,14 @@ def _genai():
 AI_ROUTING = {
     # Anthropic
     "claude-sonnet-4-6": "anthropic",
-    "claude-sonnet-4-20250514": "anthropic",
     "claude-haiku-4-5-20251001": "anthropic",
     # OpenAI
     "gpt-4o": "openai",
     "gpt-4o-mini": "openai",
     # Google (модели 1.5 отключены Google — не используем)
-    "gemini-2.0-flash": "google",
-    "gemini-2.5-flash": "google",
     "gemini-flash-latest": "google",
-    "gemini-2.0-flash-lite": "google",
+    "gemini-2.5-flash": "google",
+    "gemini-flash-lite-latest": "google",
     # Perplexity
     "sonar-pro": "perplexity",
     "sonar-reasoning-pro": "perplexity",
@@ -52,7 +50,24 @@ AI_ROUTING = {
 # несколько: упёрлись в 429 на одной — пробуем следующую.
 # Бесплатные идут первыми (их порядок задаёт FREE_PROVIDERS), затем платные
 # «дёшево → дорого». Сама цепочка собирается ниже, когда известен реестр.
-PAID_FALLBACK_CHAIN = ["gemini-2.0-flash-lite", "gemini-2.0-flash", "gemini-flash-latest",
+# Снятые провайдером модели → актуальная замена. Старые имена остаются в базе
+# (custom_prompts, выбор модели в настройках) — без перевода каждый такой вызов
+# сначала получал 404 и лишь потом уходил на запасную модель.
+LEGACY_MODELS = {
+    "gemini-1.5-flash": "gemini-flash-lite-latest",
+    "gemini-1.5-pro": "gemini-flash-latest",
+    "gemini-2.0-flash": "gemini-flash-latest",
+    "gemini-2.0-flash-lite": "gemini-flash-lite-latest",
+    "gemini-2.5-flash-lite": "gemini-flash-lite-latest",
+    "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+}
+
+
+def current_model(model: str) -> str:
+    return LEGACY_MODELS.get(model, model)
+
+
+PAID_FALLBACK_CHAIN = ["gemini-flash-lite-latest", "gemini-flash-latest",
                        "deepseek-chat", "gpt-4o-mini", "claude-sonnet-4-6"]
 
 # Какая env-переменная с ключом нужна каждому провайдеру.
@@ -118,7 +133,7 @@ def resolve_gemini_model(avoid: str = "") -> str | None:
     # Приоритет по РАЗМЕРУ бесплатной квоты: lite-модели щедрее «старших».
     if avoid:
         names = [n for n in names if n != avoid]
-    for pref in ("flash-lite", "gemini-2.0-flash", "gemini-2.5-flash", "flash"):
+    for pref in ("flash-lite", "gemini-flash-latest", "flash"):
         hits = [n for n in names if pref in n and "vision" not in n
                 and "thinking" not in n and "exp" not in n]
         if hits:
@@ -303,10 +318,10 @@ PREMIUM_MODELS = {
 
 ECONOMY_MODELS = {
     "niche_analyst": "deepseek-chat",
-    "viral_hunter": "gemini-2.0-flash-lite",
+    "viral_hunter": "gemini-flash-lite-latest",
     "strategist": "deepseek-chat",
     "copywriter": "deepseek-chat",
-    "reviewer": "gemini-2.0-flash-lite",
+    "reviewer": "gemini-flash-lite-latest",
     "voice_adapter": "deepseek-chat",
     "visual_creator": "gpt-4o-mini",
     "adapter": "gpt-4o-mini",
@@ -314,13 +329,11 @@ ECONOMY_MODELS = {
 
 COST_PER_1K = {
     "claude-sonnet-4-6": 0.003,
-    "claude-sonnet-4-20250514": 0.003,
     "claude-haiku-4-5-20251001": 0.00025,
     "gpt-4o": 0.005,
     "gpt-4o-mini": 0.00015,
-    "gemini-2.0-flash": 0.0001,
     "gemini-flash-latest": 0.0001,
-    "gemini-2.0-flash-lite": 0.00005,
+    "gemini-flash-lite-latest": 0.00005,
     "gemini-2.5-flash": 0.0003,
     "sonar": 0.001,
     "sonar-pro": 0.003,
@@ -346,13 +359,11 @@ FALLBACK_CHAIN = [s["alias"] for s in FREE_PROVIDERS.values()] + PAID_FALLBACK_C
 CATALOG: tuple[tuple[str, str, str], ...] = (
     # (значение, что показать, группа)
     ("claude-sonnet-4-6", "Claude Sonnet 4.6", "Anthropic"),
-    ("claude-sonnet-4-20250514", "Claude Sonnet 4", "Anthropic"),
     ("claude-haiku-4-5-20251001", "Claude Haiku 4.5", "Anthropic"),
     ("gpt-4o", "GPT-4o", "OpenAI"),
     ("gpt-4o-mini", "GPT-4o Mini", "OpenAI"),
-    ("gemini-2.0-flash", "Gemini 2.0 Flash", "Google"),
-    ("gemini-2.0-flash-lite", "Gemini 2.0 Flash Lite", "Google"),
     ("gemini-flash-latest", "Gemini Flash (последняя)", "Google"),
+    ("gemini-flash-lite-latest", "Gemini Flash Lite (последняя)", "Google"),
     ("sonar-reasoning-pro", "Perplexity Sonar Reasoning Pro", "Perplexity"),
     ("sonar-pro", "Perplexity Sonar Pro", "Perplexity"),
     ("sonar", "Perplexity Sonar", "Perplexity"),
@@ -445,7 +456,7 @@ async def pick_model(role: str, default: str = "", mode: str = "") -> str:
         except Exception:
             mode = "economy"
     table = PREMIUM_MODELS if mode == "premium" else ECONOMY_MODELS
-    return table.get(role) or default or ECONOMY_MODELS.get(role, "gemini-2.0-flash")
+    return table.get(role) or default or ECONOMY_MODELS.get(role, "gemini-flash-latest")
 
 
 async def _track(model: str, tokens: int, cost: float, status: str,
@@ -609,6 +620,7 @@ class AIRouter:
         return {"text": text, "tokens": tokens, "cost": tokens / 1000 * COST_PER_1K.get(model, 0.00014), "model_used": model}
 
     async def call(self, model: str, system: str, prompt: str) -> dict:
+        model = current_model(model)
         # Порядок: запрошенная модель → cheap-first фолбэк.
         ordered = [model] + [m for m in FALLBACK_CHAIN if m != model]
         # Пропускаем модели без ключа провайдера, чтобы не жечь время на заведомый сбой.

@@ -96,12 +96,12 @@ async def test_delegate_reports_router_fallback(no_keys, monkeypatch):
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
 
     async def fallback(model, system, prompt):
-        return {"text": "ok", "tokens": 1, "cost": 0, "model_used": "gemini-2.0-flash-lite"}
+        return {"text": "ok", "tokens": 1, "cost": 0, "model_used": "gemini-flash-lite-latest"}
 
     monkeypatch.setattr(dispatch.ai_router, "call", fallback)
     r = await dispatch.delegate("deepseek", "задача")
     assert "фолбэком" in r["note"]
-    assert r["model_used"] == "gemini-2.0-flash-lite"
+    assert r["model_used"] == "gemini-flash-lite-latest"
 
 
 async def test_delegate_surfaces_error(no_keys, monkeypatch):
@@ -160,7 +160,7 @@ async def test_director_delegate_tool_calls_dispatch(no_keys, monkeypatch, calls
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     r = await md._exec_tool("delegate", {"executor": "gemini", "task": "напиши пост"})
     assert r["ok"] is True and r["text"] == "готово"
-    assert calls[0]["model"] == "gemini-2.0-flash"
+    assert calls[0]["model"] == "gemini-flash-latest"
 
 
 async def test_unknown_tool_still_reported(no_keys):

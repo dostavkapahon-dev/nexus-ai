@@ -36,7 +36,7 @@ async def pre_check(agent: str, task: str, context: str = "", model: str = None)
     но `checked=False` честно говорит, что проверки не было: иначе отчёт
     показывает «готов к работе» там, где просто не отвечает ИИ.
     """
-    model = model or ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash")
+    model = model or ECONOMY_MODELS.get("reviewer", "gemini-flash-latest")
     prompt = CHECK_TEMPLATE.format(agent=agent, task=task[:1500],
                                    context=(context or "нет")[:3000])
     from core import ai_escrow

@@ -57,7 +57,7 @@ async def test_no_keys_means_no_network_and_no_waiting(client, monkeypatch):
 
     started = time.monotonic()
     with pytest.raises(RuntimeError) as e:
-        await ai_router.call("gemini-2.0-flash", "система", "тема")
+        await ai_router.call("gemini-flash-latest", "система", "тема")
 
     assert not touched, "система стучится в API, к которым нет ключей"
     assert time.monotonic() - started < 1.0, "ожидание вместо мгновенного ответа"

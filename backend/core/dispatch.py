@@ -22,7 +22,7 @@ from core.ai_router import (ai_router, COST_PER_1K, PROVIDER_KEY_ENV, AI_ROUTING
 # `model` — что реально уйдёт в ai_router.
 EXECUTORS: dict[str, dict] = {
     "gemini": {
-        "model": "gemini-2.0-flash",
+        "model": "gemini-flash-latest",
         "provider": "google",
         "strengths": "быстрые черновики, большие объёмы текста, разбор картинок; "
                      "бесплатная квота — брать по умолчанию",

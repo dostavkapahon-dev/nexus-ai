@@ -12,7 +12,7 @@ class BaseAgent(ABC):
         prompt_data = await get_prompt(db, self.name)
         system = prompt_data.get("system", "")
         template = prompt_data.get("template", "")
-        model = prompt_data.get("model", "claude-sonnet-4-20250514")
+        model = prompt_data.get("model", "claude-sonnet-4-6")
 
         # Режим экономии из профиля реально выбирает модель. Явно заданная
         # пользователем модель (кастомный промпт) остаётся приоритетнее.

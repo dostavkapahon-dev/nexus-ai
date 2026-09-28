@@ -55,7 +55,7 @@ async def _open_text(url: str, timeout_ms: int = 0) -> dict:
 async def _extract(system: str, prompt: str) -> dict:
     """Извлекает JSON дешёвым LLM из текста страницы."""
     from core.ai_router import ai_router, ECONOMY_MODELS
-    model = ECONOMY_MODELS.get("niche_analyst", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("niche_analyst", "gemini-flash-latest")
     try:
         res = await ai_router.call(model, system, prompt)
         text = res.get("text", "")

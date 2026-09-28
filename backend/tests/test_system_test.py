@@ -28,7 +28,7 @@ async def test_ai_answering_nonsense_is_a_failure(monkeypatch):
 @pytest.mark.asyncio
 async def test_ai_correct_answer_passes(monkeypatch):
     async def right(model, system, prompt):
-        return {"text": "4", "model_used": "gemini-2.0-flash"}
+        return {"text": "4", "model_used": "gemini-flash-latest"}
 
     monkeypatch.setattr("core.ai_router.ai_router.call", right)
     res = await st.check_ai()

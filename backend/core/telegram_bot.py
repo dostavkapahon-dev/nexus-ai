@@ -2495,8 +2495,13 @@ async def _run_single_generation(chat_id: str, text: str, kind: str):
 
     spec = task_spec.parse(text, kind=kind)
     if not spec["subject"]:
-        await send_message(chat_id,
-                           "🖼 Напишите, что нарисовать: <code>/image шашлык на мангале</code>")
+        # Следующее сообщение и есть предмет. Раньше бот просил «напишите, что
+        # нарисовать», а ответ «САМСА» уходил в общий разбор и терялся.
+        from core import dialog
+        await dialog.expect(chat_id, dialog.AWAIT_TOPIC, {"single": kind})
+        what = "нарисовать" if kind == "image" else "снять"
+        await send_message(chat_id, f"🖼 Что {what}? Напишите одним сообщением, "
+                                    f"например: <i>шашлык на мангале</i>")
         return
 
     await send_message(chat_id, task_spec.as_text(spec) + "\n\nГенерирую...")
@@ -2670,7 +2675,9 @@ async def _plain_text(chat_id: str, text: str):
         topic = "авто" if text.strip().lower() in (
             "сам", "сама", "сам придумай", "по трендам", "любая", "на твой выбор",
             "не знаю", "давай", "напиши", "1") else text.strip()
-        if ctx.get("kind"):
+        if ctx.get("single"):
+            await _run_single_generation(chat_id, text.strip(), ctx["single"])
+        elif ctx.get("kind"):
             await _start_creation(chat_id, ctx["kind"], ctx.get("platform", ""), topic)
         else:
             await _handle_command(chat_id, f"/factory {topic}")

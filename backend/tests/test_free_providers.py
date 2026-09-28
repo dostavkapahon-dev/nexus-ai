@@ -45,7 +45,7 @@ def test_provider_registered_in_router(provider):
 def test_all_free_providers_come_before_paid():
     free = [s["alias"] for s in ar.FREE_PROVIDERS.values()]
     assert ar.FALLBACK_CHAIN[:len(free)] == free
-    assert ar.FALLBACK_CHAIN[len(free)] == "gemini-2.0-flash-lite"
+    assert ar.FALLBACK_CHAIN[len(free)] == "gemini-flash-lite-latest"
 
 
 def test_fallback_chain_still_cheap_first():
