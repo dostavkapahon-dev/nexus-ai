@@ -1026,7 +1026,7 @@ async def check_prompt(prompt: str, task: str, model: str, kind: str) -> dict:
         from core import ai_escrow
         with ai_escrow.suppressed():
             res = await ai_router.call(
-                ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash"), _PROMPT_CHECK,
+                ECONOMY_MODELS.get("reviewer", "gemini-flash-latest"), _PROMPT_CHECK,
                 f"ЗАДАЧА: {task[:600]}\nМОДЕЛЬ: {model} ({kind})\n"
                 f"ПРОМПТ:\n{prompt[:1500]}")
         text = res.get("text", "")

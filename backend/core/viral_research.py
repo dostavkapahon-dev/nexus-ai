@@ -175,7 +175,7 @@ async def research(urls: list[str], niche: str = "") -> dict:
         '"structure": "структура ролика по секундам", "pacing": "темп/склейки", '
         '"topics": ["тема", ...], "recipe": "как собрать наш ролик чтобы залетел"}'
     )
-    model = ECONOMY_MODELS.get("viral_hunter", "gemini-1.5-flash")
+    model = ECONOMY_MODELS.get("viral_hunter", "gemini-flash-lite-latest")
     try:
         res = await ai_router.call(model, system, prompt)
         text = res.get("text", "")

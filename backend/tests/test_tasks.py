@@ -84,7 +84,7 @@ async def test_steps_and_cost_accumulate(client):
     await tm.add_step(task_id, "анализ аккаунта", ok=True, agent="analyze")
     await tm.add_step(task_id, "генерация", ok=False, agent="copywriter", error="нет ключа")
     await tm.add_cost(task_id, model="deepseek-chat", tokens=1200, cost=0.0014)
-    await tm.add_cost(task_id, model="gemini-2.0-flash", tokens=800, cost=0.0002)
+    await tm.add_cost(task_id, model="gemini-flash-latest", tokens=800, cost=0.0002)
 
     t = await tm.get(task_id)
     assert len(t["steps"]) == 2

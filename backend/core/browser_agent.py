@@ -287,7 +287,7 @@ def vision_provider() -> str | None:
     return None
 
 
-GEMINI_VISION_MODEL = os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_VISION_MODEL = os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-flash-latest")
 
 _GEMINI_ACTIONS_DOC = """\
 Верни СТРОГО ОДИН JSON-объект (без markdown, без пояснений вокруг) одного из видов:

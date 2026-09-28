@@ -112,7 +112,7 @@ async def build_questions(analysis: dict) -> list[str]:
     ctx = json.dumps(analysis, ensure_ascii=False)[:5000]
     prompt = (f"Данные аккаунта и ниши:\n{ctx}\n\n"
               'JSON: {"questions": ["вопрос", ...]}  (максимум 5, по-русски, конкретные)')
-    model = ECONOMY_MODELS.get("niche_analyst", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("niche_analyst", "gemini-flash-latest")
     try:
         res = await ai_router.call(model, INTERVIEW_SYSTEM, prompt)
         t = res.get("text", "")
@@ -146,7 +146,7 @@ async def build_strategies(analysis: dict, answers: dict) -> list[dict]:
         'JSON: {"options":[{"title":"до 5 слов","angle":"угол подачи одним предложением",'
         '"why":"почему сработает на этом аккаунте","first_reel":"идея первого рилса — хук и суть"}]}'
     )
-    model = ECONOMY_MODELS.get("strategist", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("strategist", "gemini-flash-latest")
     try:
         res = await ai_router.call(model, STRATEGY_SYSTEM, prompt)
         t = res.get("text", "")
@@ -174,7 +174,7 @@ async def build_week_plan(strategy: dict, analysis: dict) -> list[dict]:
         '"topic":"тема","hook":"хук первой секунды","cta":"призыв","best_time":"19:00"}]}'
         " — ровно 7 дней, форматы чередуй."
     )
-    model = ECONOMY_MODELS.get("strategist", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("strategist", "gemini-flash-latest")
     try:
         res = await ai_router.call(model, PLAN_SYSTEM, prompt)
         t = res.get("text", "")
@@ -252,7 +252,7 @@ async def predict_virality(idea: dict, analysis: dict) -> dict:
         '"fix":["как поднять шанс"],"best_time":"день недели и час по местному",'
         '"why_time":"почему это время"}'
     )
-    model = ECONOMY_MODELS.get("reviewer", "gemini-2.0-flash")
+    model = ECONOMY_MODELS.get("reviewer", "gemini-flash-latest")
     try:
         res = await ai_router.call(model, PREDICT_SYSTEM, prompt)
         t = res.get("text", "")

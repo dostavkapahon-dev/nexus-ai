@@ -40,7 +40,7 @@ async def _gemini_vision(image_paths: list, question: str) -> str:
     """Зрение через Gemini — бесплатный вариант, не требует OpenAI."""
     import google.generativeai as genai
     genai.configure(api_key=_gemini_key())
-    model = genai.GenerativeModel(os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-2.0-flash"))
+    model = genai.GenerativeModel(os.getenv("NEXUS_VISION_GEMINI_MODEL", "gemini-flash-latest"))
     parts = [question]
     for p in image_paths:
         with open(p, "rb") as f:
@@ -113,7 +113,7 @@ async def _anthropic_vision(image_paths: list, question: str) -> str:
         blocks.append({"type": "image", "source": {
             "type": "base64", "media_type": "image/png", "data": _b64(p)}})
     msg = await client.messages.create(
-        model="claude-sonnet-4-20250514", max_tokens=700,
+        model="claude-sonnet-4-6", max_tokens=700,
         messages=[{"role": "user", "content": blocks}],
     )
     return msg.content[0].text

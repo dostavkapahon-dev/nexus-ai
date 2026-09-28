@@ -465,7 +465,7 @@ async def _run_director_anthropic(goal: str, context: str = "", max_steps: int =
 
 
 # ── Gemini-путь (бесплатный Google-ключ), JSON-протокол инструментов ───────────
-# Один источник правды: раньше здесь стоял gemini-2.0-flash, а статус называл
+# Один источник правды: раньше здесь стоял gemini-flash-latest, а статус называл
 # gemini-2.5-flash — панель показывала модель, которая не запускалась.
 GEMINI_DIRECTOR_MODEL = os.getenv("NEXUS_DIRECTOR_GEMINI_MODEL",
                                   ORCHESTRATORS[1]["model"])

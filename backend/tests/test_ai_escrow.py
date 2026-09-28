@@ -37,7 +37,7 @@ async def _clean(client):
 @pytest.fixture(autouse=True)
 def _short_chain(monkeypatch):
     """Перебор укорачиваем: проверяем поведение в конце цепочки, а не её длину."""
-    monkeypatch.setattr("core.ai_router.FALLBACK_CHAIN", ["gemini-2.0-flash"])
+    monkeypatch.setattr("core.ai_router.FALLBACK_CHAIN", ["gemini-flash-latest"])
 
 
 @pytest.fixture(autouse=True)
@@ -64,11 +64,11 @@ async def test_failed_call_goes_to_claude_instead_of_raising(client, monkeypatch
         raise RuntimeError("503 service unavailable")
 
     monkeypatch.setattr(ai_router, "_call_gemini", refuse)
-    monkeypatch.setattr("core.ai_router.FALLBACK_CHAIN", ["gemini-2.0-flash"])
+    monkeypatch.setattr("core.ai_router.FALLBACK_CHAIN", ["gemini-flash-latest"])
     monkeypatch.setattr("asyncio.sleep", lambda *_: _true())
 
     ai_escrow.interactive(source="telegram", chat_id="42")
-    res = await ai_router.call("gemini-2.0-flash", "система", "сделай контент-план")
+    res = await ai_router.call("gemini-flash-latest", "система", "сделай контент-план")
 
     assert res["escrow"] is True
     assert "Клоду" in res["text"], "человек должен понимать, куда ушёл его запрос"
@@ -90,7 +90,7 @@ async def test_background_step_still_fails_loudly(client):
     ai_escrow._interactive.set(False)
 
     with pytest.raises(RuntimeError):
-        await ai_router.call("gemini-2.0-flash", "система", "фоновая работа")
+        await ai_router.call("gemini-flash-latest", "система", "фоновая работа")
 
     assert await pq.jobs() == []
 
