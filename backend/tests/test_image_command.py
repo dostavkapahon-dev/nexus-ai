@@ -47,6 +47,34 @@ def calls(monkeypatch):
     return c
 
 
+@pytest.fixture
+def dialog_state(monkeypatch):
+    """Состояние диалога в памяти, без базы."""
+    from core import dialog
+    state = {}
+
+    async def fake_expect(chat_id, what, data=None):
+        if what:
+            state.update(awaiting=what, pending=data or {})
+        else:
+            state.clear()
+
+    async def fake_awaiting(chat_id):
+        return state.get("awaiting", "")
+
+    async def fake_pending(chat_id):
+        return state.get("pending", {})
+
+    async def noop(*a, **k):
+        return None
+
+    monkeypatch.setattr(dialog, "expect", fake_expect)
+    monkeypatch.setattr(dialog, "awaiting", fake_awaiting)
+    monkeypatch.setattr(dialog, "pending", fake_pending)
+    monkeypatch.setattr(dialog, "remember", noop)
+    return state
+
+
 @pytest.mark.asyncio
 async def test_image_command_sends_a_photo(calls):
     await tb._run_single_generation("1", "шашлык на мангале", "image")
@@ -77,10 +105,10 @@ async def test_quality_word_is_temporary(calls, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_empty_request_asks_instead_of_generating(calls):
+async def test_empty_request_asks_instead_of_generating(calls, dialog_state):
     await tb._run_single_generation("1", "", "image")
     assert not calls.generated
-    assert any("/image" in m for m in calls.messages)
+    assert any("Что нарисовать" in m for m in calls.messages)
 
 
 @pytest.mark.asyncio
@@ -104,3 +132,23 @@ async def test_delivery_failure_does_not_regenerate(calls, monkeypatch):
     await tb._run_single_generation("1", "шашлык", "image")
     assert len(calls.generated) == 1
     assert any("example.com/a.jpg" in m for m in calls.messages)
+
+
+@pytest.mark.asyncio
+async def test_empty_command_waits_for_the_subject(calls, dialog_state, monkeypatch):
+    """«/img» → «Что нарисовать?» → «САМСА»: ответ и есть предмет. Раньше он
+    уходил в общий разбор, и бот отвечал «слова вместо команды не сработают»."""
+    from core import autopilot, dialog
+
+    async def no_interview():
+        return {}
+    monkeypatch.setattr(autopilot, "get_state", no_interview)
+
+    await tb._run_single_generation("1", "", "image")
+    assert not calls.generated
+    assert dialog_state.get("awaiting") == dialog.AWAIT_TOPIC
+
+    await tb._plain_text("1", "САМСА")
+    assert calls.generated and calls.generated[0]["task"].lower() == "самса"
+    assert calls.generated[0]["kind"] == "image"
+    assert not dialog_state, "ожидание снимается после ответа"

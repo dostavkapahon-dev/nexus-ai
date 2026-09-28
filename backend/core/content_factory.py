@@ -76,6 +76,14 @@ _ANALYSIS_PROMPT = """\
 """
 
 
+MEMORY_MARK = "[ПАМЯТЬ АГЕНТА]"
+
+
+def _clean_topic(topic) -> str:
+    """Тема без служебного блока памяти — её показывают человеку."""
+    return (topic or "").split(MEMORY_MARK)[0].strip()
+
+
 async def _analyze(topic: str | None) -> dict:
     """Шаг 1+2: помощник ищет тренды → Claude (мозг) делает анализ + план."""
     from core.ai_router import ai_router
@@ -99,7 +107,7 @@ async def _analyze(topic: str | None) -> dict:
         # Моделей нет — но пустая заглушка «AI для бизнеса» хуже, чем осмысленная
         # заготовка по заданной теме: её видно, её можно доработать руками.
         from core.offline_content import draft
-        d = draft(topic or "ваша тема")
+        d = draft(_clean_topic(topic) or "ваша тема")
         caption = d["caption"]
         return {"theme": d["theme"], "hook_type": g["hook_type"],
                 "hook_text": d["hook_text"], "avatar_script": caption,
@@ -118,11 +126,18 @@ async def _analyze(topic: str | None) -> dict:
         record(g["hook_type"], g["format"], g["day_theme"])  # контроль ротации
         return data
     except Exception:
-        return {"theme": topic or "AI для бизнеса", "hook_text": "Смотри до конца",
+        # Модель ответила не JSON. Раньше это шло как успешный анализ: в «Тему»
+        # попадала вся служебная постановка вместе с блоком памяти, а хук был
+        # заглушкой «Смотри до конца» — и отчёт ставил ✅.
+        clean = _clean_topic(topic)
+        return {"theme": clean or "AI для бизнеса", "hook_text": "Смотри до конца",
+                "_offline": True,
+                "_error": "Модель ответила не в формате плана — собрана заготовка, "
+                          "хук и тексты стоит доработать.",
                 "hook_type": g["hook_type"], "_format": g["format"],
                 "avatar_script": raw[:500], "image_prompt": "dark cinematic AI tech poster",
                 "instagram": {"caption": raw[:300], "hashtags": ["#ai", "#бизнес"]},
-                "youtube": {"title": topic or "AI", "description": raw[:200]},
+                "youtube": {"title": clean or "AI", "description": raw[:200]},
                 "tiktok": {"caption": raw[:150]}, "telegram": {"post": raw[:500]}}
 
 
@@ -202,7 +217,7 @@ async def run_factory(topic: str | None = None, platforms: list | None = None,
         from core.skills_store import context_for
         memory = context_for()
         if memory:
-            topic = f"{topic or ''}\n\n[ПАМЯТЬ АГЕНТА]\n{memory}".strip()
+            topic = f"{topic or ''}\n\n{MEMORY_MARK}\n{memory}".strip()
     except Exception:
         pass
 
